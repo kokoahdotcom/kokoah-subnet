@@ -4,8 +4,7 @@ A Bittensor subnet built by the Kokoah team, kept separate from the Kokoah tradi
 mechanism is being designed (see `docs/research/`); this repo holds the research, the design, and the validator,
 miner and scoring code as they appear.
 
-- Status, decisions and open questions: `subnet-agent.md` (the single status file of this project).
-- Working rules: `.claude/CLAUDE.md`.
+- The maintainer's status notes and working rules are kept locally, outside this repository.
 - Stack: Python 3.12, [uv](https://docs.astral.sh/uv/), Bittensor SDK 11 (`bittensor==11.3.0`, which ships `btcli`),
   FastAPI and httpx for the hotkey-signed HTTP between validators and miners (`btauth/1`).
 
@@ -27,10 +26,8 @@ Networks: `local` (Docker, throwaway, pre-funded Alice account), `test` (Bittens
 ## Layout
 
 ```
-.claude/CLAUDE.md     working rules
-subnet-agent.md       development status
 docs/research/        dated research notes (platform, landscape, what Kokoah does today)
-scripts/              localnet.sh (Docker chain), check.sh (CI steps)
+scripts/              localnet.sh (Docker chain), check.sh (CI steps), git-hooks/ (identity and push checks)
 src/kokoah_subnet/    the package: cli.py, chain.py (read-only chain facts)
 tests/                offline tests (no network)
 ```

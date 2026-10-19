@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Local-only files never reach the remote, and a push first runs the repo's CI steps and stops on a failure.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+local_only='^\.claude(/|$)|^subnet-agent\.md$'
+zero=0000000000000000000000000000000000000000
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha" 2>/dev/null; then
+    range="$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+  for commit in $(git log --format=%H "$range"); do
+    if git diff-tree --no-commit-id --name-only -r --root "$commit" | grep -qE "$local_only"; then
+      echo "pre-push: commit ${commit:0:7} touches .claude/ or subnet-agent.md; these files never go to the remote" >&2
+      exit 1
+    fi
+  done
+  if git ls-tree -r --name-only "$local_sha" | grep -qE "$local_only"; then
+    echo "pre-push: the pushed tree contains .claude/ or subnet-agent.md" >&2
+    exit 1
+  fi
+done
+echo "pre-push: scripts/check.sh (as CI)" >&2
+scripts/check.sh >&2

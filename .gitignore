@@ -25,3 +25,7 @@ wallets/
 *.log
 .DS_Store
 data/local/
+
+# Local only, never committed or pushed: the working rules and the development status file.
+.claude/
+subnet-agent.md

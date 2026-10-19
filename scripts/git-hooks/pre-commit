@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Every commit has one identity: author and committer are both zenith10007, with the email from /kokoah/.env.
+set -euo pipefail
+expected_name="zenith10007"
+expected_email=""
+if [ -f /kokoah/.env ]; then
+  expected_email="$(sed -n 's/^GITHUB_EMAIL=//p' /kokoah/.env | tr -d '"' | tail -1)"
+fi
+for role in AUTHOR COMMITTER; do
+  ident="$(git var "GIT_${role}_IDENT")"
+  name="${ident%% <*}"
+  email="${ident#*<}"; email="${email%%>*}"
+  if [ "$name" != "$expected_name" ]; then
+    echo "pre-commit: $role name is '$name', must be '$expected_name' (set git config user.name/user.email from /kokoah/.env)" >&2
+    exit 1
+  fi
+  if [ -n "$expected_email" ] && [ "$email" != "$expected_email" ]; then
+    echo "pre-commit: $role email does not match GITHUB_EMAIL in /kokoah/.env" >&2
+    exit 1
+  fi
+done
