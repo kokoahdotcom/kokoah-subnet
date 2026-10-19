@@ -26,25 +26,31 @@ revenue beats sell pressure   ⟺   β × R  >  s × A × price
 
 `A` is fixed by the chain and `price` is set by the market, so this holds when:
 
-1. **the builder fee is high.** `R = volume × fee`. Hyperliquid allows up to 10 bps a side for perps; at 10 bps
-   the builder fee is bigger than Hyperliquid's own taker fee (4.5 bps), so most of what any trader (honest or not)
-   spends to earn alpha comes to Kokoah, not to Hyperliquid. At 2.5 bps it is the other way round and most of the
-   money leaks.
+1. **the builder fee is high.** `R = volume × fee`. Hyperliquid allows up to 10 bps a side for perps. **Decision
+   (owner, 2026-10-19): 6 bps a side**, to be set on the Kokoah platform when the subnet launches. At 6 bps the
+   builder fee is bigger than Hyperliquid's own taker fee (4.5 bps), so most of what any trader (honest or not)
+   spends to earn alpha comes to Kokoah, not to Hyperliquid. At today's 2.5 bps it is the other way round and most
+   of the money leaks.
 2. **miners keep alpha.** `s` falls with the holding multiplier, the registration collateral and, later, vesting.
 3. **less alpha reaches sellers.** The miner slot is at its 33% minimum; the owner's 33% is auto-locked into
    conviction and never sold; validators take 34%.
 
 The price the buyback can hold on its own, with no other buyers: `price* = β × R / (s × A)`. Above it the market
-needs stakers; below it the buyback lifts the price. Examples (TAO $266.54 on 2026-10-19, `A` = 2,380, `β` = 1):
+needs stakers; below it the buyback lifts the price. At 6 bps a side (TAO $266.54 on 2026-10-19, `A` = 2,380,
+`β` = 1):
 
-| Daily volume | Builder fee | Fees a day | `s` | Price the buyback holds |
-|---|---|---|---|---|
-| $20M | 2.5 bps | $10k | 1.0 | $4.2 = 0.016 TAO |
-| $20M | 5 bps | $20k | 0.5 | $16.8 = 0.063 TAO |
-| $30M | 10 bps | $60k | 0.4 | $63 = 0.24 TAO |
-| $100M | 10 bps | $200k | 0.4 | $210 = 0.79 TAO |
+| Daily volume | Fees a day | `s` (share sold) | Price the buyback holds |
+|---|---|---|---|
+| $10M | $6k | 1.0 | $2.5 = 0.009 TAO |
+| $10M | $6k | 0.5 | $5.0 = 0.019 TAO |
+| $20M | $12k | 1.0 | $5.0 = 0.019 TAO |
+| $20M | $12k | 0.5 | $10.1 = 0.038 TAO |
+| $30M | $18k | 0.4 | $18.9 = 0.071 TAO |
+| $50M | $30k | 0.4 | $31.5 = 0.118 TAO |
+| $100M | $60k | 0.4 | $63 = 0.236 TAO |
 
-So the fee level is the main lever, holding the second, volume the third. Nothing is held back from miners.
+To hold 0.02 TAO: $21M a day if every miner sells everything, $10.6M a day if half is held, $8.5M a day at 40%
+sold. So the fee level is the main lever, holding the second, volume the third. Nothing is held back from miners.
 
 ## 3. How the pool is split
 
@@ -109,10 +115,11 @@ With the whole pool always paid, the reward per dollar of fees is high while the
 volume). Zero-edge traders then enter until the reward rate falls to their cost divided by their skill score (0.18),
 at which point honest traders with `g ≈ 0.6` are paid about three times a hedger's cost per dollar of size. This is
 the subsidy phase and it is paid for by the emission, not by Kokoah. What matters for law "revenue beats sell
-pressure" is where that early volume's money goes: at a 10 bps builder fee, a taker-based cheat pays Kokoah 20 bps
-and Hyperliquid 9 per round trip (69% to us), a maker-based one 20 and 3 (87%), a top-tier market maker 20 and
-earns 1.2 in rebates (106%). At 2.5 bps the same shares are 36%, 62% and 132% of a far smaller number. The fee
-level decides whether the subsidy phase feeds the buyback or Hyperliquid.
+pressure" is where that early volume's money goes: at 6 bps a side, a taker-based cheat pays Kokoah 12 bps and
+Hyperliquid 9 per round trip on our leg (57% to us; 50% counting its hidden leg's fees), a maker-based one 12 and
+3 (80%; 67%), a top-tier market maker 12 and earns 1.2 in rebates (111%; 118%). At 2.5 bps the same shares are
+36%, 62% and 132% of a far smaller number; at 10 bps, 69%, 87% and 106%. The fee level decides whether the subsidy
+phase feeds the buyback or Hyperliquid.
 
 ### 3.5 Registration collateral and emission split
 
@@ -163,7 +170,7 @@ level decides whether the subsidy phase feeds the buyback or Hyperliquid.
 
 | Parameter | v2 value | Why |
 |---|---|---|
-| Builder fee | 10 bps a side (Hyperliquid's maximum for perps), approved by the user | the lever that makes revenue beat sell pressure |
+| Builder fee | 6 bps a side (owner, 2026-10-19; Hyperliquid's maximum is 10), approved by the user in the wallet | the lever that makes revenue beat sell pressure |
 | Pool split | 50% by fee credit, 50% by size × skill × holding | everyone paid, skill rewarded |
 | Fee credit, taker / maker | 1.0 / 0.4 | anti-wash |
 | λ (dollars in size) | 50 | a $40k month counts like $2M of volume |
@@ -187,8 +194,9 @@ coverage and holding next to it. Emissions follow §3.
 
 1. Builder attribution (node data only) and whether the builder fee is charged on maker fills (docs silent; a
    57,000-fill sample showed none). If not, maker credit is moot.
-2. A 10 bps builder fee needs the user's approval in the wallet (`approveBuilderFee`) and a product decision: it is
-   four times today's target and the app's own fee promise; the alpha rebate is the offset.
+2. The 6 bps builder fee needs the user's approval in the wallet (`approveBuilderFee`) and a platform change (not
+   implemented yet; today's target is 2.5 bps and the launch promotion is 0): the alpha paid to traders is the
+   offset for the higher fee.
 3. The burn or recycle path for bought-back alpha and the fees → TAO path; how the collateral minimum is set.
 4. Root's `subnet_emission_enabled` switch: criteria unknown; the "verified trader ranking" is the pitch.
 5. Legal review of paying tokens for trading (pending for the app).
