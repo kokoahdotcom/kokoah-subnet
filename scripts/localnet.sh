@@ -32,6 +32,12 @@ case "$cmd" in
       echo "$NAME is already running" >&2
       exit 0
     fi
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+      # Pull anonymously: the image is public, and a stored ghcr.io login on this machine is refused by the registry.
+      anon="$(mktemp -d)"
+      DOCKER_CONFIG="$anon" docker pull "$IMAGE" >&2
+      rm -rf "$anon"
+    fi
     docker volume create "$VOLUME" >/dev/null
     # shellcheck disable=SC2086
     docker run -d --rm --name "$NAME" \
