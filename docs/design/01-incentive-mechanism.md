@@ -1,6 +1,7 @@
-# Incentive mechanism, version 1
+# Incentive mechanism, version 1.1
 
-Date: 2026-10-19. Status: proposal for the owner's review. Replaces version 0 (volume × skill with a 1.5× fee cap).
+Date: 2026-10-19. Status: proposal for the owner's review. Version 1.1 adds the fee-backed payout budget (§2, §3.4)
+to version 1; version 0 (volume × skill with a 1.5× fee cap) is superseded.
 Research behind it: `docs/research/02` (platform), `03` (other trading subnets), `04` (what Kokoah has),
 `05` (reward-design precedents). Numbers come from `scripts/sim_incentives.py` (run it: `uv run python
 scripts/sim_incentives.py`).
@@ -18,7 +19,14 @@ alpha. Miners run nothing: register, bind, trade.
 Objective: the most sustainable builder-fee volume through Kokoah, with the biggest weight on trading size, a real
 reward for skill, and a reward that visibly follows dollars made.
 
-The one law every number below obeys: **a strategy with no trading edge must expect less from the subnet than it
+Two laws every number below obeys.
+
+**Law 2 (owner's requirement): the subnet's revenue must be bigger than the miners' sell pressure.** So each day
+the total value handed to miners is at most the builder fees collected that day times the buyback share `β`
+(§3.4). If every miner sold every token the same day, the buyback would absorb it all. The alpha emitted above that
+budget is recycled, not paid.
+
+**Law 1:** **a strategy with no trading edge must expect less from the subnet than it
 pays in fees it cannot avoid.** Hyperliquid's base tier charges 4.5 bps taker and 1.5 bps maker a side; maker
 rebates of 0.1 to 0.3 bps exist only above 0.5 to 3% of 14-day maker volume (docs read 2026-10-19, research 05).
 The cheapest zero-edge strategy is therefore a top-tier market maker hedging a Kokoah position on another venue at
@@ -35,14 +43,16 @@ to alpha at the snapshot's pool price.
 ### 3.1 Base rebate, for everyone who trades
 
 ```
-base_i = 1.0 × builder fees on taker fills  +  0.4 × builder fees on maker fills
+Φ_i    = 1.0 × builder fees on taker fills  +  0.4 × builder fees on maker fills      (fee credit)
+base_i = 0.5 × Φ_i
 ```
 
-Every trader who routes through Kokoah gets the builder fee on taker fills back in full, in alpha, and 40% of it on
-maker fills. No skill test: losing traders are most of the volume and they are paid too. Why the split: a cheat
-must pay Hyperliquid's taker fee (4.5 bps a side) to earn the full rebate, which is more than the whole rebate; on
-maker fills the cheat's cost can fall to its rebate, so the base there must stay under about half the builder fee.
-`Φ_i` (rebate-weighted fees) names the amount in the formula above; the bonus below is capped in multiples of it.
+Every trader who routes through Kokoah gets half the builder fee on taker fills back in alpha, and 20% of it on
+maker fills. No skill test: losing traders are most of the volume and they are paid too. Half, not all, because
+law 2 caps the whole day's payout at the fees collected, and the other half of that budget is the skill bonus.
+Why the taker/maker split: a cheat must pay Hyperliquid's taker fee (4.5 bps a side) to earn the taker rebate,
+which is more than the rebate; on maker fills the cheat's cost can fall to its rebate, so the maker credit must stay
+low. `Φ_i` (fee credit) is also the unit of the bonus cap below.
 
 ### 3.2 Skill bonus, shared by the skilled
 
@@ -91,34 +101,55 @@ g_i        = ½ (g30 + g90) × coverage_i × newcomer_i        if at least 2 of 
 
 ### 3.4 Pool accounting
 
-Each miner's entitlement is `E_i = base_i + bonus_i`. Validators set weights in proportion to `E_i`.
+```
+BUDGET = min( POOL ,  β × F_day / s )        F_day = builder fees collected that day, in alpha at the day's price
+                                              β = share of fees committed to buybacks (1.0 at launch)
+                                              s = assumed share of rewards miners sell (1.0 at launch; lower once
+                                                  on-chain holding is observed, see the holding multiplier)
+```
 
-- If the pool is larger than the sum of entitlements (few traders, high alpha price), the surplus goes to the
+Each miner's entitlement is `E_i = base_i + bonus_i`, with the bonus slice `B = max(0, BUDGET − Σ base)`.
+Validators set weights in proportion to what is paid.
+
+- **Holding multiplier** on the bonus share: `S_i × (0.5 + 0.5 × held_i)`, where `held_i` is the share of the alpha
+  the miner received in the last 90 days that is still staked on its own hotkey. Selling the rewards halves the
+  next bonus; keeping them keeps it. This is how `s` falls below 1 over time, which raises the budget.
+- **Emission split:** miner slot at its 33% minimum, owner 33% with `owner_cut_auto_lock_enabled` (the owner cut is
+  locked into conviction, never sold), validators 34%. Less alpha reaches sellers in the first place.
+- If the pool is larger than the budget (few traders, high alpha price), the surplus goes to the
   subnet's burn or recycle sink, which is the owner's hotkey. The chain counts miner incentive sent to hotkeys of the
   owner coldkey as `MinerBurned`, whether recycled or burned, and scales the subnet's TAO share by `1 − MinerBurned`
   next tempo (subtensor main, read 2026-10-19). Weight to any other UID is simply paid to it, so there is no free
   sink. A lasting surplus is therefore handled by lowering the miner slot of the emission split toward its 33%
-  minimum; a treasury UID outside the owner coldkey is a question for the Rao team, not a plan.
-- If the pool is smaller than the sum of entitlements, everyone is scaled down in proportion. The subnet then pays
-  the whole pool and the caps no longer matter.
+  minimum; a treasury UID outside the owner coldkey is a question for the Rao team, not a plan. For a subnet below
+  the emission gate's rank the TAO share is near zero anyway, so the penalty costs little early.
+- If the budget is smaller than the sum of entitlements, everyone is scaled down in proportion.
 - Two slices: the base entitlements are served first; the bonus slice is what remains. If the base alone exceeds the
-  pool, bonuses are zero that window and the base is scaled.
+  budget, bonuses are zero that window and the base is scaled.
+- **Price floor this creates:** with the budget rule, the alpha price settles where buybacks meet sales:
+  `price ≈ β × F_day / (s × alpha sold per day)`. More fees raise it; fewer sellers raise it. The buyback must run
+  visibly (daily, on chain) for stakers to price it in.
 
 ### 3.5 Worked numbers
 
 Per round trip of notional, with Hyperliquid's base-tier fees (taker 4.5 bps, maker 1.5 bps a side) and a 2.5 bps
 builder fee a side:
 
-| Trader | Pays Hyperliquid | Pays Kokoah | Gets back in alpha | Net cost of trading |
+| Trader | Pays Hyperliquid | Pays Kokoah | Gets back in alpha (at most) | Net cost of trading |
 |---|---|---|---|---|
-| Losing retail, market orders | 9.0 | 5.0 | 5.0 (base) | 9.0, the same as trading on Hyperliquid directly |
-| Decent day trader (g 0.5, 80% taker) | 7.8 | 5.0 | 11.0 | 1.8 |
-| Persistent pro (g 1.0, half maker) | 6.0 | 5.0 | 14.0 | −3.0 (paid to trade) |
+| Losing retail, market orders | 9.0 | 5.0 | 2.5 (base) | 11.5, 2.5 above Hyperliquid directly |
+| Decent day trader (g 0.5, 80% taker) | 7.8 | 5.0 | 2.2 + 3.3 = 5.5 | 7.3, slightly below Hyperliquid directly |
+| Persistent pro (g 1.0, half maker) | 6.0 | 5.0 | 1.75 + 5.25 = 7.0 | 4.0, 2 bps below Hyperliquid directly |
 
-Pool size (2026-10-19, TAO $266.54): at an alpha price of 0.02 TAO the miner pool is about 2,950 alpha or $15,700
-a day. The base alone absorbs it at about $63M of daily taker volume; with typical bonuses, the pool is fully paid
-from roughly $40M a day. Halve those for a 5 bps builder fee. Until then the surplus is recycled and the miner slot
-can be lowered.
+What law 2 costs: the subnet gives back at most what it earns, so it cannot make Kokoah cheaper than Hyperliquid
+for everyone. It makes it slightly cheaper for decent traders, clearly cheaper for persistent ones, and the losing
+majority pay for the leaderboard and the product. The builder fee level is then a pure revenue knob: a higher fee
+means a bigger budget and a bigger bonus for skilled traders, and a higher net cost for the losing majority.
+
+Pool size (2026-10-19, TAO $266.54): at an alpha price of 0.02 TAO the 33% miner slot is about 2,380 alpha or
+$12,700 a day. With `β = 1`, `s = 1` and a 2.5 bps builder fee the budget equals the pool from about $51M of daily
+volume; below that the rest of the slot is recycled. Halve the volume for a 5 bps fee; halve it again if holding
+brings `s` to 0.5.
 
 ## 4. Data, binding, epoch, consensus
 
@@ -186,7 +217,10 @@ Other answers:
 
 | Parameter | v1 value | Why |
 |---|---|---|
-| Base rebate, taker / maker | 100% / 40% of builder fees | taker: the cheat pays Hyperliquid more than we pay; maker: must stay under ~50% (§5) |
+| Payout budget | min(pool, β × fees / s), β = 1, s = 1 at launch | law 2: buybacks cover every token miners could sell |
+| Base rebate, taker / maker | 50% / 20% of builder fees (fee credit 1.0 / 0.4) | half the budget to everyone, half to skill; maker credit must stay under ~50% (§5) |
+| Holding multiplier | 0.5 + 0.5 × share of the last 90 days' rewards still staked | selling halves the next bonus |
+| Emission split | miner 33%, owner 33% auto-locked, validators 34% | least alpha to sellers; owner cut never sold |
 | Bonus cap | 3 × Φ × g (2 under 90 days) | §2 law with luck at 0.18; "too generous" row in §5 shows the limit |
 | λ (dollars in the size term) | 50 | a $40k month counts like $2M of volume; dollars matter without dominating |
 | Skill test | test F: ½(g30 + g90), 2 of 3 months positive | best honest-to-luck ratio in the simulation |

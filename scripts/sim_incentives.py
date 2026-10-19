@@ -90,8 +90,9 @@ class Formula:
 def expected_payout(fm: Formula, taker_share: float, g_expected: float, legs_paid: float = 1.0) -> float:
     """Most the subnet pays per round trip (bps) to a zero-edge account: base plus the bonus times how often luck
     passes the test. `legs_paid` is the number of bound legs that collect the base (2 for a pair, both bound)."""
-    phi = F * (taker_share * fm.k_taker + (1 - taker_share) * fm.k_maker)
-    return legs_paid * phi + fm.bonus * phi * g_expected
+    base = F * (taker_share * fm.k_taker + (1 - taker_share) * fm.k_maker)
+    credit = F * (taker_share * min(1.0, 2 * fm.k_taker) + (1 - taker_share) * min(0.4, 2 * fm.k_maker))
+    return legs_paid * base + fm.bonus * credit * g_expected
 
 
 @dataclass
@@ -115,6 +116,7 @@ FORMULAS = [
     Formula("v0: volume x skill, cap 1.5x fees, no base", 0.0, 0.0, 1.5),
     Formula("dYdX-style: 90% fee rebate to all fills, no bonus", 0.9, 0.9, 0.0),
     Formula("v1: 100% taker / 40% maker base + 3x skill bonus", 1.0, 0.4, 3.0),
+    Formula("v1.1 fee-backed: 50% / 20% base + 3x bonus on the 1.0/0.4 fee credit", 0.5, 0.2, 3.0),
     Formula("too generous: 100% / 60% base + 3x bonus", 1.0, 0.6, 3.0),
 ]
 
@@ -139,12 +141,13 @@ def main() -> None:
                 flag = "CHEAT WINS" if net > 0 else "ok"
                 print(f"    {a.name:62} cost {a.cost:5.1f}  pays {pay:5.1f}  net {net:+5.1f}  {flag}")
     print()
-    print("Honest traders under v1 (100%/40% base, 3x bonus), per round trip:")
+    print("Honest traders under v1.1 (50%/20% base, 3x bonus on the fee credit), per round trip:")
     honest = (("retail taker, losing", 1.0, 0.0), ("day trader, decent", 0.8, 0.5), ("pro, persistent", 0.5, 1.0))
     for name, taker, g in honest:
-        fm = FORMULAS[2]
-        phi = F * (taker * fm.k_taker + (1 - taker) * fm.k_maker)
-        pay = phi + fm.bonus * phi * g
+        fm = FORMULAS[3]
+        base = F * (taker * fm.k_taker + (1 - taker) * fm.k_maker)
+        credit = F * (taker * 1.0 + (1 - taker) * 0.4)
+        pay = base + fm.bonus * credit * g
         hl = 2 * (taker * TAKER + (1 - taker) * MAKER)
         net = hl + F - pay
         print(f"  {name:24} HL {hl:4.1f} + builder {F:3.1f}, back {pay:4.1f} in alpha -> net cost {net:+5.1f}")
