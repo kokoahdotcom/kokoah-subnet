@@ -97,6 +97,36 @@ volume shown. Emissions: by `weight_i`. Two orderings, both honest; nobody is to
   subnet's margin of safety, burned.
 - Unpaid miner emission is burned via the chain's burn path (`recycle_or_burn` set to burn).
 
+### 3.5 Paying the pool out fully
+
+The payout cap can leave part of the miner pool unpaid. When that happens and what to do about it:
+
+- **It only bites while the subnet is young.** The cap binds when the miner pool is worth more than 1.5 times all
+  the builder fees paid in the window, which is the case when there are few real traders and a big pool. Once honest
+  volume is large, the pool is spread over much more volume, every miner's share is below its cap, and the whole
+  pool is paid. The cap then protects without costing anyone anything.
+- **Unpaid emission is not wasted.** `recycle_or_burn` can send it back into the subnet's pool (which supports the
+  alpha price every holder and every paid miner benefits from) instead of burning it. Either way it is not lost to
+  attackers.
+- **Two safe ways to raise the cap** if the owner wants bigger rewards from day one:
+  1. **A stricter "keep winning" test.** A lucky hedge leg passes a 30-day test about half the time. If the full
+     multiplier needs positive returns in 3 of the last 4 weeks and 2 of the last 3 months, plus the Calmar
+     threshold, a zero-edge account passes rarely (about 5 to 10% of windows). The expected payout of a hedge falls
+     by the same factor, so a cap of `k = 3` to `4` becomes safe. Honest traders with a persistent edge pass most
+     windows and are paid up to the higher cap. Cost: new miners wait about 90 days for the full cap.
+  2. **Deposits (the chain's miner collateral).** A miner locks alpha on its hotkey; its payout cap becomes
+     `max(1.5 × fees, m × deposit)`. Cheaters need a deposit on every account, and the losing accounts' deposits stay
+     locked and useless (the chain releases collateral only against earned emission, and validators can refuse to
+     score a flagged hotkey, which strands the lock). Deposits raise the cost of an attack but do not bound it as
+     hard as the fee cap, so keep `m` modest (1 to 2) and pair it with the stricter test.
+- **Paying by profit instead of volume** (Vanta's current design) does not avoid the problem: a hedge's winning leg
+  shows real profit, so Vanta needs collateral and a debt ledger to make losers pay. It is the same medicine with a
+  noisier base, so it is not adopted here.
+
+Recommendation: start at `k = 1.5`; let the cap rise automatically to `3` for miners who pass the 90-day
+persistence test; offer deposits for miners who want more; recycle unpaid emission into the pool. In steady state the
+pool is paid in full to real traders.
+
 ## 4. Scoring epoch, data and consensus
 
 - **Epoch:** scores recomputed daily at 00:00 UTC from the trailing 30 (and 90) days. Validators set weights every
@@ -191,7 +221,7 @@ hedge through us.
 | Gates | `R > 0`, `MDD ≤ 50%`, ≥ 10 round trips, ≥ 7 active days, equity ≥ $500 | |
 | `turnover_cap` | 50 × equity per day | scalpers fit; dust accounts cannot claim size |
 | Per-miner cap | 20% | |
-| Payout cap `k` | 1.5 × builder fees paid | §5.1: every zero-edge strategy nets ≤ 0 at this value; `k = 1` for margin |
+| Payout cap `k` | 1.5 × builder fees; 3 after the 90-day persistence test; deposits raise it further (§3.5) | §5.1: every zero-edge strategy nets ≤ 0 at 1.5; the stricter test makes 3 safe |
 | Mirror thresholds | 60 s, 20% size; exclude above 25%, zero above 50% | catches the lazy two-address hedge |
 | Registration | burn, `min_burn` ≈ 1 TAO (owner-set) | prices sybils |
 | Scoring time | 00:00 UTC daily | |
