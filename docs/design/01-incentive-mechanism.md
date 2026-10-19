@@ -138,12 +138,13 @@ builder fee a side:
 | Trader | Pays Hyperliquid | Pays Kokoah | Gets back in alpha (at most) | Net cost of trading |
 |---|---|---|---|---|
 | Losing retail, market orders | 9.0 | 5.0 | 2.5 (base) | 11.5, 2.5 above Hyperliquid directly |
-| Decent day trader (g 0.5, 80% taker) | 7.8 | 5.0 | 2.2 + 3.3 = 5.5 | 7.3, slightly below Hyperliquid directly |
-| Persistent pro (g 1.0, half maker) | 6.0 | 5.0 | 1.75 + 5.25 = 7.0 | 4.0, 2 bps below Hyperliquid directly |
+| Decent day trader (g 0.5, 80% taker) | 7.8 | 5.0 | 2.2 base + up to 6.6 bonus = 8.8 | 4.0, below Hyperliquid directly |
+| Persistent pro (g 1.0, half maker) | 6.0 | 5.0 | 1.75 base + up to 10.5 bonus = 12.2 | −1.2, paid to trade |
 
-What law 2 costs: the subnet gives back at most what it earns, so it cannot make Kokoah cheaper than Hyperliquid
-for everyone. It makes it slightly cheaper for decent traders, clearly cheaper for persistent ones, and the losing
-majority pay for the leaderboard and the product. The builder fee level is then a pure revenue knob: a higher fee
+The bonus column is each trader's cap; what is actually paid depends on the day's budget, and under law 2 the sum
+over all traders never exceeds the fees collected. So the subnet cannot make Kokoah cheaper than Hyperliquid for
+everyone: the losing majority pay a little more than on Hyperliquid, decent traders pay less, persistent ones can
+be paid to trade, and in total the fees fund it all. The builder fee level is then a pure revenue knob: a higher fee
 means a bigger budget and a bigger bonus for skilled traders, and a higher net cost for the losing majority.
 
 Pool size (2026-10-19, TAO $266.54): at an alpha price of 0.02 TAO the 33% miner slot is about 2,380 alpha or
