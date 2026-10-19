@@ -1,284 +1,231 @@
-# Incentive mechanism, version 0
+# Incentive mechanism, version 1
 
-Date: 2026-10-19. Status: proposal for the owner's review. Research behind it: `docs/research/02` (platform),
-`03` (other trading subnets), `04` (what Kokoah has).
+Date: 2026-10-19. Status: proposal for the owner's review. Replaces version 0 (volume × skill with a 1.5× fee cap).
+Research behind it: `docs/research/02` (platform), `03` (other trading subnets), `04` (what Kokoah has),
+`05` (reward-design precedents). Numbers come from `scripts/sim_incentives.py` (run it: `uv run python
+scripts/sim_incentives.py`).
 
 ## 1. What the subnet is
 
 Miners are traders. A miner binds a Hyperliquid address to a subnet hotkey and trades perps through Kokoah, so every
-scored fill carries Kokoah's builder code. Validators read the chain (Hyperliquid) and pay each miner by how much
-real, held trading it did, multiplied by how well it traded. The subnet's product is a verified, live ranking of
-Hyperliquid traders built from their own fills; Kokoah's revenue is the builder fee on all of that trading, which buys
-back and burns the subnet's alpha.
+scored fill carries Kokoah's builder code. Validators read the chain (Hyperliquid) and pay each miner in the subnet's
+alpha for the trading it did and how well it traded. The subnet's product is a verified, live ranking of Hyperliquid
+traders built from their own fills; Kokoah's revenue is the builder fee on that trading, which buys back and burns
+alpha. Miners run nothing: register, bind, trade.
 
-Nothing the miner does is off-chain: no miner server, no uptime, no model. Register, bind, trade.
+## 2. The objective and the one law
 
-## 2. The objective
+Objective: the most sustainable builder-fee volume through Kokoah, with the biggest weight on trading size, a real
+reward for skill, and a reward that visibly follows dollars made.
 
-Maximize sustainable builder-fee volume through Kokoah. "Sustainable" rules out paying for volume that only exists to
-collect emissions (wash trading, hedged account pairs, lottery accounts), because that volume sells alpha faster than
-fees can buy it back and ends the subnet. So the mechanism pays for **volume that survives a skill multiplier and a
-holding-time filter**, and scale (how much a miner trades) carries most of the weight.
+The one law every number below obeys: **a strategy with no trading edge must expect less from the subnet than it
+pays in fees it cannot avoid.** Hyperliquid's base tier charges 4.5 bps taker and 1.5 bps maker a side; maker
+rebates of 0.1 to 0.3 bps exist only above 0.5 to 3% of 14-day maker volume (docs read 2026-10-19, research 05).
+The cheapest zero-edge strategy is therefore a top-tier market maker hedging a Kokoah position on another venue at
+rebates: about 3.8 bps of notional per round trip (our 5 bps builder fee minus its rebates); if it must take
+liquidity on our side it pays 13.4 bps. As long as the subnet pays a zero-edge account
+less than that, wash trading, hedged pairs across accounts or venues, account splitting, lottery farms and profit
+transfers all lose money, whatever we cannot see.
 
-## 3. The formula
+## 3. The reward, in three parts
 
-For each miner `i`, over the scoring window `W` (trailing 30 days, recomputed daily at 00:00 UTC):
+Per miner `i`, per daily scoring window (trailing 30 days, with a 90-day component), everything in USD and converted
+to alpha at the snapshot's pool price.
 
-```
-weight_i  =  V_i × g_i  /  Σ_j (V_j × g_j)          then capped per miner (§3.4), excess burned
-```
-
-### 3.1 Scale: held builder volume `V_i`
-
-`V_i` is the notional of the miner's fills that carry Kokoah's builder code, weighted by how long the resulting
-position was held:
-
-```
-V_i = Σ_fills  notional_f × h(hold_f)          h(t) = min(1, t / T_hold)          T_hold = 10 minutes
-```
-
-Hold time comes from FIFO lots per address and coin: an opening fill starts a lot; a reducing fill closes lots in
-order, and both the opening and the closing notional of the matched quantity are credited with the lot's hold time.
-Lots still open at the window end count with their age so far. A round trip closed in seconds earns almost nothing;
-a position held ten minutes or more earns in full. Scalpers still pay fees and get partial credit; wash round trips
-get none.
-
-Two exclusions: fills whose counterparty is the same address, another address of the same miner coldkey, or an
-address with a flagged mutual-counterparty pattern (§5); and fills without the builder code. Two caps: a miner's
-counted volume is at most `turnover_cap × average equity × days` (sybils cannot claim volume on dust), and notional
-is marked at the fill price.
-
-Linear in volume on purpose: splitting volume across accounts neither helps nor hurts, so sybils gain nothing and
-pay the registration burn for each extra UID.
-
-### 3.2 Skill multiplier `g_i` in [0, 1]
-
-Scale-free, computed on the whole address (so the track record is real), from the daily equity curve:
+### 3.1 Base rebate, for everyone who trades
 
 ```
-r_d        = (E_d − E_{d−1} − flows_d) / E_{d−1}      daily time-weighted return; flows = net deposits that day
-R          = Π (1 + r_d) − 1                           return over W
-MDD        = max drawdown of the cumulative curve over W
-skill_raw  = R / max(MDD, 0.05)                        Calmar-like; the 5% floor stops low-volatility tricks
-g_raw      = clip(skill_raw / 2, 0, 1)                 R = 2 × MDD earns the full multiplier
-g_i        = g_raw × coverage_i × newcomer_i
+base_i = 1.0 × builder fees on taker fills  +  0.4 × builder fees on maker fills
 ```
 
-- `E_d` is the account value including unrealized PnL (so a trader cannot hide losers by never closing them);
-  deposits and withdrawals are removed from the return.
-- `coverage_i = min(1, C_i / 0.9)` where `C_i` is the share of the address's notional in `W` that carries Kokoah's
-  builder code. A miner who trades mostly elsewhere earns a reduced multiplier.
-- `newcomer_i = min(1, days_since_binding / 14)`: a fresh account cannot claim a full multiplier on one lucky week.
-- Once an address has 60 days of history, `g_raw` becomes the mean of the 30-day and 90-day values, so persistence
-  pays and one month of luck fades.
+Every trader who routes through Kokoah gets the builder fee on taker fills back in full, in alpha, and 40% of it on
+maker fills. No skill test: losing traders are most of the volume and they are paid too. Why the split: a cheat
+must pay Hyperliquid's taker fee (4.5 bps a side) to earn the full rebate, which is more than the whole rebate; on
+maker fills the cheat's cost can fall to its rebate, so the base there must stay under about half the builder fee.
+`Φ_i` (rebate-weighted fees) names the amount in the formula above; the bonus below is capped in multiples of it.
 
-Gates (any failure sets `g_i = 0` for the window): `R ≤ 0`; `MDD > 50%`; fewer than 10 completed round trips;
-fewer than 7 active days; average equity below `$500`.
+### 3.2 Skill bonus, shared by the skilled
 
-Why this shape: ratios reward skill regardless of account size, so the small trader with a real edge ranks at the
-top of the leaderboard. But the ratio is a multiplier between 0 and 1, while volume spans orders of magnitude, so
-emissions follow size. A whale with a modest edge earns far more than a small star; the star earns more per dollar
-traded. Both are what the objective wants.
+A second slice of the pool is shared in proportion to **size times skill**, where size includes dollars made:
 
-**Why not pay on ROI alone.** Percent return is already the skill part (§3.2) and decides the leaderboard. As the
-whole reward it fails the objective: it favours tiny accounts (a $100 account at +200% beats $1M at +10%), it is the
-cheapest thing to farm (many small high-leverage accounts, keep the lucky ones; one leg of any hedge shows a big
-ROI), and small accounts bring little volume and little fee, so there is nothing to buy the paid-out alpha back
-with. Option kept for later: a small ROI prize slice (about 10% of the miner pool) for the top persistent ROI
-traders above a minimum equity and with a deposit, so skilled small traders have a reason to join. Not in v0.
+```
+share_i  ∝  ( V_i + λ × P_i⁺ ) × g_i               λ = 50: one dollar of profit counts like $50 of volume
+bonus_i  =  min( share of the bonus slice,  3 × Φ_i × g_i )
+```
 
-### 3.3 Where the ranking shows
+- `V_i`: notional of the miner's builder-code fills in the window (all fills, taker and maker), marked at the fill
+  price but clipped to the mark price when a fill is more than 0.5% from the mark (that also neutralizes profit
+  transfers through off-market self-trades).
+- `P_i⁺`: dollar profit in the window if positive (equity-based, net of fees and funding, deposits and withdrawals
+  removed), else 0. This is where dollars made show up in the paycheck: a whale making $2M on 6% and a trader making
+  $40k on 30% both get credit for what they made, in proportion.
+- `g_i` in [0, 1]: the skill multiplier (§3.3).
+- The cap `3 × Φ_i × g_i` is the law from §2 applied per miner: a lucky zero-edge account (expected multiplier 0.18
+  under the persistence test) can collect at most 3 × 0.18 ≈ 0.54 of its rebate-weighted fees on top of the base,
+  which still leaves every cheat in §5 negative.
 
-Public leaderboard: sorted by `g_raw` (skill), with equity band, 30- and 90-day return, drawdown, coverage and
-volume shown. Emissions: by `weight_i`. Two orderings, both honest; nobody is told that fees are the score.
+### 3.3 The skill multiplier `g` (percentage return, risk-adjusted, persistent)
 
-### 3.4 Caps and burns
+Computed on the whole address from its daily equity curve (so a track record cannot be dressed up by trading
+elsewhere), deposits and withdrawals removed:
 
-- **Per-miner cap:** `weight_i ≤ 20%`. Excess is burned, not redistributed, so a whale cannot be paid for the whole
-  subnet and the cap is not a transfer to competitors.
-- **Payout cap:** a miner's emission in a window is at most `k × fees_i` (`k = 1.5`), with `fees_i` the **builder
-  fees** it paid in `W` (not Hyperliquid's fees), converted to alpha at the snapshot's pool price and the TAO/USD mark
-  from the node (Hyperliquid lists a TAO perp; to verify). Excess is burned. This is a cap, not the score, and it is
-  the one defense that works when the other half of a hedge is invisible to us: §5.1 shows that with `k ≤ 1.5` no
-  strategy without a trading edge can net positive, whatever the number of addresses. Emissions above the cap are the
-  subnet's margin of safety, burned.
-- Unpaid miner emission is burned via the chain's burn path (`recycle_or_burn` set to burn).
+```
+r_d        = (E_d − E_{d−1} − flows_d) / E_{d−1}           daily return
+R, MDD     = window return, max drawdown of the equity curve
+g30        = clip( (R30 / max(MDD30, 0.05)) / 2, 0, 1 )     +20% on a 10% drawdown earns the full 30-day score
+g90        = clip( (R90 / max(MDD90, 0.05)) / 3, 0, 1 )     +30% on a 10% drawdown over 90 days earns it
+g_i        = ½ (g30 + g90) × coverage_i × newcomer_i        if at least 2 of the last 3 months are positive, else 0
+```
 
-### 3.5 Paying the pool out fully
+- Gates (any failure gives `g_i = 0`): `R30 ≤ 0`; `MDD30 > 50%`; fewer than 10 round trips; fewer than 7 active
+  days; average equity under $500; best single day above 50% of the window's positive PnL (the consistency rule
+  every prop firm uses against one lucky day; FTMO set it to 50% on 2026-10-12).
+- `coverage_i = min(1, C_i / 0.9)`: `C_i` is the share of the address's notional that carries Kokoah's builder code.
+- `newcomer_i = min(1, days_since_binding / 14)`; an address under 90 days old uses `g30` alone and a bonus cap of
+  2 instead of 3.
+- Why this test ("test F" in the simulation): over 20,000 simulated 90-day accounts, a zero-edge account (one leg of
+  a hedge, a coin flip) passes 39 to 44% of windows with an expected multiplier of 0.18; a trader with a modest real
+  edge passes 86% with 0.58; a strong trader 97% with 0.79. The plain 30-day test let luck through at 0.26; the
+  strictest weekly test cut luck to 0.14 but also cut honest traders to 51%. Test F keeps honest traders paid and
+  makes luck worth three times less than skill.
 
-The payout cap can leave part of the miner pool unpaid. When that happens and what to do about it:
+### 3.4 Pool accounting
 
-- **It only bites while the subnet is young.** The cap binds when the miner pool is worth more than 1.5 times all
-  the builder fees paid in the window, which is the case when there are few real traders and a big pool. Once honest
-  volume is large, the pool is spread over much more volume, every miner's share is below its cap, and the whole
-  pool is paid. The cap then protects without costing anyone anything.
-- **Unpaid emission is not wasted.** `recycle_or_burn` can send it back into the subnet's pool (which supports the
-  alpha price every holder and every paid miner benefits from) instead of burning it. Either way it is not lost to
-  attackers.
-- **Two safe ways to raise the cap** if the owner wants bigger rewards from day one:
-  1. **A stricter "keep winning" test.** A lucky hedge leg passes a 30-day test about half the time. If the full
-     multiplier needs positive returns in 3 of the last 4 weeks and 2 of the last 3 months, plus the Calmar
-     threshold, a zero-edge account passes rarely (about 5 to 10% of windows). The expected payout of a hedge falls
-     by the same factor, so a cap of `k = 3` to `4` becomes safe. Honest traders with a persistent edge pass most
-     windows and are paid up to the higher cap. Cost: new miners wait about 90 days for the full cap.
-  2. **Deposits (the chain's miner collateral).** A miner locks alpha on its hotkey; its payout cap becomes
-     `max(1.5 × fees, m × deposit)`. Cheaters need a deposit on every account, and the losing accounts' deposits stay
-     locked and useless (the chain releases collateral only against earned emission, and validators can refuse to
-     score a flagged hotkey, which strands the lock). Deposits raise the cost of an attack but do not bound it as
-     hard as the fee cap, so keep `m` modest (1 to 2) and pair it with the stricter test.
-- **Paying by profit instead of volume** (Vanta's current design) does not avoid the problem: a hedge's winning leg
-  shows real profit, so Vanta needs collateral and a debt ledger to make losers pay. It is the same medicine with a
-  noisier base, so it is not adopted here.
+Each miner's entitlement is `E_i = base_i + bonus_i`. Validators set weights in proportion to `E_i`.
 
-Worked number (2026-10-19, TAO $266.54): at an alpha price of 0.02 TAO ($5.33), a subnet emits up to 7,200
-alpha a day, 41% of it to miners: about 2,950 alpha, or $15,700 a day ($470k a month). To pay all of it under the
-cap, builder fees must reach $10,500 a day, which at a 2.5 bps builder fee is about $42M of daily volume
-($1.26B a month); $21M a day with `k = 3`, $63M with `k = 1`. Halve the volume for a 5 bps builder fee, quarter it
-for 10 bps. The requirement scales with the alpha price: at 0.01 TAO it is $21M a day. For comparison, Hyperliquid's
-whole perps market trades several billion dollars a day.
+- If the pool is larger than the sum of entitlements (few traders, high alpha price), the surplus goes to the
+  subnet's burn or recycle sink, which is the owner's hotkey. The chain counts miner incentive sent to hotkeys of the
+  owner coldkey as `MinerBurned`, whether recycled or burned, and scales the subnet's TAO share by `1 − MinerBurned`
+  next tempo (subtensor main, read 2026-10-19). Weight to any other UID is simply paid to it, so there is no free
+  sink. A lasting surplus is therefore handled by lowering the miner slot of the emission split toward its 33%
+  minimum; a treasury UID outside the owner coldkey is a question for the Rao team, not a plan.
+- If the pool is smaller than the sum of entitlements, everyone is scaled down in proportion. The subnet then pays
+  the whole pool and the caps no longer matter.
+- Two slices: the base entitlements are served first; the bonus slice is what remains. If the base alone exceeds the
+  pool, bonuses are zero that window and the base is scaled.
 
-Recommendation: start at `k = 1.5`; let the cap rise automatically to `3` for miners who pass the 90-day
-persistence test; offer deposits for miners who want more; recycle unpaid emission into the pool. In steady state the
-pool is paid in full to real traders.
+### 3.5 Worked numbers
 
-## 4. Scoring epoch, data and consensus
+Per round trip of notional, with Hyperliquid's base-tier fees (taker 4.5 bps, maker 1.5 bps a side) and a 2.5 bps
+builder fee a side:
 
-- **Epoch:** scores recomputed daily at 00:00 UTC from the trailing 30 (and 90) days. Validators set weights every
-  tempo (72 minutes on mainnet at tempo 360) from the latest daily score; commit-reveal stays on (the chain default).
+| Trader | Pays Hyperliquid | Pays Kokoah | Gets back in alpha | Net cost of trading |
+|---|---|---|---|---|
+| Losing retail, market orders | 9.0 | 5.0 | 5.0 (base) | 9.0, the same as trading on Hyperliquid directly |
+| Decent day trader (g 0.5, 80% taker) | 7.8 | 5.0 | 11.0 | 1.8 |
+| Persistent pro (g 1.0, half maker) | 6.0 | 5.0 | 14.0 | −3.0 (paid to trade) |
+
+Pool size (2026-10-19, TAO $266.54): at an alpha price of 0.02 TAO the miner pool is about 2,950 alpha or $15,700
+a day. The base alone absorbs it at about $63M of daily taker volume; with typical bonuses, the pool is fully paid
+from roughly $40M a day. Halve those for a 5 bps builder fee. Until then the surplus is recycled and the miner slot
+can be lowered.
+
+## 4. Data, binding, epoch, consensus
+
 - **Binding:** the miner publishes `{hotkey, hl_address, nonce}` signed by the Hyperliquid address (EIP-191) and by
-  the hotkey, as an on-chain commitment (the Commitments pallet, `set-commitment`). One address per hotkey, one
-  hotkey per address; rebinding has a 30-day cooldown and resets `newcomer`. Validators read bindings from chain, so
-  miners run nothing.
-- **Inputs per address:** fills with builder attribution, daily equity, deposits and withdrawals, funding. All of it
-  is public Hyperliquid state. Builder attribution is certain in node data (the order action carries the builder);
-  whether the public `userFills` endpoint exposes the builder is to verify. Kokoah's nodes already index fills.
-- **Determinism:** every validator must compute the same scores or consensus clips them. Kokoah's validator publishes
-  the daily input dataset per address (fills, equity, flows) with a hash; other validators fetch it, recompute, and
-  spot-check samples against Hyperliquid's public API or their own node. Start trusted-but-verifiable; move to
+  the hotkey, as an on-chain commitment (Commitments pallet, `set-commitment`). One address per hotkey and one
+  hotkey per address; sub-accounts of a bound master count as the same miner; rebinding has a 30-day cooldown and
+  resets `newcomer`.
+- **Inputs per address:** fills with the taker flag (`crossed`), `fee` (which already includes `builderFee`, so
+  net PnL must not subtract it twice), `builderFee`, `closedPnl`; daily equity; deposits and withdrawals; funding;
+  mark prices per minute. The public fill record carries no builder address, and `userFillsByTime` keeps only an
+  address's last 10,000 fills, so validators need a fill index built from node data (Kokoah's nodes have one;
+  whether `replica_cmds` preserves the order's builder field is to verify). Sub-accounts (up to 50 per master) are
+  separate addresses with self-trade prevention per address, so a master and its sub-accounts are one miner and
+  the master's sub-account list is part of the dataset.
+- **Epoch:** scores recomputed daily at 00:00 UTC; validators set weights every tempo from the latest score;
+  commit-reveal stays on.
+- **Determinism:** Kokoah's validator publishes the daily input dataset per address with a hash; other validators
+  recompute and spot-check against Hyperliquid's public API or their own node. Trusted-but-verifiable at the start;
   independent nodes as validators arrive.
-- **Consensus:** Yuma (default), several validators from day one (Kokoah's plus borrowed stake via childkeys from a
-  root validator, see research 02 §3). Null consensus is the fallback if only one validator exists at launch.
+- **Consensus:** Yuma with several validators from day one (Kokoah's plus borrowed stake via childkeys from a root
+  validator). Null consensus as the fallback if there is one validator at launch.
 - **Emission split:** chain default 18% owner / 41% validators / 41% miners; the owner cut funds operations and
-  buybacks. Revisit with the Etao bounds once stakers exist.
+  buybacks; the miner slot is the lever for a lasting surplus (§3.4).
 
 ## 5. Attacks and answers
 
-### 5.1 The hedge attack, with numbers
+Cost versus the most the subnet pays, in bps per round trip of notional, under test F (luck's multiplier 0.18),
+from the simulation:
 
-The attack the mechanism must survive: open long on an address bound to the subnet and short the same size at the
-same time somewhere we cannot see (an unbound address, a sub-account, another exchange), or across two bound
-addresses, or across N addresses keeping only the winners. No market risk, large held volume, fees paid, emissions
-collected. Holding-time weighting does nothing against it (the positions are held), and the skill multiplier only
-halves it (one leg always wins), so it is answered by the payout cap.
-
-Per unit of notional, one round trip on the Kokoah leg costs the attacker Hyperliquid's fee plus the builder fee, and
-the hedge leg costs Hyperliquid's fee again. Builder fee 2.5 bps per side; Hyperliquid 4.5 bps taker, 1.5 bps maker,
-down to a 0.3 bps maker rebate at the top tier. The subnet can pay the winning leg at most `k × 5 bps` (its builder
-fees), and only the winning half of the legs are paid:
-
-| Attacker | Cost per round trip, bps | Max payout, bps | `k` where it breaks even |
+| Attack | Cost | Pays at most | Net |
 |---|---|---|---|
-| Lone leg, normal maker, hedge elsewhere as maker | 3 + 5 + 3 = 11 | k × 5 × ½ = 2.5k | 4.4 |
-| Lone leg, top-tier market maker on both legs | −0.6 + 5 − 0.6 = 3.8 | 2.5k | 1.5 |
-| Two bound addresses, both through Kokoah, undetected | 2 × 4.4 = 8.8 | k × 5 (one winner) | 1.8 |
-| N addresses, keep the winners | ≥ 3.8 per address | ≤ 2.5k per address on average | 1.5 |
+| Wash: taker through Kokoah against own maker elsewhere | 17.0 | 7.7 | −9.3 |
+| Hedge: normal maker on both legs, other leg hidden | 11.0 | 3.1 | −7.9 |
+| Hedge: top-tier market maker on both legs, other leg hidden | 3.8 | 3.1 | −0.7 |
+| Hedge: top-tier MM taking on our leg, hidden maker leg | 13.4 | 7.7 | −5.7 |
+| Bound pair, both legs through Kokoah | 22.0 | 8.9 | −13.1 |
+| Lottery farm of taker accounts, keep the winners | 14.0 | 7.7 | −6.3 |
 
-With `k = 1.5` every row is zero or negative before the registration burn, the collateral and the gates, and before
-the lucky leg's multiplier falls short of 1 (it usually does). With `k = 1` there is margin. Honest traders are
-unaffected by the cap until their emission exceeds 1.5 times what they paid Kokoah, which is the point: the subnet
-rebates the builder fee and a half in alpha for a verified track record, and refuses to subsidize risk-free volume.
+For comparison, a plain 90% fee rebate on all fills (dYdX's rule) pays a top-tier market maker +0.7 bps to hedge
+through us, and raising our maker base to 60% pays it +0.8. The maker base and the bonus multiple are the two
+numbers that must not drift up without re-running the table; the taker side has a wide margin.
 
-What the cap does not do is pay large subsidies above fees to attract volume. If the owner wants a bigger draw, raise
-`k` only together with the detection below, and read the table again: `k = 2` already pays top-tier market makers to
-hedge through us.
+Why the shape is cheat-proof at all: proportional allocation is the one rule that is both sybil-proof and
+collusion-proof (Chen, Papadimitriou and Roughgarden, 2019); concave rules such as per-account caps on pool share,
+square roots or per-account lotteries pay splitters, convex ones pay colluders. Here the base is linear in fees, the
+bonus share is linear in volume and dollars with an intensive multiplier, and the bonus cap is linear in fees, so
+splitting or merging accounts changes nothing. The v0 idea of a 20% cap on any miner's pool share was concave and
+is gone.
 
-### 5.2 Detection, on top of the cap
+Other answers:
 
-- **Same coldkey, same address, sub-accounts:** fills between bound addresses of one coldkey are excluded; a
-  sub-account of a bound master is treated as the same miner (the master address is in the clearinghouse data).
-- **Mirror score across bound addresses:** for each pair of bound addresses, the share of an address's held volume
-  with an opposite-side fill in the other address in the same coin within 60 seconds and within 20% of the size.
-  Above 25%, the mirrored volume is excluded; above 50%, both get `g = 0` for the window and the pair is reported.
-- **Funding clustering (v1):** addresses funded from the same bridge depositor on Arbitrum, or by transfers between
-  each other, form one cluster for the cap and the mirror score.
-- **Collateral:** miners post the chain's miner collateral (Bittensor 11 supports it; drain rules to verify); a
-  reported mirror pair loses it.
-- Hedges against unbound addresses or other exchanges stay invisible, and that is fine: the cap already makes them
-  unprofitable; detection only raises the cost further for the lazy versions.
-
-### 5.3 Table
-
-| Attack | What happens under this design |
+| Attack | Answer |
 |---|---|
-| Wash trading (self or paired, instant round trips) | `h(hold)` near 0, so no volume credit; PnL is minus fees, so `g = 0`; fees still paid to Kokoah and Hyperliquid. Unprofitable. |
-| Hedged pair or basket (long in A, short in B, keep the winner; the other leg bound, unbound or on another exchange) | Payout ≤ `k × builder fees` with `k = 1.5`: negative expectation for every variant in §5.1; mirror score zeroes bound pairs; registration burn and collateral per UID. |
-| Lottery accounts (many small, high-leverage) | `newcomer`, 10 round trips, 7 active days, `$500` equity, per-UID burn, payout cap. Exponentially expensive to keep a winner. |
-| Sybil splitting | Volume is linear; nothing gained, registration burn lost. |
+| Sybil splitting | Base and size are linear in fees and volume: nothing gained, registration burn lost. |
 | Hiding losers (realize winners, hold losers) | Equity-based returns include unrealized PnL. |
 | Deposits dressed as returns | Flows removed from daily returns. |
+| Profit transfer by off-market self-trades | Fills clipped to the mark price for volume and profit; the bonus cap bounds the rest. |
 | Trading elsewhere, token volume through Kokoah | `coverage` scales `g` down. |
-| Counterparty collusion with an unbound address | Same-address and same-coldkey fills excluded in v0; mutual-counterparty share above a threshold is flagged for exclusion in v1 (both sides are visible in node data). |
-| Data provider (Kokoah) manipulation | Hash-committed datasets, spot checks against public Hyperliquid data, more validators over time. |
-| Validator collusion or laziness | Yuma consensus with stake, commit-reveal weights, scores reproducible by anyone from public data. |
+| Mirror pairs among bound addresses | Opposite-side fills in the same coin within 60 s and 20% of size: mirrored volume excluded above 25%, both zeroed above 50% and reported; funding-source clustering in v1; chain collateral stranded for reported pairs. |
+| Data provider (Kokoah) manipulation | Hash-committed datasets, spot checks against public data, more validators over time. |
+| Validator collusion or laziness | Yuma consensus, commit-reveal weights, scores reproducible from public data. |
 | Lookahead | None: inputs are past on-chain events. |
 
 ## 6. Parameters
 
-| Parameter | v0 value | Why |
+| Parameter | v1 value | Why |
 |---|---|---|
-| Window `W` | 30 days (90 for persistence) | long enough to drown luck, short enough to feel |
-| `T_hold` | 10 min | kills instant round trips; day traders unaffected |
-| `skill_raw` full score | `R = 2 × MDD` | +20% on 10% drawdown earns the full multiplier |
+| Base rebate, taker / maker | 100% / 40% of builder fees | taker: the cheat pays Hyperliquid more than we pay; maker: must stay under ~50% (§5) |
+| Bonus cap | 3 × Φ × g (2 under 90 days) | §2 law with luck at 0.18; "too generous" row in §5 shows the limit |
+| λ (dollars in the size term) | 50 | a $40k month counts like $2M of volume; dollars matter without dominating |
+| Skill test | test F: ½(g30 + g90), 2 of 3 months positive | best honest-to-luck ratio in the simulation |
+| g30 / g90 full score | R = 2 × MDD / R = 3 × MDD | |
 | MDD floor | 5% | stops near-zero-volatility ratios |
-| Coverage target | 90% | "trade through Kokoah" without punishing an occasional outside fill |
-| Newcomer ramp | 14 days | |
-| Gates | `R > 0`, `MDD ≤ 50%`, ≥ 10 round trips, ≥ 7 active days, equity ≥ $500 | |
-| `turnover_cap` | 50 × equity per day | scalpers fit; dust accounts cannot claim size |
-| Per-miner cap | 20% | |
-| Payout cap `k` | 1.5 × builder fees; 3 after the 90-day persistence test; deposits raise it further (§3.5) | §5.1: every zero-edge strategy nets ≤ 0 at 1.5; the stricter test makes 3 safe |
-| Mirror thresholds | 60 s, 20% size; exclude above 25%, zero above 50% | catches the lazy two-address hedge |
-| Registration | burn, `min_burn` ≈ 1 TAO (owner-set) | prices sybils |
+| Gates | R30 > 0, MDD30 ≤ 50%, ≥ 10 round trips, ≥ 7 active days, equity ≥ $500 | |
+| Coverage target | 90% | |
+| Newcomer ramp | 14 days; `g30` only and cap 2 under 90 days | |
+| Mark clip | fills > 0.5% from mark are scored at mark | |
+| Mirror thresholds | 60 s, 20% size; exclude > 25%, zero > 50% | |
+| Registration | burn, `min_burn` about 1 TAO | prices sybils |
 | Scoring time | 00:00 UTC daily | |
 
-All of these are owner-settable in the validator config and should be tuned on testnet with real replayed data.
+## 7. The leaderboard
 
-## 7. Worked examples (30-day window)
+Public, sorted by skill (`g`, with the 30- and 90-day returns and drawdowns), showing dollar profit, volume and
+coverage next to it, so "best traders", "most profitable" and "most active" are all visible. Emissions follow §3.
 
-| Miner | Equity | Held builder volume `V` | Return `R` | Drawdown | `g_raw` | `V × g` | Share of 4 |
-|---|---|---|---|---|---|---|---|
-| Small star | $5k | $2M | +30% | 8% | 1.00 | 2.0M | 1.6% |
-| Whale | $2M | $400M | +6% | 10% | 0.30 | 120M | 95.8% (capped to 20% and to 1.5 × fees, rest burned) |
-| Steady pro | $150k | $20M | +12% | 6% | 1.00 | 20M | 16.0% |
-| Wash account | $20k | $500M nominal, ~$0 held | −0.4% (fees) | 0.5% | 0 (gate) | 0 | 0% |
+## 8. Open points
 
-Before the cap the whale takes almost everything, which is the "big weight on scale" the objective asks for; the
-20% cap and the burn keep one account from being the subnet. Loosen the cap when there are enough miners that no
-single one dominates. The small star leads the public leaderboard and earns 2% per dollar traded of what the whale
-earns 0.3 on: skill pays per dollar, scale pays in total.
+1. Builder attribution (node data only) and whether the builder fee is charged on maker fills: the docs are silent
+   and a sample of 57,000 public fills showed none. If it is not, the maker base is moot and maker volume earns only
+   the bonus.
+2. Hyperliquid's fee tiers and rebates at launch set the §5 table; re-run before choosing the maker base.
+3. The burn or recycle path for bought-back alpha and the fees → TAO path.
+4. Root's `subnet_emission_enabled` switch: criteria unknown; the "verified trader ranking" is the pitch.
+5. Legal review of paying tokens for trading (pending for the app).
+6. The builder fee is 0 under the launch promotion; the rebate needs a non-zero fee to rebate.
+7. Whether the λ dollar term should use realized profit only (simpler to verify) or equity-based (harder to game).
+8. Adoption: dYdX's 90%-of-fees rebate was about 12% of what traders paid in total and was ignored, then set to
+   zero. Ours returns the whole builder fee (about a third of a taker's total cost) and pays skilled traders beyond
+   their fees, but the alpha's price risk is the trader's; watch real adoption on testnet before mainnet.
+9. Greevils ran real Hyperliquid trading through a builder code and lost its slot: the alpha must find stakers or
+   the emission gate ends the subnet whatever the mechanism. The buyback from real fees is the answer and must be
+   visible from day one.
 
-## 8. What the app gets
+## 9. Next steps
 
-- A leaderboard with a verifiable method (Discover → traders), and "top miners' positions" as a signal feed later.
-- Every miner is a Kokoah trader by construction; volume and builder fees follow.
-- Fees → buyback and burn of alpha (policy and cadence to define; the chain's burn intent is the primitive, to
-  verify), which is the value story for stakers and the reason emissions keep coming.
-
-## 9. Open points
-
-1. Builder attribution in the public API (certain in node data).
-2. The exact burn primitive for bought-back alpha and the fees → TAO path.
-3. Root's `subnet_emission_enabled` switch: criteria unknown; the "verified trader ranking" framing is the pitch.
-4. Legal review of paying tokens for trading (pending for the app already).
-5. The builder fee is 0 under the launch promotion; the mechanism needs a non-zero fee to have fees to cap against.
-6. Whether to reserve a second mechanism (the chain allows two) for forecasting later.
-7. Hyperliquid's fee tiers and maker rebates at the time of launch set the §5.1 table; re-run it before choosing `k`.
-8. How sub-accounts and the master address appear in fills and clearinghouse data (for §5.2).
-
-## 10. Next steps
-
-1. Implement `kokoah_subnet.scoring` (pure functions: lots and hold times, daily returns with flows, drawdown,
-   gates, weights, caps) with unit tests on synthetic fills.
-2. Replay harness: pull public fills and equity for a set of public Hyperliquid addresses (top-traders lists) and
-   look at the score distribution; tune §6.
-3. Validator loop on the localnet: read bindings, score, set weights every tempo; a fake data source first.
-4. Testnet: wallets, test TAO, registration, two validators, real data from the nodes.
+1. `kokoah_subnet.scoring`: pure functions (lots, taker/maker split, daily returns with flows, drawdown, test F,
+   entitlements, caps, pool accounting) with unit tests on synthetic fills.
+2. Replay harness on public Hyperliquid addresses; look at the distribution of `g`, `Φ` and bonuses; tune §6.
+3. Validator loop on the localnet with a fake data source; then testnet with real node data.
