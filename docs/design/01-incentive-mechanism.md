@@ -80,6 +80,13 @@ top of the leaderboard. But the ratio is a multiplier between 0 and 1, while vol
 emissions follow size. A whale with a modest edge earns far more than a small star; the star earns more per dollar
 traded. Both are what the objective wants.
 
+**Why not pay on ROI alone.** Percent return is already the skill part (§3.2) and decides the leaderboard. As the
+whole reward it fails the objective: it favours tiny accounts (a $100 account at +200% beats $1M at +10%), it is the
+cheapest thing to farm (many small high-leverage accounts, keep the lucky ones; one leg of any hedge shows a big
+ROI), and small accounts bring little volume and little fee, so there is nothing to buy the paid-out alpha back
+with. Option kept for later: a small ROI prize slice (about 10% of the miner pool) for the top persistent ROI
+traders above a minimum equity and with a deposit, so skilled small traders have a reason to join. Not in v0.
+
 ### 3.3 Where the ranking shows
 
 Public leaderboard: sorted by `g_raw` (skill), with equity band, 30- and 90-day return, drawdown, coverage and
