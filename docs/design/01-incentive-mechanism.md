@@ -123,6 +123,13 @@ The payout cap can leave part of the miner pool unpaid. When that happens and wh
   shows real profit, so Vanta needs collateral and a debt ledger to make losers pay. It is the same medicine with a
   noisier base, so it is not adopted here.
 
+Worked number (2026-10-19, TAO $266.54): at an alpha price of 0.02 TAO ($5.33), a subnet emits up to 7,200
+alpha a day, 41% of it to miners: about 2,950 alpha, or $15,700 a day ($470k a month). To pay all of it under the
+cap, builder fees must reach $10,500 a day, which at a 2.5 bps builder fee is about $42M of daily volume
+($1.26B a month); $21M a day with `k = 3`, $63M with `k = 1`. Halve the volume for a 5 bps builder fee, quarter it
+for 10 bps. The requirement scales with the alpha price: at 0.01 TAO it is $21M a day. For comparison, Hyperliquid's
+whole perps market trades several billion dollars a day.
+
 Recommendation: start at `k = 1.5`; let the cap rise automatically to `3` for miners who pass the 90-day
 persistence test; offer deposits for miners who want more; recycle unpaid emission into the pool. In steady state the
 pool is paid in full to real traders.
