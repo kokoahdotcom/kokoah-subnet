@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+.coverage
+
+# Secrets and keys never belong in git.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+wallets/
+*.mnemonic
+*.seed
+
+# Local state
+*.log
+.DS_Store
+data/local/
