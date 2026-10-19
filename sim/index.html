@@ -72,6 +72,7 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
 
 <div class="wrap">
 <h1>Subnet Incentive Simulator</h1>
+<p class="verdict bad" id="err" hidden style="display:block;margin-bottom:10px"></p>
 <p class="lead">Day-by-day model of the trader subnet: miners trade through the builder code, the pool of new tokens is split by fees and by size × skill × holding, miners sell a share, the builder fees buy tokens back. Change any dial or any miner and everything recomputes. Volume means the notional of fills per day; each fill pays the builder fee once.</p>
 
 <section class="panel">
@@ -116,7 +117,7 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
 <section class="panel">
   <div class="row" style="justify-content:space-between; margin-bottom:8px">
     <h2 style="margin:0">Miners <span class="hint" id="minerCount"></span></h2>
-    <div class="row"><button id="addMiner">Add miner</button><span class="hint">7 to 10 rows works best. Edit any cell.</span></div>
+    <div class="row"><button id="addMiner">Add miner</button><button id="recompute" class="primary">Recompute</button><span class="hint" id="stamp">Edit any cell; everything recomputes as you type.</span></div>
   </div>
   <div class="tablewrap">
   <table id="miners">
@@ -245,10 +246,10 @@ function renderTable() {
     const tr = document.createElement("tr"); tr.className = m.cheat ? "cheat" : "honest"; tr.dataset.i = i;
     tr.innerHTML = `<td class="l"><input class="name" data-k="name" value="${m.name.replace(/"/g, "&quot;")}" aria-label="name"></td>
       <td class="l"><select data-k="type" aria-label="type">${Object.keys(PRESETS).map(k => `<option value="${k}" ${k === m.type ? "selected" : ""}>${PRESETS[k].name}</option>`).join("")}</select></td>
-      <td><input type="number" data-k="vol" value="${m.vol}" step="100000" min="0"></td>
+      <td><input type="number" data-k="vol" value="${m.vol}" step="any" min="0"></td>
       <td><input type="number" data-k="taker" value="${m.taker}" step="5" min="0" max="100"></td>
       <td><input type="number" data-k="g" value="${m.g}" step="0.05" min="0" max="1"></td>
-      <td><input type="number" data-k="profit" value="${m.profit}" step="100"></td>
+      <td><input type="number" data-k="profit" value="${m.profit}" step="any"></td>
       <td><input type="number" data-k="sells" value="${m.sells}" step="5" min="0" max="100"></td>
       <td><input type="number" data-k="hidden" value="${m.hidden}" step="0.1"></td>
       <td class="num o-feesK"></td><td class="num o-feesHL"></td><td class="num o-c"></td><td class="num o-q"></td><td class="num o-w"></td><td class="num o-alpha"></td><td class="num o-earn"></td><td class="num o-net"></td><td class="l o-v"></td>
@@ -257,7 +258,21 @@ function renderTable() {
   });
   $("minerCount").textContent = "(" + miners.length + ")";
 }
+function syncFromTable() {
+  $("miners").querySelectorAll("tbody tr").forEach((tr) => {
+    const m = miners[+tr.dataset.i]; if (!m) return;
+    tr.querySelectorAll("[data-k]").forEach((inp) => {
+      const k = inp.dataset.k;
+      if (k === "name") m.name = inp.value; else if (k === "type") m.type = inp.value; else { const v = parseFloat(inp.value); if (!Number.isNaN(v)) m[k] = v; }
+    });
+  });
+}
 function update() {
+  try { syncFromTable(); compute(); $("err").hidden = true; }
+  catch (e) { $("err").hidden = false; $("err").textContent = "The page hit an error while recomputing: " + (e && e.message ? e.message : e); }
+  $("stamp").textContent = "Recomputed at " + new Date().toLocaleTimeString() + ".";
+}
+function compute() {
   const d = dials(); const rows = weights(d); const sim = simulate(d, rows);
   const p1 = d.price0 * d.taoUsd; // USD per token on day 1
   let tVol = 0, tProfit = 0, tFees = 0, tHl = 0, tAlpha = 0, tEarn = 0, tNet = 0;
@@ -331,14 +346,18 @@ function barChart(root, items, o) {
   root.appendChild(svg);
 }
 // events
-document.querySelectorAll(".dials input").forEach(i => i.addEventListener("input", update));
+document.querySelectorAll(".dials input").forEach(i => { i.addEventListener("input", update); i.addEventListener("change", update); });
+$("recompute").addEventListener("click", update);
+window.addEventListener("pageshow", update); window.addEventListener("focus", update);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) update(); });
 document.querySelectorAll("[data-scn]").forEach(b => b.addEventListener("click", () => load(b.dataset.scn)));
 $("addMiner").addEventListener("click", () => { if (miners.length >= 10) return; miners.push({ ...PRESETS.day, type: "day", name: "Miner " + (miners.length + 1) }); renderTable(); update(); });
-$("miners").addEventListener("input", (e) => {
-  const tr = e.target.closest("tr"); if (!tr) return; const m = miners[+tr.dataset.i]; const k = e.target.dataset.k; if (!k) return;
-  if (k === "name") m.name = e.target.value; else if (k === "type") { Object.assign(m, PRESETS[e.target.value], { type: e.target.value }); renderTable(); } else m[k] = parseFloat(e.target.value) || 0;
+function onTableEdit(e) {
+  const tr = e.target.closest("tr"); if (!tr) return; const m = miners[+tr.dataset.i]; const k = e.target.dataset.k; if (!k || !m) return;
+  if (k === "type") { Object.assign(m, PRESETS[e.target.value], { type: e.target.value }); renderTable(); }
   update();
-});
+}
+$("miners").addEventListener("input", onTableEdit); $("miners").addEventListener("change", onTableEdit);
 $("miners").addEventListener("click", (e) => { const b = e.target.closest("[data-del]"); if (!b) return; miners.splice(+b.dataset.del, 1); renderTable(); update(); });
 load("mix");
 })();
