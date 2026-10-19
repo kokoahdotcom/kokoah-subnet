@@ -308,8 +308,8 @@ function compute() {
   const days = [...Array(d.days).keys()].map(i => i + 1);
   lineChart($("cPrice"), days, [{ name: "price, TAO", values: sim.price, color: "var(--series-1)" }], { fmt: (v) => fmt.tao(v) });
   $("lPrice").innerHTML = `<span><i style="background:var(--series-1)"></i>token price</span><span>start ${fmt.tao(d.price0)} · end ${fmt.tao(sim.priceEnd)}</span>`;
-  lineChart($("cFlow"), days, [{ name: "revenue", values: sim.rev, color: "var(--series-1)" }, { name: "buyback", values: sim.buy, color: "var(--series-4)" }, { name: "selling", values: sim.sell, color: "var(--series-2)" }], { fmt: (v) => fmt.usdk(v) });
-  $("lFlow").innerHTML = `<span><i style="background:var(--series-1)"></i>revenue</span><span><i style="background:var(--series-4)"></i>buyback</span><span><i style="background:var(--series-2)"></i>miner + staker selling</span>`;
+  lineChart($("cFlow"), days, [{ name: "revenue", values: sim.rev, color: "var(--series-1)", width: 4 }, { name: "buyback", values: sim.buy, color: "var(--series-4)", dash: true }, { name: "selling", values: sim.sell, color: "var(--series-2)" }], { fmt: (v) => fmt.usdk(v) });
+  $("lFlow").innerHTML = `<span><i style="background:var(--series-1);height:4px"></i>revenue (builder fees)</span><span><i style="background:repeating-linear-gradient(90deg,var(--series-4) 0 4px,transparent 4px 7px)"></i>buyback, dashed (${fmt.pct(d.beta, 0)} of revenue)</span><span><i style="background:var(--series-2)"></i>miner + staker selling</span>`;
   barChart($("cEarn"), rows.map(r => ({ label: r.m.name, value: r.w * sim.A * p1, color: r.m.cheat ? "var(--series-2)" : "var(--series-1)" })), { fmt: fmt.usdk });
   barChart($("cNet"), rows.map(r => ({ label: r.m.name, value: r.feesHL + r.feesK + r.hidden - r.w * sim.A * p1, color: r.m.cheat ? "var(--series-2)" : "var(--series-1)" })), { fmt: fmt.usdk, diverging: true });
 }
@@ -326,9 +326,9 @@ function lineChart(root, x, series, o) {
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
   const grid = el("g", { class: "grid" }), axis = el("g", { class: "axis" });
   ticks.forEach(t => { grid.appendChild(el("line", { x1: L, x2: W - R, y1: sy(t), y2: sy(t) })); axis.appendChild(el("text", { x: L - 6, y: sy(t) + 3, "text-anchor": "end" }, o.fmt(t))); });
-  const xt = [1, Math.round(x.length / 2), x.length]; xt.forEach(v => axis.appendChild(el("text", { x: sx(v - 1), y: H - 8, "text-anchor": "middle" }, "day " + v)));
+  const xt = [1, Math.round(x.length / 2), x.length]; xt.forEach((v, j) => axis.appendChild(el("text", { x: sx(v - 1), y: H - 8, "text-anchor": j === 0 ? "start" : j === 2 ? "end" : "middle" }, "day " + v)));
   svg.appendChild(grid); svg.appendChild(axis);
-  series.forEach(s => { const dstr = s.values.map((v, i) => (i ? "L" : "M") + sx(i).toFixed(1) + " " + sy(v).toFixed(1)).join(" "); svg.appendChild(el("path", { d: dstr, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round" })); const last = s.values.length - 1; svg.appendChild(el("circle", { cx: sx(last), cy: sy(s.values[last]), r: 3.5, fill: s.color })); });
+  series.forEach(s => { const dstr = s.values.map((v, i) => (i ? "L" : "M") + sx(i).toFixed(1) + " " + sy(v).toFixed(1)).join(" "); const attrs = { d: dstr, fill: "none", stroke: s.color, "stroke-width": s.width || 2, "stroke-linejoin": "round" }; if (s.dash) attrs["stroke-dasharray"] = "6 5"; svg.appendChild(el("path", attrs)); const last = s.values.length - 1; svg.appendChild(el("circle", { cx: sx(last), cy: sy(s.values[last]), r: s.dash ? 2.5 : 3.5, fill: s.color })); });
   root.appendChild(svg);
 }
 function barChart(root, items, o) {
