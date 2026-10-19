@@ -89,11 +89,12 @@ volume shown. Emissions: by `weight_i`. Two orderings, both honest; nobody is to
 
 - **Per-miner cap:** `weight_i ≤ 20%`. Excess is burned, not redistributed, so a whale cannot be paid for the whole
   subnet and the cap is not a transfer to competitors.
-- **Payout cap:** a miner's emission in a window is at most `k × fees_i` (`k = 3`), with `fees_i` the builder fees it
-  paid in `W` converted to alpha at the snapshot's pool price and the TAO/USD mark from the node (Hyperliquid lists a
-  TAO perp; to verify). Excess is burned. This is a cap, not the score: it bounds what any lucky account can extract
-  while the subnet is small and competition is thin, and it makes a hedged pair (one winner, one loser, fees paid on
-  both) negative in expectation.
+- **Payout cap:** a miner's emission in a window is at most `k × fees_i` (`k = 1.5`), with `fees_i` the **builder
+  fees** it paid in `W` (not Hyperliquid's fees), converted to alpha at the snapshot's pool price and the TAO/USD mark
+  from the node (Hyperliquid lists a TAO perp; to verify). Excess is burned. This is a cap, not the score, and it is
+  the one defense that works when the other half of a hedge is invisible to us: §5.1 shows that with `k ≤ 1.5` no
+  strategy without a trading edge can net positive, whatever the number of addresses. Emissions above the cap are the
+  subnet's margin of safety, burned.
 - Unpaid miner emission is burned via the chain's burn path (`recycle_or_burn` set to burn).
 
 ## 4. Scoring epoch, data and consensus
@@ -118,10 +119,55 @@ volume shown. Emissions: by `weight_i`. Two orderings, both honest; nobody is to
 
 ## 5. Attacks and answers
 
+### 5.1 The hedge attack, with numbers
+
+The attack the mechanism must survive: open long on an address bound to the subnet and short the same size at the
+same time somewhere we cannot see (an unbound address, a sub-account, another exchange), or across two bound
+addresses, or across N addresses keeping only the winners. No market risk, large held volume, fees paid, emissions
+collected. Holding-time weighting does nothing against it (the positions are held), and the skill multiplier only
+halves it (one leg always wins), so it is answered by the payout cap.
+
+Per unit of notional, one round trip on the Kokoah leg costs the attacker Hyperliquid's fee plus the builder fee, and
+the hedge leg costs Hyperliquid's fee again. Builder fee 2.5 bps per side; Hyperliquid 4.5 bps taker, 1.5 bps maker,
+down to a 0.3 bps maker rebate at the top tier. The subnet can pay the winning leg at most `k × 5 bps` (its builder
+fees), and only the winning half of the legs are paid:
+
+| Attacker | Cost per round trip, bps | Max payout, bps | `k` where it breaks even |
+|---|---|---|---|
+| Lone leg, normal maker, hedge elsewhere as maker | 3 + 5 + 3 = 11 | k × 5 × ½ = 2.5k | 4.4 |
+| Lone leg, top-tier market maker on both legs | −0.6 + 5 − 0.6 = 3.8 | 2.5k | 1.5 |
+| Two bound addresses, both through Kokoah, undetected | 2 × 4.4 = 8.8 | k × 5 (one winner) | 1.8 |
+| N addresses, keep the winners | ≥ 3.8 per address | ≤ 2.5k per address on average | 1.5 |
+
+With `k = 1.5` every row is zero or negative before the registration burn, the collateral and the gates, and before
+the lucky leg's multiplier falls short of 1 (it usually does). With `k = 1` there is margin. Honest traders are
+unaffected by the cap until their emission exceeds 1.5 times what they paid Kokoah, which is the point: the subnet
+rebates the builder fee and a half in alpha for a verified track record, and refuses to subsidize risk-free volume.
+
+What the cap does not do is pay large subsidies above fees to attract volume. If the owner wants a bigger draw, raise
+`k` only together with the detection below, and read the table again: `k = 2` already pays top-tier market makers to
+hedge through us.
+
+### 5.2 Detection, on top of the cap
+
+- **Same coldkey, same address, sub-accounts:** fills between bound addresses of one coldkey are excluded; a
+  sub-account of a bound master is treated as the same miner (the master address is in the clearinghouse data).
+- **Mirror score across bound addresses:** for each pair of bound addresses, the share of an address's held volume
+  with an opposite-side fill in the other address in the same coin within 60 seconds and within 20% of the size.
+  Above 25%, the mirrored volume is excluded; above 50%, both get `g = 0` for the window and the pair is reported.
+- **Funding clustering (v1):** addresses funded from the same bridge depositor on Arbitrum, or by transfers between
+  each other, form one cluster for the cap and the mirror score.
+- **Collateral:** miners post the chain's miner collateral (Bittensor 11 supports it; drain rules to verify); a
+  reported mirror pair loses it.
+- Hedges against unbound addresses or other exchanges stay invisible, and that is fine: the cap already makes them
+  unprofitable; detection only raises the cost further for the lazy versions.
+
+### 5.3 Table
+
 | Attack | What happens under this design |
 |---|---|
 | Wash trading (self or paired, instant round trips) | `h(hold)` near 0, so no volume credit; PnL is minus fees, so `g = 0`; fees still paid to Kokoah and Hyperliquid. Unprofitable. |
-| Hedged pair (long in A, short in B, keep the winner) | Winner's `g` limited by drawdown and consistency; payout ≤ `k × fees`; both legs paid fees, registration burn on each UID. Negative expectation. |
+| Hedged pair or basket (long in A, short in B, keep the winner; the other leg bound, unbound or on another exchange) | Payout ≤ `k × builder fees` with `k = 1.5`: negative expectation for every variant in §5.1; mirror score zeroes bound pairs; registration burn and collateral per UID. |
 | Lottery accounts (many small, high-leverage) | `newcomer`, 10 round trips, 7 active days, `$500` equity, per-UID burn, payout cap. Exponentially expensive to keep a winner. |
 | Sybil splitting | Volume is linear; nothing gained, registration burn lost. |
 | Hiding losers (realize winners, hold losers) | Equity-based returns include unrealized PnL. |
@@ -145,7 +191,8 @@ volume shown. Emissions: by `weight_i`. Two orderings, both honest; nobody is to
 | Gates | `R > 0`, `MDD ≤ 50%`, ≥ 10 round trips, ≥ 7 active days, equity ≥ $500 | |
 | `turnover_cap` | 50 × equity per day | scalpers fit; dust accounts cannot claim size |
 | Per-miner cap | 20% | |
-| Payout cap `k` | 3 × fees paid | bounds extraction while competition is thin |
+| Payout cap `k` | 1.5 × builder fees paid | §5.1: every zero-edge strategy nets ≤ 0 at this value; `k = 1` for margin |
+| Mirror thresholds | 60 s, 20% size; exclude above 25%, zero above 50% | catches the lazy two-address hedge |
 | Registration | burn, `min_burn` ≈ 1 TAO (owner-set) | prices sybils |
 | Scoring time | 00:00 UTC daily | |
 
@@ -156,7 +203,7 @@ All of these are owner-settable in the validator config and should be tuned on t
 | Miner | Equity | Held builder volume `V` | Return `R` | Drawdown | `g_raw` | `V × g` | Share of 4 |
 |---|---|---|---|---|---|---|---|
 | Small star | $5k | $2M | +30% | 8% | 1.00 | 2.0M | 1.6% |
-| Whale | $2M | $400M | +6% | 10% | 0.30 | 120M | 95.8% (capped to 20%, rest burned) |
+| Whale | $2M | $400M | +6% | 10% | 0.30 | 120M | 95.8% (capped to 20% and to 1.5 × fees, rest burned) |
 | Steady pro | $150k | $20M | +12% | 6% | 1.00 | 20M | 16.0% |
 | Wash account | $20k | $500M nominal, ~$0 held | −0.4% (fees) | 0.5% | 0 (gate) | 0 | 0% |
 
@@ -180,6 +227,8 @@ earns 0.3 on: skill pays per dollar, scale pays in total.
 4. Legal review of paying tokens for trading (pending for the app already).
 5. The builder fee is 0 under the launch promotion; the mechanism needs a non-zero fee to have fees to cap against.
 6. Whether to reserve a second mechanism (the chain allows two) for forecasting later.
+7. Hyperliquid's fee tiers and maker rebates at the time of launch set the §5.1 table; re-run it before choosing `k`.
+8. How sub-accounts and the master address appear in fills and clearinghouse data (for §5.2).
 
 ## 10. Next steps
 
