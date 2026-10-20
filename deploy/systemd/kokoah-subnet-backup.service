@@ -1,0 +1,7 @@
+[Unit]
+Description=Kokoah subnet database backup (daily, 14 kept)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/kokoah/kokoah-subnet
+ExecStart=/bin/bash -c 'f=%h/.local/share/kokoah/backups/kokoah_subnet-$(date -u +%%Y%%m%%d).dump; /kokoah/kokoah-subnet/scripts/db.sh backup "$f" && ls -1t %h/.local/share/kokoah/backups/*.dump | tail -n +15 | xargs -r rm -f'

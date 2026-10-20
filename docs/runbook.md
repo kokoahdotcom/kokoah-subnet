@@ -24,6 +24,10 @@ yesterday's file hash from the owner hotkey at 00:20 UTC and retries hourly unti
 `uv run kokoah-subnet validator check` prints the health report (latest day, last weights, last epoch, errors in
 24 h, last burn) and exits 1 on a problem.
 
+Backups: `kokoah-subnet-backup.timer` dumps the record daily at 03:00 UTC to `~/.local/share/kokoah/backups/`
+(14 kept); `scripts/db.sh backup <file>` does it by hand. Public exposure of the interface, if wanted, goes behind a
+reverse proxy; `deploy/nginx/kokoah-subnet.conf` is a template.
+
 ## Dashboards
 
 `scripts/dashboard.sh start` runs Grafana (Docker, 127.0.0.1:48120, admin password generated into

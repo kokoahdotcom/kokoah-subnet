@@ -15,6 +15,7 @@ validator/schema.py`; the tables, by what they answer:
 | The trader's account | `equity` (account value and flows per day, with the raw margin summary), `ledger_updates` (every deposit, withdrawal and transfer), `positions` (end-of-day positions per coin with size, entry, unrealized PnL, leverage), `activity` (round trips, fills, notional per day), `fee_rates` (the exchange's fee schedule for the address) |
 | Who is who | `miners` (per hotkey: coldkey, uid, registration block and estimated time, first and last seen, bound address and when, first and last pay, total emission from the chain and total pay from the scoring, role), `neurons` (the metagraph at scoring time), `commitments` (every commitment seen each day), `bindings` (accepted now), `binding_events` (accepted / migrated / refused with the reason), `clusters`, `cluster_edges` (coldkey, sub-account, transfer links) |
 | What the chain paid, tempo by tempo | `epochs`, `epoch_neurons` (per UID per epoch: incentive, emission = alpha paid that epoch, dividends, rank, trust, consensus, stake, registration block) |
+| The subnet's own emission, tempo by tempo | `subnet_epochs` (TAO injected per block, alpha in and out per block, pool reserves, the chain's `MinerBurned`, emission enabled): the TAO side of the burn question, over time |
 | The inputs to the conversion rate | `price_samples` (pool rate per sampled block), `tao_marks`, `stake_samples` (own stake per hotkey per sampled block) |
 | What the validator submitted | `weights_submitted` (uids, values, block, result) |
 | What the operator burned | `burns` (per run of `owner burn`: staked, locked, burned, result) |
@@ -28,6 +29,9 @@ Connect: `scripts/db.sh psql` opens a shell; the URL is in `~/.local/share/kokoa
 `KOKOAH_SUBNET_DB_URL`, which the validator, the API and the burn command read when `--db-url` is not given.
 Back up with `scripts/db.sh backup file.dump`.
 
+Schema changes: `create_all` adds new tables; column changes are numbered steps in
+`src/kokoah_subnet/validator/migrations.py`, applied once per database (`meta.schema_version`).
+
 Useful queries:
 
 ```sql
@@ -39,4 +43,11 @@ SELECT day, notional, builder_fee, confidence, quality, skill, holding, multipli
 SELECT e.at, n.uid, n.hotkey, n.emission, n.incentive FROM epoch_neurons n JOIN epochs e ON e.block = n.block ORDER BY e.at, n.uid;
 -- why fills were not counted
 SELECT day, excluded, count(*), sum(notional) FROM fills GROUP BY day, excluded ORDER BY day;
+-- the holding effect: did traders at holding 1 keep more of their pay than traders at holding 0?
+SELECT md.day, round(md.holding::numeric, 1) AS holding, count(*) AS traders, avg(ss.alpha) AS mean_stake_sample
+FROM miner_days md JOIN stake_samples ss ON ss.day = md.day AND ss.hotkey = md.hotkey
+GROUP BY md.day, round(md.holding::numeric, 1) ORDER BY md.day, holding;
+-- the TAO side of burning: the subnet's TAO injection per block against the share of the pool burned
+SELECT s.at, s.tao_in_emission, s.alpha_out_emission, s.miner_burned, d.burn_alpha / d.pool_alpha AS burned_share
+FROM subnet_epochs s LEFT JOIN days d ON d.day = to_char(s.at, 'YYYY-MM-DD') ORDER BY s.at;
 ```

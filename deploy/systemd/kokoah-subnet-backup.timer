@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Kokoah subnet database backup (03:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
