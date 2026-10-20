@@ -14,6 +14,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Index,
     Integer,
     MetaData,
     String,
@@ -102,8 +103,8 @@ fills = Table(
     Column("twap_id", BigInteger),
     Column("mark_px", Float),
     Column("excluded", String(32)),  # unbound | cluster | bound_counterparty | mark_clip, or NULL when counted
-    UniqueConstraint("day", "address", "time_ms", "coin", "side", "px", "sz", name="uq_fill"),
-)
+    Index("ix_fills_day_address", "day", "address"),
+)  # no uniqueness: the file can hold identical rows (partial fills of one order in the same second)
 
 # every per-miner figure of the day, with the parts behind each factor
 miner_days = Table(
