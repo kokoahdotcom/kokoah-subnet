@@ -286,7 +286,10 @@ nothing is burned, the pool is a volume rebate paying about 14% of fees back, sh
 
 A miner's smoothed credit, skill and holding target belong to the binding. Migration to a new address is allowed
 once per 60 days by a message signed by the old address, the new address and the hotkey; everything carries over.
-A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cover linked addresses.
+A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cover linked addresses. The chain keeps
+only a hotkey's latest commitment, so a validator enforces the 60-day limit from the bindings it has accepted; a
+validator that starts fresh accepts the current commitment on its signatures alone and converges with the others
+after 60 days.
 
 ## 15. Verification
 

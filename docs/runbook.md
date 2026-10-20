@@ -57,11 +57,20 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
 ## Operator
 
 - Builder fees are collected by the exchange; the per-builder daily file is public and is what validators score.
+- Each day, commit the file's hash from the owner hotkey so validators can check theirs against it (the day's
+  artifact shows `builder_file_hash_matches_operator`):
+  `uv run kokoah-subnet owner commit-file --network test --netuid <N> --day 2026-10-21 --file 20261021.csv.lz4 -w owner`
 - The buyback is one transaction per run: `btcli tx stake-burn --netuid <N> --amount-tao <amount> -w owner`
   (buys alpha with TAO and burns it, emitting `TokensBurned`).
 - Keep `owner_cut_auto_lock_enabled` on, so the owner's share is locked.
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
+
+## Testnet
+
+`scripts/testnet.sh wallets`, then (after test TAO from the Bittensor Discord) `scripts/testnet.sh register`,
+`KOKOAH_SUBNET_NETUID=<n> scripts/testnet.sh start`, and `KOKOAH_SUBNET_NETUID=<n> KOKOAH_BUILDER_ADDRESS=<0x…>
+scripts/testnet.sh run`.
 
 ## Offline tools
 
@@ -69,5 +78,6 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
 uv run kokoah-subnet verify                      # the specification's numerical checks
 uv run kokoah-subnet score-day ...               # score one day from files (README)
 uv run python scripts/replay.py --days 60        # adversarial replay through the real scoring code
+uv run python scripts/fetch_real_fills.py --out DIR   # public fills of real addresses, then replay.py --real DIR
 uv run python scripts/measure_burn.py            # burn and emission counters per tempo on a local chain
 ```

@@ -67,6 +67,12 @@ def test_resolution_rules() -> None:
         first.accepted, [_pub(HK2, 150, Binding(a.address, sign_binding(a.key, 2, HK2, a.address)))], 300
     )
     assert HK2 in dup.refused and HK2 not in dup.accepted
+    # a migration seen without any history is accepted on its own signatures (a validator that started late)
+    mig0 = Binding(
+        b2.address, sign_binding(b2.key, 2, HK, b2.address), a.address, sign_binding(a.key, 2, HK, b2.address)
+    )
+    fresh = resolve_bindings({}, [_pub(HK, 700, mig0)], block=800)
+    assert fresh.accepted[HK] == AcceptedBinding(HK, b2.address.lower(), 700, 700) and not fresh.refused
     # a migration without the accepted address's signature is refused
     bad = resolve_bindings(
         first.accepted, [_pub(HK, 500, Binding(b2.address, sign_binding(b2.key, 2, HK, b2.address)))], 600
@@ -125,3 +131,13 @@ async def test_read_bindings_from_commitments() -> None:
     client = _FakeClient({HK: _Commitment(good, 10), HK2: _Commitment("hello", 11), "hk3": _Commitment(good, 12)})
     out = await read_bindings(client, 2)
     assert [(p.hotkey, p.valid) for p in out] == [(HK, True), ("hk3", False)]
+
+
+def test_file_commitment_text_round_trip() -> None:
+    from kokoah_subnet.binding import file_commitment_text, parse_file_commitment
+
+    text = file_commitment_text("2026-10-21", "ab" * 32)
+    assert len(text.encode()) <= 128
+    assert parse_file_commitment(text) == ("2026-10-21", "ab" * 32)
+    assert parse_file_commitment("kokoah-file-1 2026-10-21 short") is None
+    assert parse_file_commitment("something else") is None

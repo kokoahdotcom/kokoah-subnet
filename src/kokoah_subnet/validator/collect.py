@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from kokoah_subnet.binding import read_bindings, resolve_bindings
+from kokoah_subnet.binding import read_bindings, read_file_commitment, resolve_bindings
 from kokoah_subnet.mechanism import Params, by_user, match_total_fees, parse_builder_csv, round_trips
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
 
@@ -97,6 +97,10 @@ async def collect_and_score(
     store.put_file(day, digest, len(fills))
 
     snap = await snapshot(client, cfg.netuid)
+    committed = await read_file_commitment(client, cfg.netuid, snap.owner_hotkey)
+    hash_matches: bool | None = None if committed is None or committed[0] != day else committed[1] == digest
+    if hash_matches is False:
+        log.warning("builder file hash for %s differs from the operator's commitment", day)
     published = await read_bindings(client, cfg.netuid)
     resolution = resolve_bindings(store.bindings(), published, snap.block)
     store.put_bindings(resolution.accepted)
@@ -165,6 +169,7 @@ async def collect_and_score(
         {
             "day": day,
             "builder_file_sha256": digest,
+            "builder_file_hash_matches_operator": hash_matches,
             "builder_fills": len(fills),
             "price_tao": price_tao,
             "tao_usd": tao_usd,

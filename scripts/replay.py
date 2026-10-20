@@ -128,7 +128,14 @@ def main() -> int:
     real: dict[str, list[dict]] = {}
     if args.real and args.real.is_dir():
         for f in sorted(args.real.glob("*.json")):
-            real[f.stem.lower()] = json.loads(f.read_text())
+            recs = json.loads(f.read_text())
+            if not recs:
+                continue
+            # recorded fills are replayed from day 0: shift them so their earliest day lands on T0
+            shift = T0 - (min(int(r["time"]) for r in recs) // DAY_MS) * DAY_MS
+            for rec in recs:
+                rec["time"] = int(rec["time"]) + shift
+            real[f.stem.lower()] = recs
             acts.append(Actor(f"real {f.stem[:10]}", f"r{len(real)}", f.stem.lower(), 0.0, 1.0, holds=0.5))
     price_usd = args.pool_usd / DEFAULT.miner_pool_alpha
     states: dict[str, MinerState] = {}

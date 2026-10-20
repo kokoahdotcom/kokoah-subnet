@@ -69,6 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--poll-seconds", type=int, default=60)
     vrun.add_argument("--once", action="store_true", help="one pass, then exit")
     vrun.add_argument("--day", default=None, help="score this day instead of yesterday")
+    owner = sub.add_parser("owner", help="operator tools")
+    osub = owner.add_subparsers(dest="owner_command", required=True)
+    ocommit = osub.add_parser("commit-file", help="commit the day's builder file hash from the owner hotkey")
+    ocommit.add_argument("--netuid", required=True, type=int)
+    ocommit.add_argument("--day", required=True, help="YYYY-MM-DD")
+    ocommit.add_argument("--file", required=True, type=Path, help="the builder file (.csv.lz4) as downloaded")
+    ocommit.add_argument("--network", default="local")
+    ocommit.add_argument("--wallet", default="owner")
+    ocommit.add_argument("--wallet-hotkey", default="default")
+    ocommit.add_argument("--wallet-path", default=None)
     vserve = vsub.add_parser("serve", help="serve the store over HTTP (read-only)")
     vserve.add_argument("--data-dir", required=True, type=Path)
     vserve.add_argument("--host", default="127.0.0.1")
@@ -107,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
         return _miner(args)
     if args.command == "validator":
         return _validator(args)
+    if args.command == "owner":
+        return _owner(args)
     if args.command == "verify":
         import runpy
 
@@ -150,6 +162,31 @@ def _validator(args: argparse.Namespace) -> int:
         app = create_app(Store(args.data_dir / "validator.sqlite"))
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
+    return 2
+
+
+def _owner(args: argparse.Namespace) -> int:
+    import bittensor as bt
+
+    from kokoah_subnet.binding import file_commitment_text, publish_text
+    from kokoah_subnet.validator.builder_feed import sha256
+
+    if args.owner_command == "commit-file":
+        digest = sha256(args.file.read_bytes())
+        text = file_commitment_text(args.day, digest)
+        wallet = (
+            bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)
+            if args.wallet_path
+            else bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
+        )
+
+        async def _publish() -> int:
+            async with bt.Subtensor(args.network) as client:
+                result = await publish_text(client, wallet, args.netuid, text)
+            print(f"{'committed' if result.success else 'failed'}: {text} ({result.message})")
+            return 0 if result.success else 1
+
+        return asyncio.run(_publish())
     return 2
 
 

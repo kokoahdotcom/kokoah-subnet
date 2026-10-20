@@ -1,10 +1,12 @@
 """Which binding counts for each hotkey (specification section 14), as a pure function over what the chain shows and
 what the validator accepted before.
 
-Rules: a valid first binding is accepted; the same address again changes nothing; a migration is accepted only when
-the previous address is the one currently accepted, its signature checks out, and the last accepted change is at
-least `migration_blocks` old; anything else keeps the earlier binding and is flagged. One address can be bound to
-one hotkey: a later claim on an address already accepted elsewhere is refused.
+Rules: a valid first binding is accepted (a migration seen without history counts as a first binding: both
+signatures are on the commitment); the same address again changes nothing; a migration of an accepted binding is
+accepted only when the previous address is the one currently accepted, its signature checks out, and the last
+accepted change is at least `migration_days` old; anything else keeps the earlier binding and is flagged. One
+address can be bound to one hotkey: a later claim on an address already accepted elsewhere is refused. A validator
+that starts fresh therefore agrees with the others except on the 60-day limit during its own first 60 days.
 """
 
 from __future__ import annotations
@@ -48,9 +50,8 @@ def resolve_bindings(
             continue
         current = accepted.get(hk)
         if current is None:
-            if b.previous_address is not None:
-                refused[hk] = "migration without an accepted binding"
-                continue
+            # No history for this hotkey (a first binding, or a validator that started after a migration): the
+            # commitment's own signatures are the whole proof, so a valid one is accepted as it stands.
             if b.address in taken and taken[b.address] != hk:
                 refused[hk] = "address already bound to another hotkey"
                 continue

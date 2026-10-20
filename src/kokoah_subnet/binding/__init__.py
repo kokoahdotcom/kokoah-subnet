@@ -1,6 +1,14 @@
 """Binding a Hyperliquid address to a subnet hotkey, on chain and verifiable by anyone (spec sections 3 and 14)."""
 
-from .chain import PublishedBinding, publish_binding, read_bindings
+from .chain import (
+    PublishedBinding,
+    file_commitment_text,
+    parse_file_commitment,
+    publish_binding,
+    publish_text,
+    read_bindings,
+    read_file_commitment,
+)
 from .message import (
     BINDING_VERSION,
     Binding,
@@ -19,7 +27,11 @@ __all__ = [
     "PublishedBinding",
     "AcceptedBinding",
     "Resolution",
+    "file_commitment_text",
+    "parse_file_commitment",
     "publish_binding",
+    "publish_text",
+    "read_file_commitment",
     "read_bindings",
     "resolve_bindings",
     "Binding",
