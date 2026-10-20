@@ -212,12 +212,12 @@ Per round trip of notional, in bps, with `fee = 2.5 bps` a side (`F = 5` per rou
 hedge pays Hyperliquid 9 and Kokoah 5 on our leg (36% of its spend is our revenue; 29% counting its hidden leg's
 fees); a maker-based one 3 and 5 (62%; 45%); a top-tier market maker −1.2 and 5 (132%; 156%). Cost per unit of fee
 credit: taker hedge with a rebate on the hidden leg 13.4 bps per 1.0 credit; maker-based top-tier market maker 3.8
-bps per 0.4 credit = 9.5 per credit (the cheapest); normal maker hedge 11 per 0.4 = 27.5. The subnet pays a
-zero-edge account only through the fee half (its `g` is 0 for a wash bot, 0.18 on average for a hedge leg), so the
-cheapest attack must out-earn `Φ`-share pay that is itself bounded by the pool. In the young-subnet phase the pool
-per dollar of fees is high and zero-edge traders enter until pay per unit of size ≈ cost / 0.18, at which point
-honest traders with `g ≈ 0.6` are paid about three times a hedger's cost per unit of size; at 6 bps most of that
-early money is Kokoah revenue, not Hyperliquid's.
+bps per 0.4 credit = 9.5 per credit (the cheapest); normal maker hedge 11 per 0.4 = 27.5. A zero-edge account
+earns the fee-credit rate times `M ≈ 0.85` to `0.90` (its `g` is 0 for a wash bot and about 0.07 for a hedge leg),
+so it must out-earn a rate that is itself bounded by the pool. In the young-subnet phase the pool per dollar of fees
+is high and zero-edge traders enter until the pay per unit of credit falls to about 9.5 bps per round trip (190% of
+the builder fee); honest traders are paid the same rate times 0.85 to 1.0, and that phase is paid by the emission,
+not by Kokoah.
 
 ## 12. Parameters (defaults)
 
@@ -299,7 +299,7 @@ exclusions (§3), collateral per account, migration-only account changes (§16) 
 | Volume $/day | input `V_i` (daily) |
 | Taker % | input, `t` share |
 | Skill g | input `g_i` |
-| Profit $/day | input `P_i` (daily; negative allowed, counted as 0 in `S_i`) |
+| Profit $/day | input `P_i` (daily; negative allowed, counted as 0 in the profit credit) |
 | Sells % | input `s_i`; `h_i = 0.5 + 0.5 × (1 − s_i)` when the holding multiplier is on |
 | Hidden leg bps | input `hidden_bps_i` |
 | Fees to Kokoah | `b_i = V_i × fee` |
