@@ -96,10 +96,27 @@ async def step(
         if snap.block - last_block >= cfg.weights_every_blocks or last_day != latest[0]:
             fractions = json.loads(latest[2])["weights"]
             uids, values = weights_by_uid(fractions, snap.uid_of())
-            if uids:
-                result = await set_weights(client, wallet, cfg.netuid, uids, values)
-                ok = bool(getattr(result, "success", True))
-                message = str(getattr(result, "message", ""))
+            own_hotkey = getattr(getattr(wallet, "hotkey", None), "ss58_address", None)
+            last_update = next((n.last_update for n in snap.neurons if n.hotkey == own_hotkey), 0)
+            rate_limit = int(store.get_meta("weights:rate_limit", "100") or 100)
+            if uids and snap.block - last_update < rate_limit:
+                report["weights"] = {
+                    "day": latest[0],
+                    "skipped": f"rate limit: set {snap.block - last_update} blocks ago",
+                }
+            elif uids:
+                try:
+                    result = await set_weights(client, wallet, cfg.netuid, uids, values)
+                    ok = bool(getattr(result, "success", True))
+                    message = str(getattr(result, "message", ""))
+                except Exception as exc:  # noqa: BLE001 - a refused submission is recorded and retried next pass
+                    ok, message = False, str(exc)[:500]
+                    if "rate limit is" in message:
+                        try:
+                            rate_limit = int(message.split("rate limit is")[1].split("blocks")[0])
+                            store.set_meta("weights:rate_limit", str(rate_limit))
+                        except (IndexError, ValueError):
+                            pass
                 store.put_weights_submission(latest[0], snap.block, uids, values, ok, message)
                 report["weights"] = {"day": latest[0], "uids": uids, "ok": ok, "message": message}
                 if ok:

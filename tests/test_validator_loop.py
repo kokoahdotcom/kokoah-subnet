@@ -246,3 +246,23 @@ async def test_unregistered_burn_hotkey_is_refused(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="burn_hotkey"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     await hl.close()
+
+
+async def test_step_survives_a_refused_submission(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+
+    async def refuse(intent: Any, wallet: Any) -> Any:
+        raise RuntimeError("Weights on netuid 2 were last set 11 blocks ago; the rate limit is 100 blocks. Retry.")
+
+    chain.execute = refuse  # type: ignore[method-assign]
+    now = DAY_MS / 1000 + 86_400 + 600
+    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    assert report["weights"]["ok"] is False and "rate limit" in report["weights"]["message"]
+    assert store.get_meta("weights:rate_limit") == "100"
+    # the failure is on the record and the loop goes on
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        rows = c.execute(S.weights_submitted.select()).all()
+    assert len(rows) == 1 and rows[0].ok is False
+    await hl.close()
