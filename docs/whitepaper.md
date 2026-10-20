@@ -310,9 +310,11 @@ buybacks executed.
 paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the conversion rate under
 a 30% single-block move; the skill factor calibrated on simulated track records (luck, lottery, martingale,
 grinder, real edge, strong edge, fading edge, one bad day); a 60-day adversarial replay through the real scoring
-code, with recorded public fills of real accounts beside the synthetic ones, in which every zero-edge strategy
-ended negative and honest traders were paid proportionally; the replay also found and removed a timing heuristic
-that flagged honest traders by coincidence. On a local chain: directing most of the miner pool to one hotkey and
+code, with a month of recorded public fills of four of the most active Hyperliquid accounts (one of them a
+scalper with 15,471 fills in the month) beside the synthetic ones, in which every zero-edge strategy ended negative
+and honest traders were paid proportionally; the replay also found and removed a timing heuristic that flagged
+honest traders by coincidence. Two independent validators on the test network scored the same day with the same
+file hash and identical weights. On a local chain: directing most of the miner pool to one hotkey and
 burning it leaves alpha emission to everyone else unchanged. On a test-network subnet with the real public data:
 the per-builder daily file is fetchable by anyone for the operator's builder address, bindings publish and resolve
 on chain, the validator scores complete days into its record and submits weights. The verification script, the
@@ -322,10 +324,9 @@ simulations and the chain measurements are in the repository.
 
 1. The burn process on the test network over a month: alpha directed to the burn hotkey each day against alpha
    actually burned, published side by side.
-2. The same replay on a month of recorded histories of real scalpers, market makers and swing traders, and with one
-   trader on several wallets, volume timed to the conversion rate, and coordinated groups. Pass criterion
-   unchanged: no zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their
-   proportional share.
+2. The replay extended with coordinated groups and with one trader on several wallets over recorded histories.
+   Pass criterion unchanged: no zero-edge strategy nets positive at any pool size, and genuine high-volume traders
+   receive their proportional share.
 3. Holding: selling by traders at factor 1 against factor 0 on the test network.
 4. Total-fee matching against public fill histories checked on real bound traders over a month of data.
 

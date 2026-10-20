@@ -296,7 +296,9 @@ Done (2026-10-20, `scripts/verify_mechanism.py`, `scripts/sim_skill.py`, `script
 over 105 fee cases and the closed-form bound; cumulative backing on 200 random paths (worst paid / fees 1.36 at
 `c_max = 2`); the 15% rule in both regimes; sybil neutrality for k = 1, 2, 5; the cap price under a 30% spot dip;
 the skill calibration; on the local chain, incentive aimed at the owner hotkey is withheld and alpha emission to
-the other participants is unchanged (§1).
+the other participants is unchanged (§1); `scripts/replay.py --real` over a month of recorded public fills of four
+active accounts (one with 15,471 fills) beside the synthetic attackers: all cheats negative, real accounts paid
+proportionally; two independent validators on testnet 385 produced identical weights for the same day.
 
 Before launch:
 
