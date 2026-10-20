@@ -83,8 +83,8 @@ class DayResult:
     records: list[MinerRecord]
     states: dict[str, MinerState]
 
-    def weights(self, owner_hotkey: str) -> dict[str, float]:
-        return weights(self.allocation, owner_hotkey)
+    def weights(self, burn_hotkey: str) -> dict[str, float]:
+        return weights(self.allocation, burn_hotkey)
 
 
 def score_day(inputs: DayInputs, params: Params) -> DayResult:

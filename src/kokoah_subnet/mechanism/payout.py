@@ -64,12 +64,13 @@ def allocate(
     return Allocation(pool, price_usd, shares, caps, pays, max(0.0, burn))
 
 
-def weights(allocation: Allocation, owner_hotkey: str) -> dict[str, float]:
-    """Weight fractions summing to one: miners by pay, the burn to the owner hotkey."""
+def weights(allocation: Allocation, burn_hotkey: str) -> dict[str, float]:
+    """Weight fractions summing to one: miners by pay, the unawarded remainder to the burn hotkey (a dedicated
+    hotkey on its own coldkey whose alpha the operator burns with `burn_alpha`; spec section 6)."""
     if allocation.pool_alpha <= 0:
-        return {owner_hotkey: 1.0}
+        return {burn_hotkey: 1.0}
     out = {k: v / allocation.pool_alpha for k, v in allocation.pays.items() if v > 0}
-    out[owner_hotkey] = out.get(owner_hotkey, 0.0) + allocation.burn_alpha / allocation.pool_alpha
+    out[burn_hotkey] = out.get(burn_hotkey, 0.0) + allocation.burn_alpha / allocation.pool_alpha
     return out
 
 

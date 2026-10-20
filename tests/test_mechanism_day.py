@@ -84,7 +84,7 @@ def test_worked_example_through_score_day() -> None:
     assert rb.pay_alpha / ra.pay_alpha >= 0.85
     assert rb.pay_alpha == pytest.approx(319.0, abs=1.0)
     assert res.allocation.burn_alpha > 1600
-    w = res.weights("owner")
+    w = res.weights("burn")
     assert sum(w.values()) == pytest.approx(1.0)
     assert sum(to_u16(w).values()) == 65535
     assert res.states["hkA"].paid[-1] == pytest.approx(ra.pay_alpha)

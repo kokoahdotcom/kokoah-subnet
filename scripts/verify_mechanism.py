@@ -225,14 +225,14 @@ def price_manipulation() -> None:
 
 
 def burn_rule() -> None:
-    print("6. Burning via the owner hotkey: next tempo's TAO share is scaled by (1 - burned share of miner incentive)")
+    print("6. The burned share of the pool by fee level (directed to the burn hotkey, not the owner hotkey)")
     for fees, price in ((2_000.0, 5.33), (20_000.0, 5.33), (87_700.0, 5.33)):
         pool_usd = A_POOL * price
         paid = min(pool_usd, C_MAX * fees)  # all taker at tier 0: the first cap binds
         burned = 1 - paid / pool_usd
         print(
             f"      fees ${fees:>8,.0f}/day, pool ${pool_usd:,.0f}: burned {burned:.0%} "
-            f"-> TAO share x {1 - burned:.2f}; alpha emission unchanged"
+            f"(via the owner hotkey the TAO share would be x {1 - burned:.2f}; via the burn hotkey it is not)"
         )
     check("rule recorded", True, "chain code read 2026-10-19 (research note 05, section 9); localnet test in §15")
 

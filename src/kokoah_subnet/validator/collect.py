@@ -40,6 +40,7 @@ class ValidatorConfig:
     netuid: int
     builder: str  # the builder address whose daily file is scored
     data_dir: Path
+    burn_hotkey: str = ""  # registered hotkey (own coldkey, not the owner's) that receives the unawarded remainder
     wallet_name: str = "validator"
     wallet_hotkey: str = "default"
     wallet_path: str | None = None
@@ -105,6 +106,8 @@ async def collect_and_score(
     resolution = resolve_bindings(store.bindings(), published, snap.block)
     store.put_bindings(resolution.accepted)
     uid_of = snap.uid_of()
+    if not cfg.burn_hotkey or cfg.burn_hotkey not in uid_of:
+        raise RuntimeError("burn_hotkey is not set or not registered on the subnet; register it and configure it")
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
 
@@ -164,7 +167,7 @@ async def collect_and_score(
     )
     result = score_day(inputs, params)
     store.put_states(result.states)
-    published_json = json.loads(result_json(result, snap.owner_hotkey))
+    published_json = json.loads(result_json(result, cfg.burn_hotkey))
     published_json.update(
         {
             "day": day,

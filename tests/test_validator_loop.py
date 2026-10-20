@@ -18,7 +18,7 @@ from kokoah_subnet.validator.loop import step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
 
-HK_A, HK_B, OWNER = "hkA", "hkB", "hkOwner"
+HK_A, HK_B, OWNER, BURN = "hkA", "hkB", "hkOwner", "hkBurn"
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -70,6 +70,7 @@ class _FakeChain:
             _Neuron(0, OWNER, "ckOwner"),
             _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
             _Neuron(2, HK_B, "ckB", _Balance(10 * 10**9)),
+            _Neuron(3, BURN, "ckBurn"),
         ]
         return _Metagraph(block or self._block, 360, OWNER, neurons, 0.5)
 
@@ -137,6 +138,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         builder="0xbuilder",
         data_dir=tmp_path,
         start_day="2026-10-20",
+        burn_hotkey=BURN,
         weights_every_blocks=360,
         retry_missing_s=3600,
     )
@@ -175,7 +177,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     published = json.loads(store.day(DAY) or "{}")
     assert published["builder_fills"] == 30 and len(published["builder_file_sha256"]) == 64
     assert published["bindings_refused"] == {} and published["errors"] == {}
-    assert published["weights"][OWNER] > 0.9  # a young subnet burns most of the pool
+    assert published["weights"][BURN] > 0.9 and published["burn_hotkey"] == BURN  # a young subnet burns most
     await hl.close()
 
 
@@ -184,7 +186,7 @@ async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> N
     now = DAY_MS / 1000 + 86_400 + 600  # ten minutes into the next UTC day
     report = await step(cfg, store, hl, chain, wallet=None, now=now)
     assert report["scored"]["day"] == DAY and report["weights"]["ok"]
-    assert sorted(report["weights"]["uids"]) == [0, 1, 2]
+    assert sorted(report["weights"]["uids"]) == [1, 2, 3]
     assert len(chain.executed) == 1
     # a second pass in the same tempo: nothing scored again, no second submission
     report = await step(cfg, store, hl, chain, wallet=None, now=now + 60)
@@ -235,4 +237,12 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         assert "access-control-allow-origin" in {
             k.lower() for k in (await c.get("/summary", headers={"Origin": "https://x"})).headers
         }
+    await hl.close()
+
+
+async def test_unregistered_burn_hotkey_is_refused(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "burn_hotkey": "hkNowhere"})
+    with pytest.raises(RuntimeError, match="burn_hotkey"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     await hl.close()

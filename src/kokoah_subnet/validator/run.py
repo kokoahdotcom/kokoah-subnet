@@ -69,7 +69,7 @@ def run_day(
     return score_day(inputs, params)
 
 
-def result_json(result: DayResult, owner_hotkey: str) -> str:
+def result_json(result: DayResult, burn_hotkey: str) -> str:
     alloc = result.allocation
     return json.dumps(
         {
@@ -78,7 +78,8 @@ def result_json(result: DayResult, owner_hotkey: str) -> str:
             "pool_alpha": alloc.pool_alpha,
             "paid_alpha": alloc.paid_alpha,
             "burn_alpha": alloc.burn_alpha,
-            "weights": result.weights(owner_hotkey),
+            "burn_hotkey": burn_hotkey,
+            "weights": result.weights(burn_hotkey),
             "miners": [asdict(r) for r in result.records],
         },
         indent=1,

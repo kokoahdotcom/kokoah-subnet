@@ -21,9 +21,9 @@ uses the fees to buy back and burn the subnet's token. Miners run nothing: regis
 4. **Cap each miner's pay.** Nobody is paid more than twice the Kokoah fee they paid, and nobody is paid more than
    three quarters of everything the trade cost them (Hyperliquid's fee plus Kokoah's). The cap is converted to
    tokens at the day's average price, so a price dip at the scoring moment changes nothing.
-5. **Burn what is left.** When the pool is bigger than the sum of the caps (a young subnet), the rest is burned in
-   the chain-visible way, and the chain reduces the subnet's TAO inflow by the burned share. The subnet does not
-   draw TAO for emission it did not award.
+5. **Burn what is left.** When the pool is bigger than the sum of the caps (a young subnet), the rest goes to a
+   separate burn hotkey (not the owner's) and a small operator process destroys it on chain, one public
+   transaction each time.
 
 ## Why cheating does not pay
 
@@ -52,5 +52,4 @@ It moves pay by at most 5%.
 
 ## Still open
 
-The TAO-side cost of burning, to be measured on testnet (the alpha side is measured: what is aimed at the owner
-hotkey is withheld and everyone else's emission is unchanged); the holding effect measured on testnet; legal review.
+A month of burn figures on testnet (directed vs destroyed); the holding effect measured on testnet; legal review.

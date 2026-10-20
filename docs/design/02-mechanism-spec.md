@@ -44,17 +44,16 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
   participants (`alpha_out`, up to 1 per block) does not depend on the subnet's TAO share; the TAO share only sets
   how much TAO (and matching alpha) is injected into the pool.
 - Registration: burn plus a minimum collateral in alpha locked on the hotkey (owner-set, `SetMinCollateral`).
-- **Burning.** Weight sent to the subnet owner's hotkey is burned (or recycled, `recycle_or_burn`). The chain
-  records it as `MinerBurned = withheld / total miner incentive` and scales the subnet's TAO share by
-  `1 − MinerBurned` next tempo (research note 05, section 9). The design burns this way, in the open, and accepts
-  the scaling: a subnet should not draw TAO for miner emission it did not award. Weight sent to a hotkey outside the
-  owner's coldkey is a payment, not a burn, and routing the excess there to burn it by hand (`burn_alpha` exists)
-  would dodge the chain's rule; the design does not do that. Measured on a local chain (2026-10-20, devnet runtime
-  481, `scripts/measure_burn.py`): with 85% of the miner pool pointed at the owner hotkey, that hotkey's stake grew
-  only by the owner cut, the miner and the validator received exactly their shares, and alpha emission stayed at 1
-  per block; the 85% landed nowhere. The `MinerBurned` counter and the TAO-share scaling could not be observed
-  there (a fresh local subnet receives no TAO injection and the devnet runtime did not update the counter), so
-  that part rests on the main-branch code and docs and is re-checked on testnet (§15).
+- **Burning (owner, 2026-10-20).** The unawarded remainder of the miner pool is directed to a **burn hotkey**: a
+  hotkey registered on the subnet by the operator on a coldkey of its own (not the owner's coldkey), bound to no
+  trader. A separate operator process (`kokoah-subnet owner burn`) destroys the alpha that lands there with
+  `burn_alpha(hotkey, amount, netuid)`, signed by that coldkey; each burn emits `TokensBurned`. The owner hotkey is
+  not used because the chain records incentive directed to owner hotkeys as `MinerBurned` and scales the subnet's
+  TAO emission share by that fraction next tempo (research note 05, section 9); the burn hotkey removes the alpha
+  without that scaling. The validator refuses to score until the configured burn hotkey is registered. Measured on a
+  local chain (`scripts/measure_burn.py`): directing 85% of the pool to one hotkey leaves alpha emission to the
+  other participants unchanged. Reconciliation: the daily artifact records the alpha directed to the burn hotkey;
+  the burn transactions are public.
 - **Buyback.** `add_stake_burn(hotkey, netuid, amount, limit)` buys alpha with TAO and burns it in one
   transaction, emitting `TokensBurned`; every buyback is one verifiable on-chain event.
 
@@ -135,7 +134,7 @@ the volume gets about twice as much. The share is linear in fees with bounded mu
 F̂_i,d     = (1 − α) × F̂_i,d−1 + α × Σ_f fee_f              smoothed total fees on the Kokoah leg (Hyperliquid's plus ours)
 cap_i,d   = M_i,d × min( c_max × Φ̂_i,d ,  c_tot × F̂_i,d ) / p_d
 pay_i,d   = min( share_i,d , cap_i,d )                    per-miner cap
-burn_d    = A − Σ_i pay_i,d                               weight to the owner's hotkey: burned
+burn_d    = A − Σ_i pay_i,d                               weight to the burn hotkey, destroyed by the operator's burn process
 ```
 
 The first term is the generous cap (200% of the fee credit). The second follows each account's real cost: an
@@ -157,7 +156,7 @@ What this does:
 - **Pay stays within 2 × fees, cumulatively.** The caps sum to at most `c_max × Σ Φ̂`, and the smoothing weights
   sum to 1, so up to any day the alpha paid (valued at the day's price) is worth at most 2 × the fees collected so
   far. Fees cover everything ever paid when miners keep at least half of it; the holding factor pays them to.
-- **Nothing is hoarded.** The excess is burned the same day, in the chain-visible way (§1).
+- **Nothing is hoarded.** The excess goes to the burn hotkey the same day and is destroyed on chain (§1).
 - **The price cannot be gamed.** The caps convert dollars to alpha at the day's average price; a 30% dip at the
   scoring block would raise the alpha cap by 43% at a spot price and by 1.5% at the average.
 
@@ -256,7 +255,7 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | multiplier | `0.85 + 0.05 g' + 0.10 h'` (floor `m_min`, weights `w_s`, `w_h`; the owner tunes the balance) |
 | pay caps | `M × min(2 × smoothed fee credit, 0.75 × smoothed total fees on the Kokoah leg)`, in alpha at the day's average price; `c_tot` must stay below 0.864 |
-| burn | the pool above the caps, same day, via the owner's hotkey (chain-visible) |
+| burn | the pool above the caps, same day, to the burn hotkey; destroyed with `burn_alpha` by the operator's process |
 | buyback | the collected fees, on the owner's cadence, by `add_stake_burn` |
 | owner share | `owner_cut_auto_lock_enabled` on |
 | skill windows | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days |
@@ -301,9 +300,8 @@ the other participants is unchanged (§1).
 
 Before launch:
 
-1. **Burn cost, TAO side.** On testnet (where subnets have real emission shares), measure `MinerBurned` and the
-   TAO-share scaling with 85%, 50% and 0% of the miner pool burned; simulate the subnet's TAO inflow over 30, 90
-   and 180 days. The alpha side is done (§1).
+1. **Burn process on testnet.** A month of daily figures: alpha directed to the burn hotkey against alpha actually
+   burned (`TokensBurned` events), published side by side. The alpha side of the emission effect is done (§1).
 2. **Adversarial replay.** Replay real public Hyperliquid histories (scalpers, market makers, swing traders) and
    simulated attackers side by side through the real scoring code: rebated market makers; cross-exchange hedges;
    one trader on several wallets (checking collateral, gates, holding target and smoothing, which are not linear);

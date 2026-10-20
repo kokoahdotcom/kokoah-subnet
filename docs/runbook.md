@@ -9,11 +9,11 @@ testnet (`--network test`); mainnet needs the owner's go-ahead per transaction.
 ```bash
 # one pass (score yesterday if its builder file is out, submit weights), then exit
 uv run kokoah-subnet validator run --network test --netuid <N> --builder <builder address> \
-    --data-dir ~/kokoah-subnet-data --wallet validator --once
+    --burn-hotkey <burn hotkey ss58> --data-dir ~/kokoah-subnet-data --wallet validator --once
 
 # the daemon: same thing every minute; weights resubmitted every tempo; missing files retried hourly
 uv run kokoah-subnet validator run --network test --netuid <N> --builder <builder address> \
-    --data-dir ~/kokoah-subnet-data --wallet validator
+    --burn-hotkey <burn hotkey ss58> --data-dir ~/kokoah-subnet-data --wallet validator
 
 # read-only HTTP view of the store (published daily artifacts, bindings, leaderboard), port 48100
 uv run kokoah-subnet validator serve --data-dir ~/kokoah-subnet-data
@@ -24,7 +24,7 @@ What a pass does (whitepaper appendix B): fetch the previous UTC day's per-build
 fetch each bound address's public fills (for the total fee), account value and flows, positions, fee rates,
 sub-accounts and transfer partners (for clusters), read the day's minimum own stake and mean pool price from the
 chain, score the day with the mechanism, store the per-miner artifact under `<data-dir>/validator.sqlite`, and set
-weights (miners by pay, the burn to the owner hotkey).
+weights (miners by pay, the remainder to the burn hotkey).
 
 TAO/USD comes from the mark price of the `TAO` perp on Hyperliquid. If it is not listed, pass
 `--tao-usd-fallback <price>` or the validator refuses to score.
@@ -63,6 +63,11 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
 - The buyback is one transaction per run: `btcli tx stake-burn --netuid <N> --amount-tao <amount> -w owner`
   (buys alpha with TAO and burns it, emitting `TokensBurned`).
 - Keep `owner_cut_auto_lock_enabled` on, so the owner's share is locked.
+- The burn hotkey: a wallet of its own (`btcli wallet create -w burn -H default`), its hotkey registered on the
+  subnet (`btcli tx burned-register --netuid <N> -w burn`), passed to every validator as `--burn-hotkey <ss58>`.
+  Burn what it received, as often as you like (one transaction per run):
+  `uv run kokoah-subnet owner burn --network test --netuid <N> --wallet burn [--dry-run]`
+  (`--password-stdin` reads the coldkey password from stdin; `scripts/burn_loop.sh` runs it every few hours).
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
 

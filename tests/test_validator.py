@@ -159,7 +159,7 @@ def test_score_day_command(tmp_path: Path) -> None:
             "1.0",
             "--day-index",
             "3",
-            "--owner-hotkey",
+            "--burn-hotkey",
             "own",
             "--out",
             str(out),

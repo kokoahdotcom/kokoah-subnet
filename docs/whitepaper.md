@@ -18,8 +18,8 @@ back into it. Traders who were not part of Bittensor become registered, staked p
 of verified traders is a data product the network did not have. The incentive mechanism shares the miner pool in
 proportion to the builder fees each trader actually paid, adjusted by a small quality factor bounded between 0.85
 and 1.0, and caps what any miner can receive at a fraction of the fees that trader spent on the trade. Emission
-above the caps is burned the same day, in the way the chain recognizes, so the subnet never draws emission for
-rewards it did not award, and no fake-volume strategy can profit at any fee tier.
+above the caps is directed to a dedicated burn hotkey and destroyed on chain, so unawarded emission never reaches
+the market, and no fake-volume strategy can profit at any fee tier.
 
 Kokoah, the operator, is building its application into a trading platform with AI assistance that makes trading
 easier for everyone, which widens the funnel of traders into the subnet. This document describes the mechanism,
@@ -77,9 +77,9 @@ at any fee tier of the exchange. Everything else follows from that rule.
    score they cannot control.
 4. **Fee-backed and farm-proof.** No miner is ever paid more than a fraction of what the trade cost them. Fake
    volume loses money at every fee tier the exchange offers, whatever the size of the pool.
-5. **Nothing wasted, nothing hidden.** Emission above the fee-backed caps is burned the same day through the
-   owner hotkey, which the chain records and accounts for. Builder fees buy back and burn the subnet token in
-   single, verifiable on-chain transactions. All daily scoring artifacts are published.
+5. **Nothing wasted, nothing hidden.** Emission above the fee-backed caps goes to a dedicated burn hotkey and is
+   destroyed with the chain's burn call, one verifiable transaction per burn. Builder fees buy back and burn the
+   subnet token in the same way. All daily scoring artifacts are published.
 
 ## 3. Participants and data
 
@@ -96,8 +96,9 @@ reconcile but data availability.
 
 **The operator** (Kokoah) runs the application through which the trades are routed, collects the builder fee the
 exchange charges on those trades, publishes the daily fill file's hash on chain, and spends the collected fees on
-buying back and burning the subnet token on a published cadence. The operator holds the owner hotkey, through
-which unawarded emission is burned.
+buying back and burning the subnet token on a published cadence. The operator also runs the burn hotkey, a
+registered hotkey on its own coldkey that receives the unawarded remainder of the miner pool, and the process that
+destroys what lands there.
 
 **Data.** Hyperliquid charges the builder fee on maker and taker fills alike (its documentation is silent on the
 point; the builders' own daily files show it). It publishes, for every builder, one file per day listing every fill
@@ -168,7 +169,7 @@ collusion-proof.
 F̂_i,d    = 0.7 × F̂_i,d−1 + 0.3 × Σ_f fee_f                      smoothed total fees on the builder leg
 cap_i,d  = M_i,d × min( 2 × Φ̂_i,d ,  0.75 × F̂_i,d ) / p_d        in alpha
 pay_i,d  = min( share_i,d , cap_i,d )
-burn_d   = A − Σ_i pay_i,d                                       weight to the owner hotkey
+burn_d   = A − Σ_i pay_i,d                                       weight to the burn hotkey
 ```
 
 Two caps apply to every miner. The first says that nobody is paid more than twice the builder fee they paid. The
@@ -181,7 +182,7 @@ Caps are converted from dollars to alpha at the day's average rate, never at a s
 move at the scoring block cannot inflate anyone's alpha.
 
 When the pool is larger than the sum of the caps, which is the normal state of a young subnet, the remainder is
-not paid to anyone. It is directed to the owner hotkey, where the chain burns it (section 6.2).
+not paid to any trader. It is directed to the burn hotkey and destroyed (section 6.2).
 
 ### 4.5 Skill factor
 
@@ -207,8 +208,7 @@ g_i,d      = 0.7 × g_i,d−1 + 0.3 × g_raw
 g'_i,d     = min(1, g_i,d / 0.65)
 ```
 
-No drawdown statistic is used anywhere. A single bad day is one capped loss that fades; a repeated pattern of
-blow-ups keeps counting. In simulation (6,000 accounts per profile, 60 days), accounts with no edge score 0.05 to
+A single bad day is one capped loss that fades; a repeated pattern of blow-ups keeps counting. In simulation (6,000 accounts per profile, 60 days), accounts with no edge score 0.05 to
 0.10, a martingale-style account 0.08, a steady low-volatility trader 0.30, a trader with a real edge 0.35, a
 strong trader 0.56. The skill factor moves pay by at most 5%; it exists to recognize skill in the public ranking
 and to nudge, not to dominate.
@@ -350,18 +350,17 @@ Emission is split 33% to miners, 33% to the owner, 34% to validators and their s
 locked into conviction by enabling the chain's `owner_cut_auto_lock_enabled` hyperparameter, so the operator
 never sells into its own buyback. Validator emission is outside this mechanism's scope.
 
-### 6.2 Unawarded emission is burned, and the chain is told
+### 6.2 Unawarded emission is burned
 
-When the sum of caps is below the pool, the difference is directed to the owner hotkey. The chain burns incentive
-that targets an owner hotkey, records the burned share as `MinerBurned`, and scales the subnet's TAO emission
-share by one minus that fraction in the next tempo. The design accepts this scaling in full. A subnet that did not
-award 70% of its miner emission should not draw TAO for it, and under this rule it does not; alpha emission to
-participants is unchanged, so miners and validators are unaffected. On a local chain, with 85% of the miner pool
-pointed at the owner hotkey, that hotkey's stake grew only by the owner's own cut, the miner and the validator
-received exactly their shares, and alpha emission continued at its full rate; the withheld 85% landed nowhere. There are ways to burn alpha that the chain
-would not see (routing weight to a hotkey outside the owner's coldkey and burning it by hand with `burn_alpha`);
-the design does not use them, because the rule they would dodge is the right rule. As fees grow, the burned
-fraction falls toward zero on its own.
+When the sum of caps is below the pool, the difference is directed to the burn hotkey: a hotkey registered on the
+subnet by the operator on a coldkey of its own, bound to no trader and scored as no miner. A separate operator
+process burns the alpha that lands there with the chain's `burn_alpha` call, signed by that coldkey; every burn
+emits a `TokensBurned` event, and the daily artifact records how much was directed there, so the two can be
+reconciled by anyone. The burn hotkey is deliberately not the subnet owner's hotkey: the chain scales a subnet's
+TAO emission share by the fraction of miner incentive directed to owner hotkeys, and the subnet's own burn is
+meant to remove unawarded alpha from circulation without changing what the subnet's miners and validators
+receive. On a local chain, with 85% of the miner pool directed to a hotkey that then burned it, alpha emission to
+the other participants continued at its full rate.
 
 ### 6.3 Buyback and burn, one transaction
 
@@ -407,14 +406,14 @@ anyone for the operator's builder address, bindings publish and resolve on chain
 searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
 paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the conversion rate under a
 30% single-block move; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
-strong edge, fading edge, one bad day); on a local chain, that incentive aimed at the owner hotkey is withheld
-while alpha emission to everyone else is unchanged. The verification script, the simulations and the chain
-measurement are in the repository.
+strong edge, fading edge, one bad day); on a local chain, that directing most of the miner pool to one hotkey
+and burning it leaves alpha emission to everyone else unchanged. The verification script, the simulations and the
+chain measurement are in the repository.
 
 **Before mainnet.**
 
-1. Burn cost, TAO side, on testnet: measure `MinerBurned` and the TAO-share scaling with 85%, 50% and 0% of the
-   pool burned. A fresh local subnet receives no TAO injection, so this cannot be seen locally.
+1. The burn process on testnet over a month: the alpha directed to the burn hotkey each day against the alpha
+   actually burned, published side by side.
 2. The same replay on recorded public Hyperliquid histories of real scalpers, market makers and swing traders, and
    with one trader on several wallets, volume timed to the conversion rate, and coordinated groups. Pass criterion unchanged: no
    zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their proportional
@@ -477,7 +476,7 @@ pool works as a volume rebate returning about 14% of fees, with shares within 15
    flows, and chain state for stake; apply cluster, mark and mirror exclusions.
 3. Update smoothed credit, smoothed total fees and skill; compute holding, gates, multiplier.
 4. Compute shares, caps in alpha at the day's mean rate, pay, and the burn remainder.
-5. Publish the per-miner artifacts; set weights (miners by pay, the remainder to the owner hotkey) every tempo until
+5. Publish the per-miner artifacts; set weights (miners by pay, the remainder to the burn hotkey) every tempo until
    the next run.
 
 ### Appendix C. Binding format
@@ -506,6 +505,7 @@ totals over all days), `/summary` (alpha paid and burned, builder fees, paid-to-
 - **1.0 (2026-10-20).** Mechanism v5.8. Since draft 0.9: the builder fee is confirmed to be charged on maker fills
   (one rate on every order), so maker and taker fills earn the same credit; the 60-second timing rule for mirrored
   fills is replaced by the exact counterparty rule; the conversion rate is the day's mean pool rate; the holding factor
-  reads the day's minimum stake; burning through the owner hotkey measured on a local chain; validator, binding
-  flow and interface implemented and running on a test network.
+  reads the day's minimum stake; the unawarded remainder goes to a dedicated burn hotkey and is destroyed with
+  `burn_alpha` by a separate operator process; validator, binding flow and interface implemented and running on a
+  test network.
 - **0.9 (2026-10-20).** First public draft.

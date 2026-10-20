@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--state", type=Path, help="per-miner state JSON (read, then written back)")
     score.add_argument("--price-usd", required=True, type=float, help="the day's mean alpha price in USD")
     score.add_argument("--day-index", required=True, type=int, help="scoring day index (days since the subnet start)")
-    score.add_argument("--owner-hotkey", default="owner", help="hotkey that receives the burn weight")
+    score.add_argument("--burn-hotkey", default="burn", help="hotkey that receives the unawarded remainder")
     score.add_argument("--out", type=Path, help="write the day's result JSON here (default: stdout)")
 
     verify = sub.add_parser("verify", help="run the mechanism's numerical verification")
@@ -58,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--network", default="local")
     vrun.add_argument("--netuid", required=True, type=int)
     vrun.add_argument("--builder", required=True, help="the builder address whose daily fill file is scored")
+    vrun.add_argument(
+        "--burn-hotkey", required=True, help="registered hotkey (own coldkey) that receives the remainder"
+    )
     vrun.add_argument("--data-dir", required=True, type=Path)
     vrun.add_argument("--wallet", default="validator")
     vrun.add_argument("--wallet-hotkey", default="default")
@@ -79,6 +82,16 @@ def build_parser() -> argparse.ArgumentParser:
     ocommit.add_argument("--wallet", default="owner")
     ocommit.add_argument("--wallet-hotkey", default="default")
     ocommit.add_argument("--wallet-path", default=None)
+    oburn = osub.add_parser("burn", help="burn the alpha that the burn hotkey received (signed by its coldkey)")
+    oburn.add_argument("--netuid", required=True, type=int)
+    oburn.add_argument("--network", default="local")
+    oburn.add_argument("--wallet", default="burn", help="the burn hotkey's wallet (its own coldkey)")
+    oburn.add_argument("--wallet-hotkey", default="default")
+    oburn.add_argument("--wallet-path", default=None)
+    oburn.add_argument("--keep-alpha", type=float, default=0.01, help="alpha left on the hotkey (dust)")
+    oburn.add_argument("--min-alpha", type=float, default=1.0, help="do nothing below this amount")
+    oburn.add_argument("--password-stdin", action="store_true", help="read the coldkey password from stdin")
+    oburn.add_argument("--dry-run", action="store_true", help="show what would be burned, submit nothing")
     vserve = vsub.add_parser("serve", help="serve the store over HTTP (read-only)")
     vserve.add_argument("--data-dir", required=True, type=Path)
     vserve.add_argument("--host", default="127.0.0.1")
@@ -105,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         states = load_states(args.state)
         miners = load_miners(args.miners)
         day = run_day(args.day_index, args.price_usd, fills, miners, states, DEFAULT)
-        text = result_json(day, args.owner_hotkey)
+        text = result_json(day, args.burn_hotkey)
         if args.out:
             args.out.write_text(text)
         else:
@@ -142,6 +155,7 @@ def _validator(args: argparse.Namespace) -> int:
             netuid=args.netuid,
             builder=args.builder,
             data_dir=args.data_dir,
+            burn_hotkey=args.burn_hotkey,
             wallet_name=args.wallet,
             wallet_hotkey=args.wallet_hotkey,
             wallet_path=args.wallet_path,
@@ -187,6 +201,33 @@ def _owner(args: argparse.Namespace) -> int:
             return 0 if result.success else 1
 
         return asyncio.run(_publish())
+    if args.owner_command == "burn":
+        import sys
+
+        from kokoah_subnet.validator.burn import burn_received
+
+        password = sys.stdin.readline().rstrip("\n") if args.password_stdin else None
+        wallet = (
+            bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)
+            if args.wallet_path
+            else bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
+        )
+
+        async def _burn() -> int:
+            async with bt.Subtensor(args.network) as client:
+                report = await burn_received(
+                    client,
+                    wallet,
+                    args.netuid,
+                    keep_alpha=args.keep_alpha,
+                    min_alpha=args.min_alpha,
+                    password=password,
+                    dry_run=args.dry_run,
+                )
+            print(json.dumps(report, default=str))
+            return 0 if report.get("ok", True) else 1
+
+        return asyncio.run(_burn())
     return 2
 
 

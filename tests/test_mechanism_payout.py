@@ -68,18 +68,18 @@ def test_weights_sum_to_one_and_u16_to_65535() -> None:
     a = MinerDay("A", 1000.0, 2800.0, 1.0)
     b = MinerDay("B", 1000.0, 2800.0, 0.85)
     alloc = allocate([a, b], PRICE, DEFAULT)
-    w = weights(alloc, "owner")
+    w = weights(alloc, "burn")
     assert sum(w.values()) == pytest.approx(1.0)
-    assert w["owner"] == pytest.approx(alloc.burn_alpha / alloc.pool_alpha)
+    assert w["burn"] == pytest.approx(alloc.burn_alpha / alloc.pool_alpha)
     u = to_u16(w)
     assert sum(u.values()) == 65535
-    assert set(u) == {"A", "B", "owner"}
+    assert set(u) == {"A", "B", "burn"}
 
 
 def test_no_activity_burns_everything() -> None:
     alloc = allocate([MinerDay("A", 0.0, 0.0, 0.85)], PRICE, DEFAULT)
     assert alloc.burn_alpha == pytest.approx(DEFAULT.miner_pool_alpha)
-    assert weights(alloc, "owner") == {"owner": pytest.approx(1.0)}
+    assert weights(alloc, "burn") == {"burn": pytest.approx(1.0)}
 
 
 def test_bad_price_is_refused() -> None:
