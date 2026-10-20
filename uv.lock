@@ -412,6 +412,7 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "bittensor" },
+    { name = "eth-account" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lz4" },
@@ -429,6 +430,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bittensor", specifier = "==11.3.0" },
+    { name = "eth-account", specifier = "==0.13.7" },
     { name = "fastapi", specifier = "==0.148.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "lz4", specifier = "==4.4.4" },

@@ -110,3 +110,28 @@ def day_bounds_ms(day: str) -> tuple[int, int]:
     start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
     s = int(start.timestamp() * 1000)
     return s, s + 86_400_000
+
+
+async def sub_accounts(client: HyperliquidInfo, user: str) -> list[str]:
+    """Sub-account addresses of a master address (empty for an address without any)."""
+    result = await client.post({"type": "subAccounts", "user": user})
+    if not result:
+        return []
+    return [str(s["subAccountUser"]).lower() for s in result if "subAccountUser" in s]
+
+
+async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> set[str]:
+    """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase."""
+    updates = await client.post(
+        {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
+    )
+    me = user.lower()
+    partners: set[str] = set()
+    for u in updates:
+        delta = u.get("delta", {})
+        if delta.get("type") in ("internalTransfer", "subAccountTransfer", "send", "receive"):
+            for key in ("destination", "user", "fromUser", "toUser"):
+                other = str(delta.get(key, "")).lower()
+                if other.startswith("0x") and other != me:
+                    partners.add(other)
+    return partners

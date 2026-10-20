@@ -31,6 +31,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify = sub.add_parser("verify", help="run the mechanism's numerical verification")
     verify.set_defaults(command="verify")
+
+    miner = sub.add_parser("miner", help="bind a Hyperliquid address to a hotkey, or show the bindings")
+    msub = miner.add_subparsers(dest="miner_command", required=True)
+    message = msub.add_parser("message", help="print the exact text the Hyperliquid address must sign")
+    message.add_argument("--netuid", required=True, type=int)
+    message.add_argument("--hotkey", required=True, help="the hotkey's ss58 address")
+    message.add_argument("--address", required=True, help="the Hyperliquid (EVM) address")
+    bind = msub.add_parser("bind", help="publish the binding as the hotkey's on-chain commitment")
+    bind.add_argument("--netuid", required=True, type=int)
+    bind.add_argument("--address", required=True)
+    bind.add_argument("--signature", required=True, help="0x-hex EIP-191 signature of the message by the address")
+    bind.add_argument("--previous-address", help="on a migration: the address the records come from")
+    bind.add_argument("--previous-signature", help="its signature of the same message")
+    bind.add_argument("--network", default="local")
+    bind.add_argument("--wallet", required=True, help="wallet name")
+    bind.add_argument("--wallet-hotkey", default="default")
+    bind.add_argument("--wallet-path", default=None)
+    show = msub.add_parser("show", help="list the bindings published on a subnet and whether they verify")
+    show.add_argument("--netuid", required=True, type=int)
+    show.add_argument("--network", default="local")
     return parser
 
 
@@ -61,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.state:
             args.state.write_text(dump_states(day.states))
         return 0
+    if args.command == "miner":
+        return _miner(args)
     if args.command == "verify":
         import runpy
 
@@ -68,6 +90,47 @@ def main(argv: list[str] | None = None) -> int:
             str(Path(__file__).resolve().parents[2] / "scripts" / "verify_mechanism.py"), run_name="__main__"
         )
         return 0
+    return 2
+
+
+def _miner(args: argparse.Namespace) -> int:
+    import bittensor as bt
+
+    from kokoah_subnet.binding import Binding, binding_message, publish_binding, read_bindings, verify_binding
+
+    if args.miner_command == "message":
+        print(binding_message(args.netuid, args.hotkey, args.address))
+        return 0
+    if args.miner_command == "bind":
+        wallet = bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)
+        hotkey = wallet.hotkey.ss58_address
+        binding = Binding(args.address, args.signature, args.previous_address, args.previous_signature)
+        if not verify_binding(args.netuid, hotkey, binding):
+            print(f"the signature does not match the message for hotkey {hotkey}; sign exactly:")
+            print(binding_message(args.netuid, hotkey, args.address))
+            return 1
+
+        async def _publish() -> int:
+            async with bt.Subtensor(args.network) as client:
+                result = await publish_binding(client, wallet, args.netuid, binding)
+            print(f"{'published' if result.success else 'failed'}: {result.message}")
+            return 0 if result.success else 1
+
+        return asyncio.run(_publish())
+    if args.miner_command == "show":
+
+        async def _show() -> int:
+            async with bt.Subtensor(args.network) as client:
+                published = await read_bindings(client, args.netuid)
+            for p in published:
+                status = "valid" if p.valid else "INVALID"
+                prev = f" (migrated from {p.binding.previous_address})" if p.binding.previous_address else ""
+                print(f"{p.hotkey}  {p.binding.address}  block {p.block}  {status}{prev}")
+            if not published:
+                print("no bindings")
+            return 0
+
+        return asyncio.run(_show())
     return 2
 
 
