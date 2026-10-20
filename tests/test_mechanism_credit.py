@@ -115,3 +115,19 @@ def test_by_user_groups_lowercase() -> None:
 def test_fill_defaults() -> None:
     f = Fill(0, "0xa", "ETH", "A", 2000.0, 2.0, True, 1.0)
     assert f.counterparty == "" and f.total_fee is None and f.notional == 4000.0
+
+
+def test_parse_real_builder_file_conventions() -> None:
+    """The exchange's daily file writes ISO times, Bid/Ask sides, lowercase booleans, twap_id 0 and Na."""
+    text = (
+        "time,user,coin,side,px,sz,crossed,special_trade_type,tif,is_trigger,counterparty,closed_pnl,twap_id,builder_fee\n"
+        "2026-10-19T00:07:04Z,0x97bb51ff48f0ad12bf789a62608c45da453e7d0a,BTC,Ask,82150,0.00073,false,Na,Gtc,false,"
+        "0x7e8eee5205878499b9d084fd174def20f7212425,0,0,0\n"
+        "2026-10-19T00:08:04Z,0x97bb51ff48f0ad12bf789a62608c45da453e7d0a,BTC,Bid,82100,0.00073,true,Na,Ioc,false,"
+        "0x7e8eee5205878499b9d084fd174def20f7212425,0.04,0,0.015\n"
+    )
+    a, b = parse_builder_csv(text)
+    assert a.side == "A" and b.side == "B"
+    assert a.time_ms == 1792368424000 and a.day == "2026-10-19"
+    assert not a.crossed and b.crossed
+    assert a.twap_id is None and b.closed_pnl == 0.04 and b.builder_fee == 0.015

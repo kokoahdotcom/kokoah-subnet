@@ -70,6 +70,16 @@ def _parse_bool(text: str) -> bool:
     return text.strip().lower() in ("true", "1", "t", "yes")
 
 
+def normalize_side(text: str) -> str:
+    """The exchange writes "B"/"A" in the API and "Bid"/"Ask" in the builder files; the mechanism uses "B"/"A"."""
+    t = text.strip().lower()
+    if t in ("b", "bid", "buy", "long"):
+        return "B"
+    if t in ("a", "ask", "sell", "s", "short"):
+        return "A"
+    raise ValueError(f"unknown side {text!r}")
+
+
 def parse_builder_csv(text: str) -> list[Fill]:
     """Parse a per-builder daily file. The header must match the published format exactly."""
     reader = csv.reader(io.StringIO(text))
@@ -91,14 +101,14 @@ def parse_builder_csv(text: str) -> list[Fill]:
                 time_ms=_parse_time_ms(row[0]),
                 user=user,
                 coin=row[2].strip(),
-                side=row[3].strip(),
+                side=normalize_side(row[3]),
                 px=float(row[4]),
                 sz=float(row[5]),
                 crossed=_parse_bool(row[6]),
                 builder_fee=float(row[13]),
                 counterparty=counterparty,
                 closed_pnl=float(row[11] or 0.0),
-                twap_id=int(twap) if twap else None,
+                twap_id=int(twap) if twap and int(twap) != 0 else None,
             )
         )
     return fills
@@ -114,7 +124,7 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
                 time_ms=int(r["time"]),
                 user=user.lower(),
                 coin=str(r["coin"]),
-                side=str(r["side"]),
+                side=normalize_side(str(r["side"])),
                 px=float(r["px"]),
                 sz=float(r["sz"]),
                 crossed=bool(r.get("crossed", False)),
