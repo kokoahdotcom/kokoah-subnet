@@ -76,13 +76,17 @@ class SubnetSnapshot:
 
 
 def _alpha(value: Any) -> float:
+    """A balance (TAO or alpha) as a plain number of whole units; None or anything else as 0."""
     if value is None:
         return 0.0
-    for attr in ("alpha", "rao"):
-        if hasattr(value, attr):
-            v = getattr(value, attr)
-            return float(v) if attr == "alpha" else float(v) / 1e9
-    return float(value)
+    try:
+        return float(value.rao) / 1e9
+    except Exception:  # noqa: BLE001 - not a balance
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 async def snapshot(client: Any, netuid: int, block: int | None = None) -> SubnetSnapshot:

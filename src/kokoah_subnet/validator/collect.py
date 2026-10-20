@@ -300,9 +300,9 @@ async def collect_and_score(
     against = bound_counterparty_notional({a: f for a, f in fills_by_address.items() if a in bound})
     rows = []
     for f in all_fills:
-        hk = hotkey_of_address.get(f.user)
+        fill_hk = hotkey_of_address.get(f.user)
         excluded: str | None
-        if hk is None:
+        if fill_hk is None:
             excluded = "unbound"
         elif f.counterparty and cluster_of.get(f.user, f.user) == cluster_of.get(f.counterparty, f.counterparty):
             excluded = "cluster"
@@ -312,7 +312,7 @@ async def collect_and_score(
             excluded = "mark_clip"
         else:
             excluded = None
-        rows.append(_fill_row(f, hk, excluded))
+        rows.append(_fill_row(f, fill_hk, excluded))
     store.put_fills(day, rows)
     del against
 
