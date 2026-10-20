@@ -135,3 +135,16 @@ async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, e
                 if other.startswith("0x") and other != me:
                     partners.add(other)
     return partners
+
+
+async def positions_notional(client: HyperliquidInfo, user: str) -> dict[str, float]:
+    """Signed position notional per perp coin from the clearinghouse state (positive long, negative short)."""
+    state = await client.post({"type": "clearinghouseState", "user": user})
+    out: dict[str, float] = {}
+    for ap in state.get("assetPositions", []):
+        pos = ap.get("position", {})
+        szi = float(pos.get("szi", 0.0) or 0.0)
+        value = float(pos.get("positionValue", 0.0) or 0.0)
+        if szi != 0 and value != 0:
+            out[str(pos["coin"])] = value if szi > 0 else -value
+    return out

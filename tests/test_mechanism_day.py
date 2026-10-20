@@ -101,12 +101,9 @@ def test_fresh_miner_starts_at_the_floor_and_smooths_in() -> None:
 
 
 def test_mirrored_pair_loses_credit_and_is_reported() -> None:
-    # A buys, B sells the same size seconds later, all day: mirrored above 50%
-    fa = [Fill(DAY0 + i * 60_000, A, "BTC", "B", 100_000.0, 1.0, True, 25.0, counterparty="0x1") for i in range(20)]
-    fb = [
-        Fill(DAY0 + i * 60_000 + 5_000, B, "BTC", "A", 100_000.0, 1.0, True, 25.0, counterparty="0x2")
-        for i in range(20)
-    ]
+    # A and B trade against each other all day (the counterparty field says so): mirrored above 50%
+    fa = [Fill(DAY0 + i * 60_000, A, "BTC", "B", 100_000.0, 1.0, True, 25.0, counterparty=B) for i in range(20)]
+    fb = [Fill(DAY0 + i * 60_000, B, "BTC", "A", 100_000.0, 1.0, False, 25.0, counterparty=A) for i in range(20)]
     inputs = DayInputs(
         day_index=5,
         price_usd=1.0,

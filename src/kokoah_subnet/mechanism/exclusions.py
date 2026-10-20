@@ -34,29 +34,20 @@ def clip_to_mark(fills: Iterable[Fill], params: Params) -> list[Fill]:
     return out
 
 
-def mirror_timing_notional(fills_by_address: Mapping[str, Sequence[Fill]], params: Params) -> dict[str, float]:
-    """Mirror rule (timing): for every pair of bound addresses, opposite-side fills in the same coin within the
-    window and within the size tolerance. Returns the mirrored notional per address (each fill counted once)."""
-    mirrored: dict[str, float] = {a: 0.0 for a in fills_by_address}
-    addresses = sorted(fills_by_address)
-    for i, a in enumerate(addresses):
-        for b in addresses[i + 1 :]:
-            used_b: set[int] = set()
-            fills_b = sorted(fills_by_address[b], key=lambda x: x.time_ms)
-            for fa in fills_by_address[a]:
-                for j, fb in enumerate(fills_b):
-                    if fb.time_ms < fa.time_ms - params.mirror_window_s * 1000:
-                        continue
-                    if fb.time_ms > fa.time_ms + params.mirror_window_s * 1000:
-                        break
-                    if j in used_b or fb.coin != fa.coin or fb.side == fa.side:
-                        continue
-                    if abs(fb.sz - fa.sz) <= params.mirror_size_tolerance * max(fa.sz, fb.sz):
-                        used_b.add(j)
-                        mirrored[a] += fa.notional
-                        mirrored[b] += fb.notional
-                        break
-    return mirrored
+def bound_counterparty_notional(fills_by_address: Mapping[str, Sequence[Fill]]) -> dict[str, float]:
+    """Mirror rule (counterparties): notional each bound address traded directly against another bound address,
+    read from the fill's counterparty field. Exact, so an honest trader is never flagged by coincidence."""
+    bound = set(fills_by_address)
+    return {
+        a: sum(f.notional for f in fills if f.counterparty in bound and f.counterparty != a)
+        for a, fills in fills_by_address.items()
+    }
+
+
+def drop_bound_counterparties(fills: Iterable[Fill], bound: set[str]) -> list[Fill]:
+    """Remove fills whose counterparty is another bound address: the subnet does not pay for volume between its own
+    miners (specification section 3)."""
+    return [f for f in fills if not (f.counterparty and f.counterparty in bound and f.counterparty != f.user)]
 
 
 def _pearson(x: Sequence[float], y: Sequence[float]) -> float:

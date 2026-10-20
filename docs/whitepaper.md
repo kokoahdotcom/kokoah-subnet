@@ -2,7 +2,7 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, draft 0.9, October 2026. Mechanism specification v5.7.
+Whitepaper, draft 0.9, October 2026. Mechanism specification v5.8.
 
 ### Abstract
 
@@ -213,12 +213,14 @@ miner failing a gate is paid at the floor multiplier of 0.85, not excluded.
 ### 4.8 Exclusions
 
 Before anything is computed, the following are removed from a miner's fills: fills whose counterparty is the same
-cluster; fills priced more than 0.5% from the mark, which are valued at the mark; and mirrored fills between two
-bound addresses, detected either by timing (opposite sides in the same coin within 60 seconds and within 20% of
-the size) or by position (daily net positions in a coin correlated below −0.8 on at least 10 overlapping days in
-the last 30). Mirrored notional above 25% of an address's 30-day notional is removed from its credit; above 50%,
-both addresses lose their quality multiplier for 30 days and are reported. These rules protect the integrity of
-the public ranking. The economics alone already make mirrored volume a loss (section 5.1).
+cluster; fills whose counterparty is another bound address, since the subnet does not pay for volume between its
+own miners (the per-builder file names every fill's counterparty, so this is exact and never flags an honest
+trader by coincidence); and fills priced more than 0.5% from the mark, which are valued at the mark. Persistent
+hedging through the market is caught by position: daily net positions in a coin correlated below −0.8 with another
+bound address on at least 10 overlapping days in the last 30. Mirrored notional above 25% of an address's notional
+is removed from its credit; above 50%, both addresses lose their quality multiplier for 30 days and are reported.
+These rules protect the integrity of the public ranking. The economics alone already make mirrored volume a loss
+(section 5.1).
 
 Two abuse signals are published without affecting pay: the share of an address's credit from positions held under
 one minute, and the share from fills against bound counterparties.
@@ -236,7 +238,7 @@ one minute, and the share from fills against bound counterparties.
 | Skill windows | confidence 60 days, quality 30 days (half-life 10), blow-ups 60 days |
 | Holding target | alpha paid in the last 60 days, floor at the collateral minimum |
 | Gates | 10 round trips, 7 active days, $500 mean equity, over 30 days |
-| Mirror rules | 60 s and 20% size; correlation < −0.8 on ≥ 10 days; exclude above 25%, zero above 50% |
+| Mirror rules | fills against bound counterparties never count; correlation < −0.8 on ≥ 10 days; exclude above 25%, zero above 50% |
 | Migration | once per 60 days, signed by old address, new address and hotkey |
 | Emission split | miner 33%, owner 33% (locked), validators 34% |
 
@@ -371,7 +373,11 @@ reason are published.
 
 ## 8. Verification and limitations
 
-**Done.** The one law searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
+**Done.** An adversarial replay of 60 days through the real scoring code (honest swing trader, scalper and market
+maker beside a wash trader, a maximal-discount hedge, a rebated market maker, instant round trips and a pair
+crossing each other): every zero-edge strategy ends negative and the honest traders receive their proportional
+share; the replay also found and removed a timing heuristic that flagged honest traders by coincidence. The one law
+searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
 paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the cap price under a
 30% spot dip; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
 strong edge, fading edge, one bad day); on a local chain, that incentive aimed at the owner hotkey is withheld
@@ -382,10 +388,10 @@ measurement are in the repository.
 
 1. Burn cost, TAO side, on testnet: measure `MinerBurned` and the TAO-share scaling with 85%, 50% and 0% of the
    pool burned. A fresh local subnet receives no TAO injection, so this cannot be seen locally.
-2. Adversarial replay through the real scoring code: public Hyperliquid histories of scalpers, market makers and
-   swing traders beside simulated attackers (rebated market makers, cross-venue hedges, one trader on several
-   wallets, volume timed to price, coordinated groups). Pass criterion: no zero-edge strategy nets positive at any
-   pool size, and genuine high-volume traders receive their proportional share.
+2. The same replay on recorded public Hyperliquid histories of real scalpers, market makers and swing traders, and
+   with one trader on several wallets, volume timed to price, and coordinated groups. Pass criterion unchanged: no
+   zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their proportional
+   share.
 3. Holding factor: measure selling by miners at factor 1 against factor 0 on testnet.
 4. Data plane: confirm the per-builder daily file is fetchable by anyone for the live builder address, and that
    total-fee matching against public fill histories is exact.

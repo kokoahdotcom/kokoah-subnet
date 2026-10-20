@@ -51,6 +51,28 @@ def build_parser() -> argparse.ArgumentParser:
     show = msub.add_parser("show", help="list the bindings published on a subnet and whether they verify")
     show.add_argument("--netuid", required=True, type=int)
     show.add_argument("--network", default="local")
+
+    validator = sub.add_parser("validator", help="run the validator loop or serve its published results")
+    vsub = validator.add_subparsers(dest="validator_command", required=True)
+    vrun = vsub.add_parser("run", help="score completed days and keep the weights set (Ctrl-C to stop)")
+    vrun.add_argument("--network", default="local")
+    vrun.add_argument("--netuid", required=True, type=int)
+    vrun.add_argument("--builder", required=True, help="the builder address whose daily fill file is scored")
+    vrun.add_argument("--data-dir", required=True, type=Path)
+    vrun.add_argument("--wallet", default="validator")
+    vrun.add_argument("--wallet-hotkey", default="default")
+    vrun.add_argument("--wallet-path", default=None)
+    vrun.add_argument("--start-day", default="2026-10-20", help="day index 0, YYYY-MM-DD")
+    vrun.add_argument("--hl-info-url", default=None)
+    vrun.add_argument("--builder-base-url", default=None)
+    vrun.add_argument("--tao-usd-fallback", type=float, default=0.0, help="TAO/USD when no TAO perp is listed")
+    vrun.add_argument("--poll-seconds", type=int, default=60)
+    vrun.add_argument("--once", action="store_true", help="one pass, then exit")
+    vrun.add_argument("--day", default=None, help="score this day instead of yesterday")
+    vserve = vsub.add_parser("serve", help="serve the store over HTTP (read-only)")
+    vserve.add_argument("--data-dir", required=True, type=Path)
+    vserve.add_argument("--host", default="127.0.0.1")
+    vserve.add_argument("--port", type=int, default=48100)
     return parser
 
 
@@ -83,12 +105,50 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "miner":
         return _miner(args)
+    if args.command == "validator":
+        return _validator(args)
     if args.command == "verify":
         import runpy
 
         runpy.run_path(
             str(Path(__file__).resolve().parents[2] / "scripts" / "verify_mechanism.py"), run_name="__main__"
         )
+        return 0
+    return 2
+
+
+def _validator(args: argparse.Namespace) -> int:
+    from kokoah_subnet.validator.collect import ValidatorConfig
+
+    if args.validator_command == "run":
+        from kokoah_subnet.validator.builder_feed import BASE_URL
+        from kokoah_subnet.validator.hyperliquid import MAINNET_INFO
+        from kokoah_subnet.validator.loop import run
+
+        cfg = ValidatorConfig(
+            network=args.network,
+            netuid=args.netuid,
+            builder=args.builder,
+            data_dir=args.data_dir,
+            wallet_name=args.wallet,
+            wallet_hotkey=args.wallet_hotkey,
+            wallet_path=args.wallet_path,
+            start_day=args.start_day,
+            hl_info_url=args.hl_info_url or MAINNET_INFO,
+            builder_base_url=args.builder_base_url or BASE_URL,
+            tao_usd_fallback=args.tao_usd_fallback,
+            poll_s=args.poll_seconds,
+        )
+        asyncio.run(run(cfg, once=args.once, day=args.day))
+        return 0
+    if args.validator_command == "serve":
+        import uvicorn
+
+        from kokoah_subnet.validator.serve import create_app
+        from kokoah_subnet.validator.store import Store
+
+        app = create_app(Store(args.data_dir / "validator.sqlite"))
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
     return 2
 
@@ -102,7 +162,11 @@ def _miner(args: argparse.Namespace) -> int:
         print(binding_message(args.netuid, args.hotkey, args.address))
         return 0
     if args.miner_command == "bind":
-        wallet = bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)
+        wallet = (
+            bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)
+            if args.wallet_path
+            else bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
+        )
         hotkey = wallet.hotkey.ss58_address
         binding = Binding(args.address, args.signature, args.previous_address, args.previous_signature)
         if not verify_binding(args.netuid, hotkey, binding):

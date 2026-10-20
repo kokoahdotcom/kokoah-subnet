@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "5.7"
+SPEC_VERSION = "5.8"
 
 # The best maker rebate anywhere on Hyperliquid, bps a side (fee schedule read 2026-10-19). It bounds the smallest
 # total fee a round trip through the builder can carry, and with it the safe range of `c_tot` (spec section 11).

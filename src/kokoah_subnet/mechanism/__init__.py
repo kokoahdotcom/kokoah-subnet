@@ -3,11 +3,12 @@
 from .credit import DayFees, day_fees, ema
 from .exclusions import (
     MirrorAction,
+    bound_counterparty_notional,
     clip_to_mark,
+    drop_bound_counterparties,
     drop_cluster_matches,
     mirror_action,
     mirror_position_share,
-    mirror_timing_notional,
 )
 from .fills import Fill, by_user, match_total_fees, parse_builder_csv, parse_user_fills
 from .gates import active_days, passes_gates, round_trips
@@ -33,16 +34,17 @@ __all__ = [
     "allocate",
     "by_user",
     "cap_usd",
+    "bound_counterparty_notional",
     "clip_to_mark",
     "daily_return",
     "day_fees",
+    "drop_bound_counterparties",
     "drop_cluster_matches",
     "ema",
     "holding_factor",
     "match_total_fees",
     "mirror_action",
     "mirror_position_share",
-    "mirror_timing_notional",
     "multiplier",
     "parse_builder_csv",
     "parse_user_fills",

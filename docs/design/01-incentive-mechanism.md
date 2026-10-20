@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v5.7, 2026-10-20)
+# Incentive mechanism in plain words (v5.8, 2026-10-20)
 
 The formulas are in `02-mechanism-spec.md`; this page says what they do. The public, polished version is the
 whitepaper (`docs/whitepaper.md`).
@@ -32,8 +32,9 @@ dust accounts, lottery farms) pays Hyperliquid and Kokoah more than the subnet c
 is capped at three quarters of what the trade cost. The tightest case is a top-tier market maker who earns rebates
 on both legs: still a loss of half a basis point per round trip, and it would need a rebate almost twice
 Hyperliquid's best to break even. Splitting into many accounts or merging accounts changes nothing, because shares
-and caps are linear in fees. Linked addresses that mirror each other lose their credit and, above half, their
-quality factor. Verified by `scripts/verify_mechanism.py`.
+and caps are linear in fees. Trades between two of our own miners never count (the exchange's file names the counterparty of every fill),
+and linked addresses that keep opposite positions for weeks lose their credit and, above half, their quality
+factor. Verified by `scripts/verify_mechanism.py` and by a 60-day replay through the real code (`scripts/replay.py`).
 
 ## Why the fees cover the selling
 

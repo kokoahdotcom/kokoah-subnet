@@ -5,11 +5,12 @@ import pytest
 from kokoah_subnet.mechanism import (
     DEFAULT,
     Fill,
+    bound_counterparty_notional,
     clip_to_mark,
+    drop_bound_counterparties,
     drop_cluster_matches,
     mirror_action,
     mirror_position_share,
-    mirror_timing_notional,
 )
 
 
@@ -33,16 +34,17 @@ def test_clip_to_mark() -> None:
     assert [f.px for f in out] == [100.0, 100.4, 150.0]
 
 
-def test_mirror_timing_rule() -> None:
+def test_bound_counterparty_rule_is_exact() -> None:
     fills = {
-        "a": [_fill("a", 0, "BTC", "B", 1.0), _fill("a", 500, "ETH", "B", 2.0)],
-        "b": [_fill("b", 30, "BTC", "A", 1.1), _fill("b", 600, "ETH", "A", 2.0)],  # ETH is 100 s later: no match
-        "c": [_fill("c", 10, "BTC", "A", 2.0)],  # size off by 100%: no match
+        "a": [_fill("a", 0, "BTC", "B", 1.0, cp="b"), _fill("a", 1, "BTC", "B", 2.0, cp="0xmarket")],
+        "b": [_fill("b", 0, "BTC", "A", 1.0, cp="a"), _fill("b", 5, "ETH", "A", 1.0, cp="c")],
+        "c": [_fill("c", 2, "BTC", "A", 1.0, cp="0xmarket")],  # same time, opposite side, same size: not flagged
     }
-    m = mirror_timing_notional(fills, DEFAULT)
-    assert m["a"] == pytest.approx(100.0)
-    assert m["b"] == pytest.approx(110.0)
-    assert m["c"] == 0.0
+    against = bound_counterparty_notional(fills)
+    assert against == {"a": 100.0, "b": 200.0, "c": 0.0}
+    kept = drop_bound_counterparties(fills["b"], set(fills))
+    assert kept == []
+    assert len(drop_bound_counterparties(fills["a"], set(fills))) == 1
 
 
 def test_mirror_position_rule() -> None:

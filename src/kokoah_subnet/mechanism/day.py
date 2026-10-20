@@ -11,11 +11,12 @@ from dataclasses import dataclass, field
 
 from .credit import DayFees, day_fees
 from .exclusions import (
+    bound_counterparty_notional,
     clip_to_mark,
+    drop_bound_counterparties,
     drop_cluster_matches,
     mirror_action,
     mirror_position_share,
-    mirror_timing_notional,
 )
 from .fills import Fill, by_user
 from .gates import active_days, passes_gates, round_trips
@@ -39,6 +40,8 @@ class MinerInputs:
     window_fills: Sequence[Fill] = ()  # the gate window's builder-code fills (for round trips and active days)
     start_positions: Mapping[str, float] = field(default_factory=dict)
     exchange_rates_bps: tuple[float, float] | None = None  # (taker, maker) fallback for unknown total fees
+    round_trips_window: int | None = None  # precomputed gate counts (the live loop); else from window_fills
+    active_days_window: int | None = None
 
 
 @dataclass(frozen=True)
@@ -87,10 +90,10 @@ class DayResult:
 def score_day(inputs: DayInputs, params: Params) -> DayResult:
     # exclusions on the day's fills
     fills = clip_to_mark(drop_cluster_matches(inputs.fills, inputs.cluster_of), params)
-    per_address = by_user(fills)
     bound = {m.address for m in inputs.miners}
-    bound_fills = {a: f for a, f in per_address.items() if a in bound}
-    timing = mirror_timing_notional(bound_fills, params)
+    bound_fills = {a: f for a, f in by_user(fills).items() if a in bound}
+    against_bound = bound_counterparty_notional(bound_fills)  # measured before the fills are dropped
+    bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
     position_share = mirror_position_share(inputs.positions, params)
 
     miner_days: list[MinerDay] = []
@@ -99,16 +102,19 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         state = inputs.states.get(m.hotkey, MinerState())
         own = bound_fills.get(m.address, [])
         fees = day_fees(own, params, m.exchange_rates_bps)
-        day_notional = fees.notional
-        timing_share = timing.get(m.address, 0.0) / day_notional if day_notional > 0 else 0.0
-        mirrored = max(timing_share, position_share.get(m.address, 0.0))
+        gross = fees.notional + against_bound.get(m.address, 0.0)
+        counterparty_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0
+        mirrored = max(counterparty_share, position_share.get(m.address, 0.0))
         action = mirror_action(mirrored, params)
         zeroed = action.zero_multiplier or state.is_zeroed(inputs.day_index)
         parts = skill_raw(m.returns, params)
         g_smoothed = (1 - params.smoothing) * state.g + params.smoothing * parts.raw
-        gates = passes_gates(
-            round_trips(m.window_fills, m.start_positions), active_days(m.window_fills), m.mean_equity_usd, params
+        rt = (
+            m.round_trips_window if m.round_trips_window is not None else round_trips(m.window_fills, m.start_positions)
         )
+        ad = m.active_days_window if m.active_days_window is not None else active_days(m.window_fills)
+        gates = passes_gates(rt, ad, m.mean_equity_usd, params)
+
         skill = 0.0 if zeroed else skill_factor(g_smoothed, params)
         hold = 0.0 if zeroed else holding_factor(m.staked_min_alpha, state.paid_window(), m.collateral_min_alpha)
         mult = multiplier(skill, hold, gates, params)

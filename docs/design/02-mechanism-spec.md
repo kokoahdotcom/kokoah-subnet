@@ -1,6 +1,12 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.7, 2026-10-20)
+# Kokoah subnet incentive mechanism: complete specification (v5.8, 2026-10-20)
 
-Self-contained. Every symbol is defined here. v5.7 (owner, 2026-10-20): the builder fee is one rate on every order,
+Self-contained. Every symbol is defined here. v5.8 (2026-10-20, found by the adversarial replay through the real
+code): the 60-second timing heuristic for mirrored fills is gone. It flagged honest high-frequency traders against
+each other by coincidence (same coin, opposite sides within a minute, similar sizes happen all day in a crowded
+market). Its replacement is exact: the builder file names each fill's counterparty, so fills between two bound
+addresses are removed before anything is computed, and an address whose volume against other bound addresses
+exceeds the thresholds is treated as mirrored. The position-correlation rule stays for persistent hedging through
+the market. v5.7 (owner, 2026-10-20): the builder fee is one rate on every order,
 0.025%, attached when the order is placed, so maker and taker fills pay it alike, and Hyperliquid charges it on
 both (confirmed from Kokoah's own fills and from other builders' daily files). Maker fills therefore earn their
 fee credit in full (`c_m = 1`); the maker discount of earlier versions is no longer needed, because the second cap
@@ -86,13 +92,15 @@ Removed before anything is computed:
 1. fills whose counterparty is the same address or another address of the same cluster (same coldkey, sub-accounts
    of the master, addresses funded by the same bridge depositor or transferring between each other);
 2. fills priced more than 0.5% from the mark: valued at the mark for notional and profit;
-3. **mirror rule (timing):** opposite-side fills of two bound addresses in the same coin within 60 s and within 20%
-   of the size;
+3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
+   counterparty of every fill), measured as a share of the address's notional, then removed from credit: the subnet
+   does not pay for volume between its own miners. Exact, so an honest trader is never flagged by coincidence;
 4. **mirror rule (positions):** for every pair of bound addresses active in the same coin, the daily net position
    series over the last 30 days; correlation below −0.8 on at least 10 overlapping days marks the overlapping
    notional as mirrored.
-   For both rules: mirrored notional above 25% of an address's 30-day notional is removed from credit; above 50%,
-   both addresses get `g' = h' = 0` for 30 days and are reported (collateral stranded). These rules protect the
+   For both rules: mirrored notional above 25% of an address's notional is removed from credit (fills against
+   bound counterparties are removed whatever the share); above 50%, both addresses get `g' = h' = 0` for 30 days
+   and are reported (collateral stranded). These rules protect the
    leaderboard's integrity; the economics alone already make mirrored volume a loss (§11).
 
 Abuse signals that do not change pay but are published and reviewed: the share of an address's credit from
@@ -256,7 +264,7 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | return cap | ±10% a day |
 | holding target | alpha paid in the last 60 days (floor: the collateral minimum); stake read as the day's minimum |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days) |
-| mirror rules | 60 s / 20% size; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
+| mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
 | mark clip | 0.5% |
 | migration | once per 60 days, signed by old address, new address and hotkey; credit, skill and target carry over |
 | emission split | miner 33%, owner 33% (locked), validators 34% |
