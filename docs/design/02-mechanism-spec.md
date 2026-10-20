@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v3, 2026-10-20)
+# Kokoah subnet incentive mechanism: complete specification (v3.1, 2026-10-20)
 
 Self-contained. Every symbol is defined here; nothing else is needed to understand or re-implement the mechanism or
 the simulator (`sim/index.html`).
@@ -37,7 +37,7 @@ subnet's token (alpha) and burn it. The subnet's product is a verified ranking o
 | `mark(f)` | Hyperliquid mark price of the coin at the time of fill `f` | |
 | `λ` | dollar-profit weight | 50 |
 | `c_m` | maker fee credit | 0.4 |
-| `κ` | skill premium: full skill and holding multiply the fee credit by `1 + κ` | 4 |
+| `m_min`, `g_full` | floor of the rate multiplier and the skill score that reaches the top of the range | 0.85, 0.65 |
 
 ## 3. Inputs and exclusions
 
@@ -135,18 +135,20 @@ Unstaking or moving alpha to another coldkey lowers `staked_i` at once. A new ho
 ## 8. Pool split
 
 ```
-score_i  = Φ_i × ( 1 + κ × g_i × h_i )  +  fee × λ × P_i × g_i × h_i          κ = 4, λ = 50
+M_i      = m_min + ( 1 − m_min ) × min( 1 , g_i / g_full ) × h_i          m_min = 0.85, g_full = 0.65
+score_i  = Φ_i × M_i  +  fee × λ × P_i × g_i × h_i                          λ = 50
 w_i      = score_i / Σ_j score_j
 ```
+
+`M_i ∈ [0.85, 1.0]`: a miner with no skill or nothing held earns 85% of the rate of a strong, persistent holder.
 
 `Σ_i w_i = 1`. Validators submit `w_i` as on-chain weights every tempo; the chain pays `alpha_i = w_i × A` per day.
 If `Σ_j score_j = 0` (no fees at all), no weights are set and the chain's fallback applies.
 
 Properties: `Φ_i` is linear in fees, `P_i` linear in profit, `g_i` and `h_i` bounded multipliers unchanged by
 splitting an account; `w` is homogeneous of degree one in the splittable quantities (sybil- and collusion-neutral,
-Chen, Papadimitriou, Roughgarden 2019). The share of the pool that skill takes is not fixed: with everyone at
-`g = 0` the pool is split by fees; with everyone at full skill it is split by fees again (the multiplier is
-uniform); only differences in skill, holding and dollars move alpha between miners.
+Chen, Papadimitriou, Roughgarden 2019). Skill and holding move at most 15% of a miner's rate; the fee level and the
+taker/maker credit are what keep fake volume out (§14).
 
 ## 9. Daily payment
 
@@ -222,8 +224,8 @@ early money is Kokoah revenue, not Hyperliquid's.
 | builder fee `fee` | 0.06% per fill (6 bps a side); Hyperliquid maximum 0.1% |
 | Hyperliquid fees | taker 4.5 bps, maker 1.5 bps a side (base tier); maker rebates −0.1 to −0.3 bps above 0.5–3% of 14-day maker volume |
 | maker fee credit `c_m` | 0.4 |
-| pool rule | `score = Φ (1 + κ g h) + fee λ P g h`, proportional |
-| `κ` | 4 |
+| pool rule | `score = Φ × M + fee λ P g h`, `M = m_min + (1 − m_min) × min(1, g/g_full) × h`, proportional |
+| `m_min`, `g_full` | 0.85, 0.65 |
 | `λ` | 50 |
 | return cap | ±10% a day |
 | confidence | PSR of capped returns, hurdle 0.03 a day, ≥ 10 days, mapped (PSR − 0.5)/0.45 |
@@ -252,21 +254,20 @@ Three miners (daily figures, 30-day totals scaled the same way):
 
 Fee credit (`Φ = fee × volume × (taker + 0.4 × maker)`): Anna 2,640; Bob 18,240; Cara 169.2.
 
-Skill boost (`1 + κ g h`): Anna 1 + 4 × 0.4 × 0.65 = 2.04; Bob 1 + 4 × 0.25 × 0.75 = 1.75; Cara 1 + 4 × 0.8 × 0.75 = 3.40.
+Multiplier (`M = 0.85 + 0.15 × min(1, g/0.65) × h`): Anna 0.85 + 0.15 × 0.615 × 0.65 = 0.910; Bob 0.85 + 0.15 × 0.385 × 0.75 = 0.893; Cara 0.85 + 0.15 × 1 × 0.75 = 0.963.
 
 Profit credit (`fee × λ × P × g × h`): Anna 0.0006 × 50 × 500 × 0.4 × 0.65 = 3.9; Bob 0.0006 × 50 × 8,000 × 0.25 ×
 0.75 = 45.0; Cara 0.0006 × 50 × 400 × 0.8 × 0.75 = 7.2.
 
-Scores: Anna 2,640 × 2.04 + 3.9 = 5,389.5; Bob 18,240 × 1.75 + 45.0 = 31,965.0; Cara 169.2 × 3.40 + 7.2 = 582.5.
-Σ = 37,937.0 → weights: Anna 14.2%, Bob 84.3%, Cara 1.5%.
+Scores: Anna 2,640 × 0.910 + 3.9 = 2,406; Bob 18,240 × 0.893 + 45.0 = 16,333; Cara 169.2 × 0.963 + 7.2 = 170.
+Σ = 18,909 → weights: Anna 12.7%, Bob 86.4%, Cara 0.9%.
 
-Tokens and value: Anna 0.142 × 2,376 = 338 alpha = $1,800; Bob 0.843 × 2,376 = 2,002 alpha = $10,672; Cara 0.015 ×
-2,376 = 36 alpha = $194.
+Tokens and value: Anna 0.127 × 2,376 = 302 alpha = $1,611; Bob 0.864 × 2,376 = 2,052 alpha = $10,937; Cara 0.009 ×
+2,376 = 21 alpha = $114.
 
-Per dollar of fees paid: Bob gets back 44% ($10,672 on $24,000), Anna 60% ($1,800 on $3,000), Cara 108% ($194 on
-$180). Skill and holding set the rate; size sets the total. Net cost: Anna pays Hyperliquid $1,950 and Kokoah
-$3,000, receives $1,800 → net $3,150; Bob $13,200 + $24,000 − $10,672 = $26,528; Cara $126 + $180 − $194 = $112
-(cheaper than Hyperliquid directly).
+Per dollar of fees paid: Bob gets back 46% ($10,937 on $24,000), Anna 54% ($1,611 on $3,000), Cara 63% ($114 on
+$180): nearly the same rate for everyone, size sets the total. Net cost: Anna pays Hyperliquid $1,950 and Kokoah
+$3,000, receives $1,611 → net $3,339; Bob $13,200 + $24,000 − $10,937 = $26,263; Cara $126 + $180 − $114 = $192.
 
 Economics: `R` = $27,180; buyback $27,180; with Anna selling 70%, Bob and Cara 50%, validators 20%: sold = 237 +
 1,001 + 18 + 490 = 1,746 alpha = $9,306. Buyback ÷ selling = 2.9. `price*` = 27,180 / (1,746 × 266.54) = 0.0584 TAO.
@@ -274,8 +275,11 @@ Economics: `R` = $27,180; buyback $27,180; with Anna selling 70%, Bob and Cara 5
 ## 14. Attack arithmetic (what every number must satisfy)
 
 For a strategy with no trading edge, expected pay from the subnet per unit of notional must stay below the fees it
-cannot avoid. With the pool fully paid, a zero-edge account's score is its fee credit times `1 + κ g h` with
-`E[g] = 0.07`, so at most about 1.3 times a skill-less account's rate, against 2.5 to 5 times for real traders. Costs per round trip of notional (bps): taker-based
+cannot avoid. With the pool fully paid and `M ∈ [0.85, 1]`, a zero-edge account earns 85 to 90% of an honest
+trader's rate per unit of fee credit, so the fee level must carry the defense: at 6 bps a side the cheapest
+zero-edge strategy per unit of credit (a taker hedge with a rebate on the hidden leg) costs 20.4 bps per round
+trip, 170% of the builder fee; a maker-based top-tier market maker 27 bps per credit. Fake volume breaks even only
+once the pool pays that much per credit, by which time honest traders receive the same. Costs per round trip of notional (bps): taker-based
 `2 × 4.5 + F + hidden`, maker-based `2 × 1.5 + F + hidden`, top-tier maker `2 × (−0.3) + F + hidden`, with `F = 2 × fee`
 and `hidden` the other leg's fees. The design makes those costs mostly Kokoah revenue (§11) and keeps the
 subnet's pay to zero-edge accounts small by: the taker/maker credit (§4), `g = 0` for negative-PnL accounts and the
@@ -295,9 +299,9 @@ exclusions (§3), collateral per account, migration-only account changes (§16) 
 | Fees to Kokoah | `b_i = V_i × fee` |
 | Fees to HL | `hl_i = V_i × (t × 4.5 + (1 − t) × 1.5) bps` |
 | Fee credit | `Φ_i = fee × V_i × (t + 0.4 (1 − t))` |
-| Skill boost | `1 + κ g_i h_i` |
+| Multiplier | `M_i = m_min + (1 − m_min) × min(1, g_i/g_full) × h_i` |
 | Profit credit | `fee × λ × max(0, P_i) × g_i × h_i` |
-| Weight | `w_i = (Φ_i × boost_i + profit credit_i) / Σ_j (…)` |
+| Weight | `w_i = (Φ_i × M_i + profit credit_i) / Σ_j (…)` |
 | Tokens/day | `w_i × A`, `A = 7,200 × miner_slot` |
 | Earns $/day | tokens × `price_0 × tao_usd` |
 | Net cost $/day | `hl_i + b_i + V_i × hidden_bps_i − earns` |

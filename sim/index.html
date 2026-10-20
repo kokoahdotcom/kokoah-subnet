@@ -102,7 +102,8 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
     <div class="group"><h3>Formula</h3>
       <div class="field"><label for="lambda">λ: $1 of profit counts like $ of volume<small>profit credit = fee × λ × profit × skill × holding</small></label><input id="lambda" type="number" value="50" step="10" min="0"></div>
       <div class="field"><label for="makerCredit">Maker fee credit<small>taker is 1.0</small></label><input id="makerCredit" type="number" value="0.4" step="0.1" min="0" max="1"></div>
-      <div class="field"><label for="kappa">κ: skill premium<small>full skill and holding multiply the fee credit by 1 + κ</small></label><input id="kappa" type="number" value="4" step="0.5" min="0" max="20"></div>
+      <div class="field"><label for="mmin">Rate floor<small>a miner with no skill or nothing held earns this × the top rate</small></label><input id="mmin" type="number" value="0.85" step="0.05" min="0" max="1"></div>
+      <div class="field"><label for="gfull">Skill that reaches the top<small>g at which the multiplier is 1.0 (if all held)</small></label><input id="gfull" type="number" value="0.65" step="0.05" min="0.05" max="1"></div>
       <div class="field"><label for="holding">Holding multiplier<small>sellers get half the skill share</small></label><input id="holding" type="checkbox" checked></div>
       <div class="field"><label for="hlTaker">Hyperliquid taker / maker, bps a side</label><div class="row" style="gap:4px"><input id="hlTaker" type="number" value="4.5" step="0.5" min="0" style="width:52px"><input id="hlMaker" type="number" value="1.5" step="0.5" min="-1" style="width:52px"></div></div>
     </div>
@@ -123,13 +124,13 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
   <table id="miners">
     <thead><tr>
       <th class="l">Name</th><th class="l">Type</th><th>Volume $/day</th><th>Taker %</th><th>Skill g</th><th>Profit $/day</th><th>Sells %</th><th>Hidden leg bps</th>
-      <th>Fees to Kokoah</th><th>Fees to HL</th><th>Fee credit</th><th>Skill boost</th><th>Profit credit</th><th>Weight</th><th>Tokens/day</th><th>Earns $/day</th><th>Net cost $/day</th><th class="l">Verdict</th><th></th>
+      <th>Fees to Kokoah</th><th>Fees to HL</th><th>Fee credit</th><th>Multiplier</th><th>Profit credit</th><th>Weight</th><th>Tokens/day</th><th>Earns $/day</th><th>Net cost $/day</th><th class="l">Verdict</th><th></th>
     </tr></thead>
     <tbody></tbody>
     <tfoot><tr><td class="l" colspan="2">Total</td><td id="tVol"></td><td></td><td></td><td id="tProfit"></td><td></td><td></td><td id="tFees"></td><td id="tHl"></td><td id="tCredit"></td><td></td><td id="tPc"></td><td>100%</td><td id="tAlpha"></td><td id="tEarn"></td><td id="tNet"></td><td class="l"></td><td></td></tr></tfoot>
   </table>
   </div>
-  <p class="note">Net cost = fees to Hyperliquid + fees to Kokoah + hidden-leg fees − value of the tokens received at the day's price. For a cheat (no real market bet) a negative net cost means the cheat profits. Hidden leg bps: the other venue's fee per side on the same notional, for hedgers (negative for a maker rebate). Skill g is the 0–1 score from the design (confidence × quality, no drawdown): a coin-flip account averages about 0.07, a steady grinder 0.3, a real edge 0.4, a strong one 0.65. Sells % stands in for the holding multiplier: keeping tokens staked earns up to the full multiplier, selling them halves it.</p>
+  <p class="note">Net cost = fees to Hyperliquid + fees to Kokoah + hidden-leg fees − value of the tokens received at the day's price. For a cheat (no real market bet) a negative net cost means the cheat profits. Hidden leg bps: the other venue's fee per side on the same notional, for hedgers (negative for a maker rebate). Skill g is the 0–1 score from the design (confidence × quality, no drawdown): a coin-flip account averages about 0.07, a steady grinder 0.3, a real edge 0.4, a strong one 0.65. Sells % stands in for the holding multiplier (0.5 + 0.5 × kept share). The multiplier column runs from the rate floor (0.85) to 1.0, so skill and holding change a miner's rate by at most 15%.</p>
 </section>
 
 <section class="charts">
@@ -143,8 +144,8 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
   <h2>How the day is computed</h2>
   <ol class="note" style="padding-left:18px; margin:0">
     <li>7,200 new tokens a day: the miner slot goes to miners by weight; the owner slot is locked; validators and stakers sell their set share.</li>
-    <li>Fee credit = Kokoah fees paid, taker fills at 1.0, maker fills at the maker credit. Skill boost = 1 + κ × g × holding multiplier (0.5 + 0.5 × kept share). Profit credit = fee × λ × profit (if positive) × g × holding multiplier.</li>
-    <li>Score = fee credit × skill boost + profit credit. Weight = score ÷ the sum of all scores. If nobody has skill, the pool goes by fee credit.</li>
+    <li>Fee credit = Kokoah fees paid, taker fills at 1.0, maker fills at the maker credit. Multiplier = rate floor + (1 − floor) × min(1, g ÷ top skill) × holding multiplier (0.5 + 0.5 × kept share), so it runs from the floor (0.85) to 1.0. Profit credit = fee × λ × profit (if positive) × g × holding multiplier, a small tie-breaker.</li>
+    <li>Score = fee credit × multiplier + profit credit. Weight = score ÷ the sum of all scores. Similar volume means similar pay.</li>
     <li>Miners sell their set share of the tokens into the pool (constant-product, price = TAO reserve ÷ token reserve). Validators' sales join them.</li>
     <li>Kokoah buys tokens back with the buyback share of the day's fees, plus staker net buying; bought tokens are burned.</li>
     <li>"Price the buyback holds" = (buyback + staker buying) ÷ tokens sold per day, in TAO: where the price settles with no other demand.</li>
@@ -196,7 +197,7 @@ function dials() {
   const v = (id) => parseFloat($(id).value) || 0;
   return { taoUsd: v("taoUsd"), price0: v("price0"), depth: v("depth"), stakers: v("stakers"), taoIn: v("taoIn"),
     fee: v("fee") / 100, beta: v("beta") / 100, minerSlot: v("minerSlot") / 100, valSell: v("valSell") / 100, days: Math.max(7, Math.round(v("days"))),
-    lambda: v("lambda"), makerCredit: v("makerCredit"), kappa: v("kappa"), holding: $("holding").checked, hlTaker: v("hlTaker") / 1e4, hlMaker: v("hlMaker") / 1e4 };
+    lambda: v("lambda"), makerCredit: v("makerCredit"), mmin: Math.min(1, v("mmin")), gfull: Math.max(0.05, v("gfull")), holding: $("holding").checked, hlTaker: v("hlTaker") / 1e4, hlMaker: v("hlMaker") / 1e4 };
 }
 function weights(d) {
   const rows = miners.map(m => {
@@ -207,7 +208,7 @@ function weights(d) {
     const credit = feesK * (taker + d.makerCredit * (1 - taker));
     const h = d.holding ? 0.5 + 0.5 * (1 - sells) : 1;
     const g = Math.max(0, Math.min(1, m.g));
-    const boost = 1 + d.kappa * g * h;
+    const boost = d.mmin + (1 - d.mmin) * Math.min(1, g / d.gfull) * h;
     const pc = d.fee * d.lambda * Math.max(0, m.profit) * g * h;
     const score = credit * boost + pc;
     return { m, feesK, feesHL, hidden, credit, boost, pc, score, sells };

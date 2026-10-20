@@ -1,6 +1,8 @@
-# Incentive mechanism, version 3
+# Incentive mechanism, version 3.1
 
-Date: 2026-10-20. Status: proposal for the owner's review. Version 3 replaces the drawdown-based skill score with a
+Date: 2026-10-20. Status: proposal for the owner's review. Version 3.1 (owner's decision): similar volume means
+similar pay; skill and holding move a miner's rate only within 0.85 to 1.0 times, so anyone can trade without fear,
+and the fee level does the protecting. Version 3 replaces the drawdown-based skill score with a
 statistical one (confidence × quality, no drawdown anywhere), replaces the fixed 50/50 pool split with a skill
 multiplier on the fee credit, ties track records and holding to the miner's binding so switching accounts never
 helps, and measures holding as alpha staked on the hotkey. Version 2 (whole pool paid daily; "revenue beats sell
@@ -59,13 +61,27 @@ sold. So the fee level is the main lever, holding the second, volume the third. 
 Per miner `i`, per daily scoring. One score, all paid out in proportion:
 
 ```
-score_i  =  Φ_i × ( 1 + κ × g_i × h_i )   +   fee × λ × P_i⁺ × g_i × h_i          κ = 4, λ = 50
+M_i      =  m_min + ( 1 − m_min ) × min( 1 , g_i / g_full ) × h_i          m_min = 0.85, g_full = 0.65
+score_i  =  Φ_i × M_i   +   fee × λ × P_i⁺ × g_i × h_i                      λ = 50
 weight_i =  score_i / Σ_j score_j
 ```
 
-In words: every trader's fee credit is the base; skill times holding multiplies it, up to 1 + κ = 5 times; dollars
-made add on top, for skilled traders only. There is no fixed split between a "fee half" and a "skill half": how much
-of the pool skill takes depends on how skilled the miners are. If nobody has skill, the pool is split by fees.
+In words: every trader's fee credit is the base, and the multiplier `M` moves it only between 0.85 (no skill, or
+everything sold) and 1.0 (a strong, persistent trader who keeps the tokens). Similar volume means similar pay; the
+best possible trader earns at most 18% more per dollar of fees than a losing one. Dollars made add a small
+tie-breaker (about 1% of the score at `λ = 50`); the leaderboard shows them in full. A newcomer starts at 0.85 on
+day one: no waiting period for pay, only for the bonus.
+
+**Why this is safe (owner's requirement: encourage everyone to trade, generate volume).** The protection against
+fake volume is the fee level and the taker/maker credit, not the skill score. At 6 bps a side, the cheapest
+zero-edge strategy per unit of fee credit is a taker hedge with a rebate on the hidden leg: 9 + 12 − 0.6 = 20.4 bps
+per round trip for 1.0 credit (a maker-based top-tier market maker: −0.6 + 12 − 0.6 = 10.8 bps for 0.4 credit, 27
+per credit). So fake volume cannot break even until the pool pays about 20 bps per round trip of taker credit, which
+is 170% of the builder fee; honest market-order traders are paid at least that much back before any farm appears,
+and a farm's spend is mostly Kokoah revenue anyway (§3.5). What the narrow range gives up: skilled traders are no
+longer paid several times more per dollar than luck, so the "pay for skill" story rests on the leaderboard, and the
+holding incentive is mild, so the price floor sits near "fees back" rather than above it (§2). If the builder fee is
+ever lowered below Hyperliquid's taker fee, this range must be widened again or the farms win.
 
 ### 3.1 Fee credit `Φ_i` (everyone who trades)
 
@@ -130,8 +146,8 @@ Everything is proportional: `Φ` is linear in fees, `P⁺` linear in profit, `g`
 not change when an account is split. Proportional allocation is the one rule that is both sybil-proof and
 collusion-proof (Chen, Papadimitriou and Roughgarden, 2019); per-miner caps and concave transforms are deliberately
 absent. With the whole pool always paid, the reward per dollar of fees is high while the subnet is young; zero-edge
-traders then enter until the reward rate falls to their cost divided by their multiplier (about 1.3 with `g = 0.07`),
-while real traders earn 2.5 to 5 times the base per dollar of fees. At a 6 bps builder fee most of that early spend
+traders then enter until the reward per round trip of taker credit falls to about 20 bps (170% of the builder fee),
+and honest traders are paid the same rate, times 0.85 to 1.0. At a 6 bps builder fee most of that early spend
 is Kokoah revenue (a taker-based cheat pays Kokoah 12 bps and Hyperliquid 9 per round trip, 57% to us; maker-based
 80%; a top-tier market maker 111%).
 
@@ -200,8 +216,8 @@ A miner's track record, receipts and holding belong to its binding, not to an ad
 | Parameter | v3 value | Why |
 |---|---|---|
 | Builder fee | 6 bps a side (owner, 2026-10-19; Hyperliquid's maximum is 10), approved by the user in the wallet | the lever that makes revenue beat sell pressure |
-| Pool rule | `score = Φ × (1 + κ g h) + fee λ P⁺ g h`, paid in proportion | base for everyone, skill multiplies, dollars add |
-| κ (skill premium) | 4 | full skill and holding earn 5 × the base per dollar of fees |
+| Pool rule | `score = Φ × M + fee λ P⁺ g h`, `M = 0.85 + 0.15 × min(1, g/0.65) × h`, paid in proportion | similar volume, similar pay; skill and holding a small bonus |
+| m_min, g_full | 0.85, 0.65 | the rate range 0.85 to 1.0; a strong trader reaches the top |
 | λ (dollars) | 50 | $1 of profit counts like $50 of volume |
 | Fee credit, taker / maker | 1.0 / 0.4 | anti-wash |
 | Return cap | ±10% a day | one accident is one capped loss |
