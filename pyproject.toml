@@ -8,6 +8,7 @@ dependencies = [
   "bittensor==11.3.0",
   "fastapi==0.148.0",
   "httpx==0.28.1",
+  "lz4==4.4.4",
   "uvicorn==0.54.0",
 ]
 
