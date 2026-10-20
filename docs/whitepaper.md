@@ -389,7 +389,10 @@ the builder leg, skill and holding factors, multiplier, share, cap, pay, and the
 hash and whether it matches the operator's on-chain commitment, the refused bindings with their reasons, the abuse
 signals, and the public ranking (skill, managed capital, volume, dollar profit, holding, totals over all days).
 Every validator serves these over a read-only HTTP interface (appendix D) together with a leaderboard page, so the
-ranking can be read from any validator, not only the operator's.
+ranking can be read from any validator, not only the operator's. Behind the interface, each validator keeps a
+complete relational record of what it saw and decided, from every fill and every per-miner figure with the parts
+behind it to every chain sample, commitment, weight submission and burn, so any day can be audited or re-analysed
+later from the data as it was.
 
 Parameter changes are announced at least seven days in advance and recorded in the changelog (appendix E); the
 mechanism's version number is published in every daily artifact. Reported addresses and the reason are published.
