@@ -6,33 +6,36 @@ Whitepaper, version 1.0, October 2026. Mechanism specification v5.8.
 
 ### Abstract
 
-Kokoah Subnet is a proposed Bittensor subnet whose miners are traders. A miner binds a Hyperliquid address to a
-subnet hotkey and trades perpetual futures through the Kokoah builder code; validators recompute, from public
-Hyperliquid data and chain state, each miner's share of the daily miner emission. The work the subnet rewards is
-therefore real, external, and verifiable by anyone: every scored fill is a public record on a public exchange, and
-every validator reaches the same result from the same data.
+Kokoah Subnet brings a large, measurable and revenue-generating activity to Bittensor: trading on Hyperliquid,
+one of the most active perpetual-futures venues. Miners are traders. A miner binds a Hyperliquid address to a
+subnet hotkey and trades through the Kokoah application; validators recompute, from public exchange data and
+chain state, each miner's share of the daily miner emission. The work the subnet rewards is real, external, and
+verifiable by anyone, and every validator reaches the same result from the same data.
 
-The incentive mechanism shares the miner pool in proportion to the builder fees each trader actually paid, adjusted
-by a small quality factor bounded between 0.85 and 1.0, and caps what any miner can receive at a fraction of the
-fees that trader spent on the trade. Everything above the caps is burned the same day, in the way the chain
-recognizes, so the subnet never draws TAO emission for miner rewards it did not award. The builder fees fund an
-on-chain buyback and burn of the subnet token. The design goal is a subnet whose token supply is backed by revenue
-from genuine activity, whose rewards cannot be farmed by fake volume at any fee tier, and whose accounting is
-auditable end to end.
+The subnet is designed to be a net contributor to the network. The builder fee the exchange charges on every
+routed trade funds an on-chain buyback and burn of the subnet token, so revenue earned outside Bittensor flows
+back into it. Traders who were not part of Bittensor become registered, staked participants. The public ranking
+of verified traders is a data product the network did not have. The incentive mechanism shares the miner pool in
+proportion to the builder fees each trader actually paid, adjusted by a small quality factor bounded between 0.85
+and 1.0, and caps what any miner can receive at a fraction of the fees that trader spent on the trade. Emission
+above the caps is burned the same day, in the way the chain recognizes, so the subnet never draws emission for
+rewards it did not award, and no fake-volume strategy can profit at any fee tier.
 
-This document describes the mechanism, the reasoning behind each rule, the economic analysis that supports it, the
-verification done so far, and the questions that remain open before a mainnet launch. Version 1.0 fixes the
-mechanism and its parameters for launch; the validator software implementing it is complete and runs on a test
-network, and the open items in section 8 are measurements, not design decisions. Later changes follow the
-changelog policy in section 7.
+Kokoah, the operator, is building its application into a trading platform with AI assistance that makes trading
+easier for everyone, which widens the funnel of traders into the subnet. This document describes the mechanism,
+the reasoning behind each rule, the economic analysis that supports it, the verification done so far, and what
+remains open before a mainnet launch. Version 1.0 fixes the mechanism and its parameters for launch; the
+validator software implementing it is complete and runs on a test network, and the open items in section 8 are
+measurements, not design decisions. Later changes follow the changelog policy in section 7.
 
 ---
 
 ## 1. Motivation
 
-Bittensor's premise is that token emission should flow to measurable, useful work. Subnets that measure their work
-against an external, independent source of truth are the easiest for the network to trust: validators can be
-checked, incentives can be audited, and the value produced does not depend on the subnet's own token.
+Bittensor's premise is that token emission should flow to measurable, useful work. Subnets that measure their
+work against an external, independent source of truth are the easiest for the network to trust, and subnets that
+bring revenue and participants from outside the network make the whole network stronger. Kokoah Subnet is built
+to do both.
 
 Trading on a public exchange is such a source of truth. Every fill on Hyperliquid is a public record with a price,
 a size, a side, a fee, and a counterparty; account values and deposits are public; and a venue-level feature, the
@@ -40,15 +43,28 @@ builder code, attributes a fill to the application that routed it and charges a 
 publishes. A subnet built on this data can pay for an activity that is real, priced by an outside market, and
 revenue-generating, without asking the network to trust the operator's measurements.
 
+What the subnet brings to Bittensor:
+
+- **Revenue from outside the network.** Every routed trade pays a builder fee to the operator, and those fees buy
+  back and burn the subnet token on chain. Value earned on an external venue is returned to the network in a form
+  anyone can verify, transaction by transaction.
+- **New participants and capital.** Hyperliquid traders join Bittensor to take part: they register hotkeys, lock
+  collateral, and are paid in alpha that the holding factor rewards them for keeping. A trading community that
+  had no reason to be on Bittensor gets one.
+- **A verifiable data product.** The public ranking of traders, computed by independent validators from the
+  traders' own fills, is a signal that did not exist before: who trades well, at what scale, with what
+  consistency, with no self-reporting anywhere.
+- **A path toward automated trading.** Kokoah is adding AI assistance to its platform so that trading is easier
+  for everyone, which grows the number of traders the subnet can verify. The longer-term direction (section 9) is
+  trading by AI agents on the platform, which the subnet's verification measures in exactly the same way as human
+  trading.
+
 The hard part is not measurement but incentives. Rewards for trading volume have a long record of failure:
 trans-fee mining in 2018 collapsed when the reward exceeded the fee, dYdX's trading rewards were cut repeatedly for
 paying more than they earned, and academic estimates put wash trading above 70% of reported volume on unregulated
-venues. A Bittensor subnet that paid for volume naively would pay bots to trade against themselves, and the alpha
-they sold would exceed anything the subnet's revenue could absorb.
-
-Kokoah Subnet is an attempt to do this carefully. The mechanism below is built around one rule that is checked
-rather than hoped for: no strategy without a trading edge can net a profit from the subnet, at any pool size and at
-any fee tier of the exchange. Everything else follows from that rule.
+venues. Kokoah Subnet is designed from that record. The mechanism below is built around one rule that is checked
+rather than hoped for: no strategy without a trading edge can net a profit from the subnet, at any pool size and
+at any fee tier of the exchange. Everything else follows from that rule.
 
 ## 2. Design goals
 
@@ -104,9 +120,9 @@ alone and agrees with the others from then on. A fresh binding starts from zero.
 
 Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` carrying the builder code, `n_f`
 its notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker), `fee_f` the fill's total fee field (the exchange's fee plus the builder fee; a maker rebate makes the
-exchange's part negative). `A` is the day's miner emission (33% of 7,200 alpha, 2,376 alpha). `p_d` is the alpha
-price in USD for the day: the mean of the pool price sampled at every tempo boundary of the day, times the day's
-mean TAO/USD mark.
+exchange's part negative). `A` is the day's miner emission (33% of 7,200 alpha, 2,376 alpha). `p_d` is the day's
+conversion rate from dollars to alpha: the mean pool rate (TAO per alpha) sampled at every tempo boundary of the
+day, times the day's mean TAO/USD mark.
 
 ### 4.1 Fee credit
 
@@ -161,8 +177,8 @@ exchange's fee and the builder fee together. For an ordinary account, the first 
 large volume discounts and staking rebates, the second does. The second cap is what makes the mechanism safe at
 every fee tier (section 5.1); the first sets how generous it is to ordinary traders.
 
-Caps are converted from dollars to alpha at the day's average price, never at a spot price, so a price dip at the
-scoring moment cannot inflate anyone's alpha.
+Caps are converted from dollars to alpha at the day's average rate, never at a single block's value, so a momentary
+move at the scoring block cannot inflate anyone's alpha.
 
 When the pool is larger than the sum of the caps, which is the normal state of a young subnet, the remainder is
 not paid to anyone. It is directed to the owner hotkey, where the chain burns it (section 6.2).
@@ -240,7 +256,7 @@ one minute, and the share from fills against bound counterparties.
 | Multiplier | 0.85 + 0.05 × skill + 0.10 × holding |
 | First cap | 2 × smoothed fee credit |
 | Second cap | 0.75 × smoothed total fees on the builder leg (must stay below 0.864) |
-| Cap price | day's mean pool price × day's mean TAO/USD |
+| Conversion rate | day's mean pool rate × day's mean TAO/USD |
 | Skill windows | confidence 60 days, quality 30 days (half-life 10), blow-ups 60 days |
 | Holding target | alpha paid in the last 60 days, floor at the collateral minimum |
 | Gates | 10 round trips, 7 active days, $500 mean equity, over 30 days |
@@ -297,21 +313,21 @@ collateral, each account must pass the activity gates separately, and the holdin
 
 ### 5.3 Cumulative backing
 
-Each day's pay is at most `2 × Φ̂` in dollars at that day's price, and the smoothing weights sum to one, so up to any
-day the alpha paid out, valued when it was paid, is worth at most twice the builder fees collected so far. If miners
+Each day's pay is at most `2 × Φ̂` in dollars at that day's rate, and the smoothing weights sum to one, so up to any
+day the alpha paid out, counted in dollars when it was paid, is at most twice the builder fees collected so far. If miners
 keep half of what they are paid, which the holding factor rewards, the fees cover everything ever paid; if the
-first cap were set to 1, they would cover it unconditionally. On 200 random paths of fees, prices and miner
+first cap were set to 1, they would cover it unconditionally. On 200 random paths of fees, rates and miner
 populations the worst ratio of paid to collected was 1.36.
 
 The operator spends the collected fees on buying back and burning alpha on a published cadence (every two to three
 weeks). A coverage figure, cumulative buyback over cumulative alpha sold by miner hotkeys, is published for
 information.
 
-### 5.4 Price manipulation
+### 5.4 The conversion rate
 
-The caps convert dollars to alpha at the day's mean pool price over 20 tempo samples. A 30% dip engineered at the
-scoring block would raise the alpha cap by 43% at a spot price and by 1.5% at the mean; holding the price down for a
-whole day against other buyers is not a cheap manipulation.
+The caps convert dollars to alpha at the day's mean pool rate over 20 tempo samples. A 30% move engineered at the
+scoring block would change the alpha cap by 43% at a single-block rate and by 1.5% at the mean; holding the rate
+there for a whole day against everyone else is not a cheap manipulation.
 
 ### 5.5 Fee tiers
 
@@ -323,9 +339,8 @@ deliberate property of the second cap, and it is stated here so nobody is surpri
 ### 5.6 What the mechanism does not do
 
 It does not pay for profit. Dollar profit is published in the ranking but never enters the share; paying for it
-would reward luck and leverage, and it is not what the exchange charges for. It does not promise returns on the
-token, to miners or to anyone. It does not require miners to run infrastructure or expose keys; the subnet reads
-public data only and never trades on anyone's behalf.
+would reward luck and leverage, and it is not what the exchange charges for. It does not require miners to run
+infrastructure or expose keys; the subnet reads public data only and never trades on anyone's behalf.
 
 ## 6. Relationship with the Bittensor chain
 
@@ -333,8 +348,7 @@ public data only and never trades on anyone's behalf.
 
 Emission is split 33% to miners, 33% to the owner, 34% to validators and their stakers. The owner's share is
 locked into conviction by enabling the chain's `owner_cut_auto_lock_enabled` hyperparameter, so the operator
-never sells into its own buyback. Validator emission and outside demand for the token are outside this
-mechanism's scope.
+never sells into its own buyback. Validator emission is outside this mechanism's scope.
 
 ### 6.2 Unawarded emission is burned, and the chain is told
 
@@ -391,8 +405,8 @@ a timing heuristic that flagged honest traders by coincidence. The validator ran
 chain and against a test-network subnet with the real public data: the per-builder daily file is fetchable by
 anyone for the operator's builder address, bindings publish and resolve on chain, weights submit. The one law
 searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
-paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the cap price under a
-30% spot dip; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
+paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the conversion rate under a
+30% single-block move; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
 strong edge, fading edge, one bad day); on a local chain, that incentive aimed at the owner hotkey is withheld
 while alpha emission to everyone else is unchanged. The verification script, the simulations and the chain
 measurement are in the repository.
@@ -402,7 +416,7 @@ measurement are in the repository.
 1. Burn cost, TAO side, on testnet: measure `MinerBurned` and the TAO-share scaling with 85%, 50% and 0% of the
    pool burned. A fresh local subnet receives no TAO injection, so this cannot be seen locally.
 2. The same replay on recorded public Hyperliquid histories of real scalpers, market makers and swing traders, and
-   with one trader on several wallets, volume timed to price, and coordinated groups. Pass criterion unchanged: no
+   with one trader on several wallets, volume timed to the conversion rate, and coordinated groups. Pass criterion unchanged: no
    zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their proportional
    share.
 3. Holding factor: measure selling by miners at factor 1 against factor 0 on testnet.
@@ -415,11 +429,17 @@ operator's. Paying tokens for trading activity is subject to legal review in the
 
 ## 9. Roadmap
 
-Done: the scoring library with its tests, the validator with its store and interface, the binding flow, the
-burn measurement on a local chain, the replay harness, and a test-network subnet with a running validator. Next:
-real traders bound on the test network for at least a month, the holding and TAO-side measurements from that
-period, and the operator's builder fee switched on. Mainnet: only after the verification list above is complete
-and published, and with the parameters that the test-network period supports.
+Done: the scoring library with its tests, the validator with its store and interface, the binding flow, the burn
+measurement on a local chain, the replay harness, and a test-network subnet with a running validator.
+
+Next: real traders bound on the test network for at least a month, the holding and TAO-side measurements from
+that period, the operator's builder fee switched on, and then mainnet, only after the verification list above is
+complete and published, with the parameters the test-network period supports.
+
+Beyond the subnet itself, Kokoah's platform keeps adding AI assistance so that trading is easier for everyone,
+which grows the number of traders the subnet verifies and the revenue it returns to the network. The long-term
+direction is trading by AI agents on the platform, scored by the same mechanism and verified from the same public
+data; that is a direction for later versions, not a feature of this one.
 
 ## 10. References
 
@@ -440,17 +460,15 @@ and published, and with the parameters that the test-network period supports.
 
 ### Appendix A. Worked example
 
-A young subnet: 2,376 alpha a day at $5.33 (a pool worth $12,667). Fees today $2,000 on $8M of volume. Two miners,
-equal volume of $4M, all taker at the base tier, smoothed credit $1,000 each, total fees on the builder leg $2,800
-each. Miner A has strong skill and holds everything (multiplier 1.0); miner B has no skill and sold everything
-(0.85). Shares would be 1,284 and 1,092 alpha. Caps: min(2 × 1,000, 0.75 × 2,800) = $2,000, times the multiplier,
-at $5.33: 375 and 319 alpha. Pay: 375 ($2,000) and 319 ($1,700). Burned: 1,682 alpha, 71% of the pool, so the
-subnet's TAO share next tempo is scaled by 0.29. Same volume, pay within 15%; total pay $3,700 against $2,000 of
-fees, covered if the two keep at least 46% of it.
+A young subnet: fees today $2,000 on $8M of volume, and a daily miner pool worth far more than the sum of the caps.
+Two miners, equal volume of $4M, all taker at the base tier, smoothed credit $1,000 each, total fees on the
+builder leg $2,800 each. Miner A has strong skill and holds everything (multiplier 1.0); miner B has no skill and
+sold everything (0.85). Caps: min(2 × 1,000, 0.75 × 2,800) = $2,000, times the multiplier: A is paid alpha worth
+$2,000 and B alpha worth $1,700; the rest of the pool is burned. Same volume, pay within 15%; total pay $3,700
+against $2,000 of fees collected, covered if the two keep at least 46% of it.
 
-A busy subnet: fees $87,700 a day on $350M of volume. The sum of caps (about 16,450 alpha) exceeds the pool;
-nothing is burned; the pool works as a volume rebate returning about 14% of fees, with shares within 15% for equal
-volume.
+A busy subnet: fees $87,700 a day on $350M of volume. The sum of caps exceeds the pool; nothing is burned; the
+pool works as a volume rebate returning about 14% of fees, with shares within 15% for equal volume.
 
 ### Appendix B. Daily procedure of a validator
 
@@ -458,7 +476,7 @@ volume.
 2. For each bound address: fetch public fills for the total fee field, account value and ledger for returns and
    flows, and chain state for stake; apply cluster, mark and mirror exclusions.
 3. Update smoothed credit, smoothed total fees and skill; compute holding, gates, multiplier.
-4. Compute shares, caps in alpha at the day's mean price, pay, and the burn remainder.
+4. Compute shares, caps in alpha at the day's mean rate, pay, and the burn remainder.
 5. Publish the per-miner artifacts; set weights (miners by pay, the remainder to the owner hotkey) every tempo until
    the next run.
 
@@ -487,7 +505,7 @@ totals over all days), `/summary` (alpha paid and burned, builder fees, paid-to-
 
 - **1.0 (2026-10-20).** Mechanism v5.8. Since draft 0.9: the builder fee is confirmed to be charged on maker fills
   (one rate on every order), so maker and taker fills earn the same credit; the 60-second timing rule for mirrored
-  fills is replaced by the exact counterparty rule; the cap price is the day's mean pool price; the holding factor
+  fills is replaced by the exact counterparty rule; the conversion rate is the day's mean pool rate; the holding factor
   reads the day's minimum stake; burning through the owner hotkey measured on a local chain; validator, binding
   flow and interface implemented and running on a test network.
 - **0.9 (2026-10-20).** First public draft.
