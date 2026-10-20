@@ -36,8 +36,8 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
 ## 1. Chain facts used
 
 - Blocks 12 s; tempo 360 blocks = 72 min. Validators set weights every tempo; scores are recomputed once a day.
-- Emission `E = 7,200` alpha per day, split `miner_slot = 0.33` (`A = 2,376` alpha a day), `owner_slot = 0.33`,
-  `validator_slot = 0.34` (validators and their stakers; outside this mechanism). The owner's share is locked into
+- Emission `E = 7,200` alpha per day, split `miner_slot = 0.41` (`A = 2,952` alpha a day), `owner_slot = 0.18`,
+  `validator_slot = 0.41` (validators and their stakers; outside this mechanism). The chain allows owner ≤ 0.33, miner ≥ 0.33, validator ≤ 0.50. The owner's share is locked into
   conviction only when `owner_cut_auto_lock_enabled` is on (default off). **Policy: on**, so the owner never sells
   into its own buyback.
 - Alpha pool: constant product, `price = tao_reserve / alpha_reserve` (TAO per alpha). Alpha emission to
@@ -266,20 +266,19 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
 | mark clip | 0.5% |
 | migration | once per 60 days, signed by old address, new address and hotkey; credit, skill and target carry over |
-| emission split | miner 33%, owner 33% (locked), validators 34% |
+| emission split | miner 41%, owner 18% (locked), validators 41% (owner, 2026-10-20; the chain's default) |
 
 ## 13. Worked examples
 
-**Young subnet.** `A = 2,376` alpha at $5.33 (pool $12,667); fees today $2,000 (volume $8M). Two miners, equal
+**Young subnet.** `A = 2,952` alpha at $5.33 (pool $15,734); fees today $2,000 (volume $8M). Two miners, equal
 volume $4M, 100% taker at tier 0, `Φ̂ = $1,000` each, total fees on the leg $2,800 each. Miner A: strong skill and
-holds everything, `M = 1.0`; miner B: no skill, sold everything, `M = 0.85`. Shares: A 1,284 alpha, B 1,092.
+holds everything, `M = 1.0`; miner B: no skill, sold everything, `M = 0.85`. Shares: A 1,596 alpha, B 1,356.
 Caps: `min(2 × 1,000, 0.75 × 2,800) = min(2,000, 2,100) = $2,000` times `M`: A 2,000 / 5.33 = 375 alpha, B
-0.85 × 2,000 / 5.33 = 319. Pay: A 375 ($2,000), B 319 ($1,700); burned 1,682 alpha (71% of the pool, so the
-subnet's TAO share next tempo is scaled by 0.29). Same volume, pay within 15%, total pay $3,700 against $2,000 of
+0.85 × 2,000 / 5.33 = 319. Pay: A 375 ($2,000), B 319 ($1,700); burned 2,258 alpha (76% of the pool). Same volume, pay within 15%, total pay $3,700 against $2,000 of
 fees collected: covered if the two keep at least 46% of it.
 
 **Busy subnet.** Fees $87,700 a day (volume $350M). Σ caps ≈ 16,450 alpha > `A`: every share is below its cap,
-nothing is burned, the pool is a volume rebate paying about 14% of fees back, shares within 15% for equal volume.
+nothing is burned, the pool is a volume rebate paying about 18% of fees back, shares within 15% for equal volume.
 
 ## 14. Account switching and migration
 

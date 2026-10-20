@@ -25,7 +25,7 @@ ALPHA = 0.3  # daily smoothing weight of today
 C_MAX = 2.0
 C_TOT = 0.75
 M_MIN, W_S, W_H = 0.85, 0.05, 0.10
-A_POOL = 7200 * 0.33  # alpha a day for miners
+A_POOL = 7200 * 0.41  # alpha a day for miners (split owner 18 / validators 41 / miners 41)
 
 # Hyperliquid perps fee schedule, bps a side, tiers 0..6 (docs read 2026-10-19); maker tiers 4+ are rebates
 TAKER_TIERS = [4.5, 4.0, 3.5, 3.0, 2.8, 2.6, 2.4]

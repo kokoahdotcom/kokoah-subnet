@@ -56,7 +56,7 @@ class Params:
     mirror_zero_days: int = 30
     # chain (section 1)
     daily_emission_alpha: float = 7200.0
-    miner_slot: float = 0.33
+    miner_slot: float = 0.41  # owner 0.18, validators 0.41, miners 0.41 (owner, 2026-10-20; the chain's default)
     price_samples: int = 20
 
     def __post_init__(self) -> None:

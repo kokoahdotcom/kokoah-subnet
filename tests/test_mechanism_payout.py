@@ -11,12 +11,12 @@ def test_worked_example_young_subnet() -> None:
     a = MinerDay("A", phi_hat=1000.0, fee_hat=2800.0, multiplier=1.0)
     b = MinerDay("B", phi_hat=1000.0, fee_hat=2800.0, multiplier=0.85)
     alloc = allocate([a, b], PRICE, DEFAULT)
-    assert round(alloc.shares["A"]) == 1284
-    assert round(alloc.shares["B"]) == 1092
+    assert round(alloc.shares["A"]) == 1596
+    assert round(alloc.shares["B"]) == 1356
     assert round(alloc.caps["A"]) == 375
     assert round(alloc.caps["B"]) == 319
     assert alloc.pays["A"] == alloc.caps["A"] and alloc.pays["B"] == alloc.caps["B"]
-    assert round(alloc.burn_alpha) == 1682
+    assert round(alloc.burn_alpha) == 2258
     assert alloc.pays["A"] * PRICE == pytest.approx(2000.0)
     assert alloc.pays["B"] * PRICE == pytest.approx(1700.0)
 

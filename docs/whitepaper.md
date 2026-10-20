@@ -182,8 +182,8 @@ lose their rate bonus for 30 days and are reported.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; rate 0.85 + 0.05 skill + 0.10 holding; caps 2× the fee
 credit and 0.75× the total fees on the builder leg; skill windows 60 and 30 days; holding window 60 days; gates
-10 round trips, 7 days, $500; mirror thresholds 25% and 50%; migration once per 60 days; emission split miner 33%,
-owner 33% (locked), validators 34%. Changes follow section 7.
+10 round trips, 7 days, $500; mirror thresholds 25% and 50%; migration once per 60 days; emission split miner 41%,
+owner 18% (locked), validators 41%. Changes follow section 7.
 
 ## 5. Why fake volume loses
 
@@ -254,7 +254,7 @@ published for information.
 move engineered at the scoring block would change the alpha cap by 43% at a single-block rate and by 1.5% at the
 mean; holding the rate there for a whole day against everyone else is not a cheap manipulation.
 
-**The owner's share.** The owner's 33% of emission is locked by enabling the chain's `owner_cut_auto_lock_enabled`
+**The owner's share.** The owner's 18% of emission is locked by enabling the chain's `owner_cut_auto_lock_enabled`
 hyperparameter, so the operator never sells into its own buyback.
 
 ## 7. What the operator cannot do
@@ -372,7 +372,7 @@ verified from the same public data; that is a direction for later versions, not 
 Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` carrying the builder code, `n_f` its
 notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker), `fee_f` the fill's total fee
 field (the exchange's fee plus the builder fee; a maker rebate makes the exchange's part negative). `A` is the
-day's miner emission (33% of 7,200 alpha, 2,376 alpha). `p_d` is the day's conversion rate from dollars to alpha:
+day's miner emission (41% of 7,200 alpha, 2,952 alpha). `p_d` is the day's conversion rate from dollars to alpha:
 the mean pool rate (TAO per alpha) sampled at every tempo boundary of the day, times the day's mean TAO/USD mark.
 
 ```
@@ -422,7 +422,7 @@ alpha worth $1,700; the rest of the pool is destroyed. Same volume, pay within 1
 $2,000 of fees collected, covered if the two keep at least 46% of it.
 
 A busy subnet: fees $87,700 a day on $350M of volume. The sum of caps exceeds the pool; nothing is destroyed; the
-pool works as a volume rebate returning about 14% of fees, with shares within 15% for equal volume.
+pool works as a volume rebate returning about 18% of fees, with shares within 15% for equal volume.
 
 ### Appendix C. A validator's day
 
@@ -461,7 +461,8 @@ leaderboard page).
 
 ### Appendix F. Changelog
 
-- **1.1 (2026-10-20).** Restructured for readers who are not engineers: summary and key facts, two figures, a
+- **1.1 (2026-10-20).** Emission split set to owner 18%, validators 41%, miners 41% (the chain's default; the
+  miner pool is 2,952 alpha a day). Restructured for readers who are not engineers: summary and key facts, two figures, a
   section per role, the pay rule in prose with the formulas moved here, what the operator cannot do, growth
   stages. Mechanism unchanged (v5.8).
 - **1.0 (2026-10-20).** Mechanism v5.8. Since draft 0.9: the builder fee is confirmed to be charged on maker fills
