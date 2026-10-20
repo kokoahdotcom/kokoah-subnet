@@ -27,6 +27,20 @@ scripts/localnet.sh stop
 
 `scripts/check.sh` runs the same steps as CI: ruff (lint and format), mypy and the offline tests.
 
+## Scoring a day offline
+
+```bash
+uv run kokoah-subnet verify                                  # the specification's numerical checks
+uv run kokoah-subnet score-day --fills 20261020.csv.lz4 --miners miners.json --state state.json \
+    --price-usd 5.33 --day-index 1 --owner-hotkey <owner hotkey ss58> --out day.json
+```
+
+`--fills` is Hyperliquid's per-builder daily file (or a plain CSV with the same header); `miners.json` is a list of
+`{hotkey, address, returns, mean_equity_usd, staked_min_alpha, collateral_min_alpha}`; the state file carries the
+smoothed values from day to day. The result lists every miner's credit, factors, multiplier, share, cap and pay, the
+burn, and the weight fractions (miners by pay, the burn to the owner hotkey). The same code path runs in the
+validator against live data.
+
 Networks: `local` (Docker, throwaway, pre-funded Alice account), `test` (Bittensor testnet, test TAO without value),
 `finney` (mainnet, real TAO; nothing is sent there without the owner's go-ahead).
 
@@ -36,7 +50,8 @@ Networks: `local` (Docker, throwaway, pre-funded Alice account), `test` (Bittens
 docs/                 whitepaper.md, design/ (specification, plain-words summary), research/ (dated notes)
 sim/                  index.html, an interactive model of pay, caps, burn, revenue and buyback
 scripts/              localnet.sh (Docker chain), check.sh (CI steps), verify_mechanism.py, sim_*.py, git-hooks/
-src/kokoah_subnet/    the package: cli.py, chain.py (read-only chain facts)
+src/kokoah_subnet/    cli.py, chain.py (read-only chain facts), mechanism/ (the scoring, pure functions),
+                      validator/ (Hyperliquid client, builder file, chain reads and weights, day runner)
 tests/                offline tests (no network)
 ```
 
