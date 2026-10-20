@@ -317,8 +317,9 @@ honest traders by coincidence. Two independent validators on the test network sc
 file hash and identical weights. On a local chain: directing most of the miner pool to one hotkey and
 burning it leaves alpha emission to everyone else unchanged. On a test-network subnet with the real public data:
 the per-builder daily file is fetchable by anyone for the operator's builder address, bindings publish and resolve
-on chain, the validator scores complete days into its record and submits weights. The verification script, the
-simulations and the chain measurements are in the repository.
+on chain, the validator scores complete days into its record and submits weights; the chain paid the whole
+unawarded pool of an epoch to the burn hotkey, and the operator's burn process destroyed it with one `burn_alpha`
+transaction. The verification script, the simulations and the chain measurements are in the repository.
 
 **Before mainnet.**
 

@@ -298,7 +298,9 @@ over 105 fee cases and the closed-form bound; cumulative backing on 200 random p
 the skill calibration; on the local chain, incentive aimed at the owner hotkey is withheld and alpha emission to
 the other participants is unchanged (§1); `scripts/replay.py --real` over a month of recorded public fills of four
 active accounts (one with 15,471 fills) beside the synthetic attackers: all cheats negative, real accounts paid
-proportionally; two independent validators on testnet 385 produced identical weights for the same day.
+proportionally; two independent validators on testnet 385 produced identical weights for the same day; the first
+full burn cycle ran on testnet 385 (weights to the burn hotkey → the chain paid it the epoch's unawarded pool,
+147.6 alpha → `burn_alpha` destroyed 147.59 alpha, leaving the dust floor).
 
 Before launch:
 
