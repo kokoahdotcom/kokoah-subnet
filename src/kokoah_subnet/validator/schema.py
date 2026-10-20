@@ -292,6 +292,22 @@ epoch_neurons = Table(
     Column("collateral_min", Float),
 )
 
+# the subnet's own emission counters at each epoch (the TAO side of the burn question, measured over time)
+subnet_epochs = Table(
+    "subnet_epochs",
+    metadata,
+    Column("block", BigInteger, primary_key=True),
+    Column("at", DateTime(timezone=True), nullable=False),
+    Column("tao_in_emission", Float),  # TAO injected into the pool per block
+    Column("alpha_in_emission", Float),
+    Column("alpha_out_emission", Float),  # alpha to participants per block
+    Column("subnet_tao", Float),  # pool TAO reserve
+    Column("subnet_alpha_in", Float),  # pool alpha reserve
+    Column("subnet_alpha_out", Float),  # alpha in circulation (staked + liquid)
+    Column("miner_burned", Float),  # the chain's MinerBurned fraction
+    Column("emission_enabled", Boolean),
+)
+
 # one row per hotkey ever seen on the subnet: who it is, when it registered, when it was bound and paid
 miners = Table(
     "miners",

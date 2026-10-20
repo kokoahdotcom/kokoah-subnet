@@ -20,6 +20,7 @@ from kokoah_subnet.binding import AcceptedBinding
 from kokoah_subnet.mechanism import MinerState
 
 from . import schema as S
+from .migrations import apply_migrations
 
 
 def _now() -> datetime:
@@ -38,6 +39,8 @@ class Store:
         self.url = url
         self._engine: Engine = create_engine(url, future=True)
         S.metadata.create_all(self._engine)
+        with self._engine.begin() as c:
+            self.migrations_applied = apply_migrations(c, self.is_postgres)
 
     def close(self) -> None:
         self._engine.dispose()
@@ -429,6 +432,12 @@ class Store:
             for r in rows:
                 c.execute(insert(S.epoch_neurons).values(block=int(block), **dict(r)))
         return True
+
+    def put_subnet_epoch(self, block: int, **fields: Any) -> None:
+        """The subnet-level emission counters at an epoch (TAO in, alpha in and out, pool reserves, MinerBurned)."""
+        with self._engine.begin() as c:
+            c.execute(delete(S.subnet_epochs).where(S.subnet_epochs.c.block == int(block)))
+            c.execute(insert(S.subnet_epochs).values(block=int(block), at=_now(), **fields))
 
     def last_epoch_block(self) -> int | None:
         with self._engine.connect() as c:

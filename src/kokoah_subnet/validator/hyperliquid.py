@@ -6,6 +6,7 @@ Never signs, never trades, never touches `/exchange`. Every call is a POST of a 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -17,34 +18,77 @@ from kokoah_subnet.mechanism.fills import Fill, parse_user_fills
 MAINNET_INFO = "https://api.hyperliquid.xyz/info"
 PAGE = 2000  # fills per response; the API keeps the most recent 10,000 per address
 
+# request weights per info type (the exchange budgets 1,200 weight per minute per address; documented values,
+# unknown types count 20)
+WEIGHTS: dict[str, int] = {
+    "metaAndAssetCtxs": 20,
+    "clearinghouseState": 2,
+    "userFees": 20,
+    "userFillsByTime": 20,
+    "userNonFundingLedgerUpdates": 20,
+    "subAccounts": 2,
+}
+
+
+class RateLimiter:
+    """A sliding one-minute budget of request weight, shared by concurrent requests."""
+
+    def __init__(self, budget_per_minute: int = 1000) -> None:
+        self._budget = budget_per_minute
+        self._spent: list[tuple[float, int]] = []
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, weight: int) -> None:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                self._spent = [(t, w) for t, w in self._spent if now - t < 60]
+                used = sum(w for _, w in self._spent)
+                if used + weight <= self._budget:
+                    self._spent.append((now, weight))
+                    return
+                wait = 60 - (now - self._spent[0][0]) + 0.05 if self._spent else 1.0
+            await asyncio.sleep(max(0.05, wait))
+
 
 class HyperliquidInfo:
-    """Thin async client with retries. `rate_limit_s` spaces requests so a validator stays well inside the
-    public limits."""
+    """Async client with retries, a weight-aware rate limiter and bounded concurrency, so a validator with hundreds
+    of bound traders stays inside the public limits and still finishes quickly."""
 
-    def __init__(self, url: str = MAINNET_INFO, timeout_s: float = 30.0, rate_limit_s: float = 0.25) -> None:
+    def __init__(
+        self,
+        url: str = MAINNET_INFO,
+        timeout_s: float = 30.0,
+        rate_limit_s: float = 0.0,
+        budget_per_minute: int = 1000,
+        concurrency: int = 6,
+    ) -> None:
         self._url = url
         self._client = httpx.AsyncClient(timeout=timeout_s)
         self._gap = rate_limit_s
-        self._lock = asyncio.Lock()
+        self._limiter = RateLimiter(budget_per_minute)
+        self._sem = asyncio.Semaphore(concurrency)
 
     async def close(self) -> None:
         await self._client.aclose()
 
     async def post(self, body: Mapping[str, Any], attempts: int = 4) -> Any:
         last: Exception | None = None
+        weight = WEIGHTS.get(str(body.get("type")), 20)
         for attempt in range(attempts):
-            async with self._lock:
+            await self._limiter.acquire(weight)
+            async with self._sem:
                 try:
                     r = await self._client.post(self._url, json=dict(body))
                     if r.status_code == 429 or r.status_code >= 500:
                         raise httpx.HTTPStatusError(f"status {r.status_code}", request=r.request, response=r)
                     r.raise_for_status()
-                    await asyncio.sleep(self._gap)
+                    if self._gap:
+                        await asyncio.sleep(self._gap)
                     return r.json()
                 except (httpx.HTTPError, ValueError) as exc:
                     last = exc
-                    await asyncio.sleep(self._gap * (2**attempt))
+            await asyncio.sleep(max(self._gap, 0.5) * (2**attempt))
         raise RuntimeError(f"info request failed after {attempts} attempts: {last}")
 
     async def fills_by_time(self, user: str, start_ms: int, end_ms: int) -> list[Fill]:

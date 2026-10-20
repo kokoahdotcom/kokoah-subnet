@@ -177,3 +177,33 @@ def test_score_day_command(tmp_path: Path) -> None:
 def test_cli_parses_new_commands() -> None:
     args = build_parser().parse_args(["verify"])
     assert args.command == "verify"
+
+
+async def test_rate_limiter_enforces_the_budget() -> None:
+    import time
+
+    from kokoah_subnet.validator.hyperliquid import RateLimiter
+
+    limiter = RateLimiter(budget_per_minute=50)
+    t0 = time.monotonic()
+    for _ in range(2):
+        await limiter.acquire(20)  # 40 of 50 used at once
+    assert time.monotonic() - t0 < 0.5
+    # the third request of weight 20 does not fit in the minute; the limiter waits (we only check it does not pass)
+    import asyncio
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(limiter.acquire(20), timeout=0.3)
+    await limiter.acquire(10)  # 50 of 50 fits
+
+
+def test_migrations_record_their_version(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.migrations import STEPS, current_version
+    from kokoah_subnet.validator.store import Store
+
+    s = Store(tmp_path / "m.sqlite")
+    assert len(s.migrations_applied) == len(STEPS)
+    with s._engine.connect() as c:
+        assert current_version(c) == STEPS[-1][0]
+    again = Store(tmp_path / "m.sqlite")
+    assert again.migrations_applied == []

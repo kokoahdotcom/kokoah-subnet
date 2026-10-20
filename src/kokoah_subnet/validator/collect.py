@@ -8,6 +8,7 @@ chain sample, every commitment seen, every refused binding and every error.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import asdict, dataclass, field
@@ -224,7 +225,9 @@ async def collect_and_score(
     miners: list[MinerInputs] = []
     errors: dict[str, str] = {}
     rates_of: dict[str, tuple[float, float]] = {}
-    for hk, address in address_of_hotkey.items():
+    edge_lists: dict[str, list[tuple[str, str, str]]] = {}
+
+    async def one(hk: str, address: str) -> None:
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
             own = match_total_fees(fills_by_address.get(address, []), public)
@@ -257,8 +260,9 @@ async def collect_and_score(
             window_start = start_ms - params.gate_days * 86_400_000
             subs = set(await sub_accounts(hl, address))
             partners = await transfer_partners(hl, address, window_start, end_ms)
-            edges.extend((address, other, "subaccount") for other in subs)
-            edges.extend((address, other, "transfer") for other in partners - subs)
+            edge_lists[address] = [(address, o, "subaccount") for o in subs] + [
+                (address, o, "transfer") for o in partners - subs
+            ]
             stakes = await stake_samples(client, cfg.netuid, coldkey_of[hk], hk, blocks)
             store.put_stake_samples(day, hk, stakes)
             staked = min((v for _, v in stakes), default=0.0)
@@ -266,7 +270,7 @@ async def collect_and_score(
             log.warning("skipping %s (%s) for %s: %s", hk, address, day, exc)
             errors[hk] = str(exc)[:200]
             store.put_error(day, hk, address, "collect", str(exc))
-            continue
+            return
         miners.append(
             MinerInputs(
                 hotkey=hk,
@@ -280,6 +284,11 @@ async def collect_and_score(
                 active_days_window=active_window,
             )
         )
+
+    await asyncio.gather(*(one(hk, a) for hk, a in address_of_hotkey.items()))
+    miners.sort(key=lambda m: m.hotkey)
+    for lst in edge_lists.values():
+        edges.extend(lst)
     addresses = list(address_of_hotkey.values())
     cluster_of = clusters(addresses, [(a, b) for a, b, _ in edges])
     store.put_clusters(day, cluster_of, edges)

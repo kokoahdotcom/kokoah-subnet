@@ -1,0 +1,58 @@
+"""Schema migrations: `create_all` adds new tables but never changes existing columns, so every change to a column
+is a numbered step here, applied once per database (the step number is kept in `meta` under `schema_version`).
+Steps must be idempotent on both PostgreSQL and SQLite (SQLite ignores what it cannot do; it is only for tests)."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+Step = Callable[[Connection, bool], None]
+
+
+def _pg(sql: str) -> Step:
+    def run(c: Connection, is_postgres: bool) -> None:
+        if is_postgres:
+            c.execute(text(sql))
+
+    return run
+
+
+STEPS: list[tuple[int, str, Step]] = [
+    (
+        1,
+        "fills.side widened to 8 chars (Bid/Ask in the builder file)",
+        _pg("ALTER TABLE fills ALTER COLUMN side TYPE varchar(8)"),
+    ),
+    (2, "fills.counterparty widened to 64 chars", _pg("ALTER TABLE fills ALTER COLUMN counterparty TYPE varchar(64)")),
+    (
+        3,
+        "fills: no uniqueness (identical rows occur), index on day + address",
+        _pg(
+            "ALTER TABLE fills DROP CONSTRAINT IF EXISTS uq_fill; "
+            "CREATE INDEX IF NOT EXISTS ix_fills_day_address ON fills (day, address)"
+        ),
+    ),
+]
+
+
+def current_version(c: Connection) -> int:
+    row = c.execute(text("SELECT value FROM meta WHERE key = 'schema_version'")).first()
+    return int(row[0]) if row else 0
+
+
+def apply_migrations(c: Connection, is_postgres: bool) -> list[str]:
+    """Apply the steps above the stored version, in order; returns what was applied."""
+    done: list[str] = []
+    version = current_version(c)
+    for number, title, step in STEPS:
+        if number <= version:
+            continue
+        step(c, is_postgres)
+        c.execute(text("DELETE FROM meta WHERE key = 'schema_version'"))
+        c.execute(text("INSERT INTO meta (key, value) VALUES ('schema_version', :v)"), {"v": str(number)})
+        version = number
+        done.append(f"{number}: {title}")
+    return done

@@ -171,3 +171,36 @@ async def set_weights(client: Any, wallet: Any, netuid: int, uids: Sequence[int]
     """Submit weights with the SDK intent (hotkey-signed, conformed to the subnet's hyperparameters)."""
     intent = bt.SetWeights(netuid=netuid, uids=list(uids), weights=[float(v) for v in values])
     return await client.execute(intent, wallet)
+
+
+async def subnet_counters(client: Any, netuid: int) -> dict[str, Any]:
+    """The subnet's emission counters and pool reserves (raw storage reads; whole units)."""
+    from bittensor import storage as st
+
+    sub = st.SubtensorModule
+
+    async def num(item: Any) -> float:
+        try:
+            v = await client.query(item, [netuid])
+        except Exception:  # noqa: BLE001 - a missing item on an older runtime
+            return 0.0
+        if isinstance(v, dict) and "bits" in v:
+            return float(v["bits"]) / 2**64
+        if isinstance(v, bool):
+            return float(v)
+        return _alpha(v)
+
+    out: dict[str, Any] = {
+        "tao_in_emission": await num(sub.SubnetTaoInEmission),
+        "alpha_in_emission": await num(sub.SubnetAlphaInEmission),
+        "alpha_out_emission": await num(sub.SubnetAlphaOutEmission),
+        "subnet_tao": await num(sub.SubnetTAO),
+        "subnet_alpha_in": await num(sub.SubnetAlphaIn),
+        "subnet_alpha_out": await num(sub.SubnetAlphaOut),
+        "miner_burned": await num(sub.MinerBurned),
+    }
+    try:
+        out["emission_enabled"] = bool(await client.query(("SubtensorModule", "SubnetEmissionEnabled"), [netuid]))
+    except Exception:  # noqa: BLE001
+        out["emission_enabled"] = None
+    return out

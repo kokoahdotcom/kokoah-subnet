@@ -16,7 +16,7 @@ from kokoah_subnet import __version__
 from kokoah_subnet.mechanism import DEFAULT, SPEC_VERSION, Params
 
 from .builder_feed import NotPublished
-from .chain import set_weights, snapshot, weights_by_uid
+from .chain import set_weights, snapshot, subnet_counters, weights_by_uid
 from .collect import ValidatorConfig, collect_and_score
 from .hyperliquid import HyperliquidInfo
 from .store import Store
@@ -68,6 +68,10 @@ async def step(
     if last_epoch is None or snap.block // max(1, snap.tempo) != last_epoch // max(1, snap.tempo):
         if store.put_epoch(snap.block, step_now, snap.tempo, snap.price_tao, [n.as_row() for n in snap.neurons]):
             report["epoch"] = {"block": snap.block, "uids": len(snap.neurons)}
+            try:
+                store.put_subnet_epoch(snap.block, **(await subnet_counters(client, cfg.netuid)))
+            except Exception as exc:  # noqa: BLE001 - the counters are a record, not an input
+                log.warning("subnet counters not recorded: %s", exc)
             emission = store.emission_totals()
             store.upsert_miners(
                 [
