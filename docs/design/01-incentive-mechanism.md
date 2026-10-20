@@ -1,4 +1,4 @@
-# Incentive mechanism, version 5 (summary; the formulas are in 02-mechanism-spec.md)
+# Incentive mechanism, version 5.1 (summary; the formulas are in 02-mechanism-spec.md)
 
 Date: 2026-10-20. Status: proposal for the owner's review. Version 3.1 (owner's decision): similar volume means
 similar pay; skill and holding move a miner's rate only within 0.85 to 1.0 times, so anyone can trade without fear,
@@ -10,11 +10,11 @@ pressure" through fee level, holding and emission split) stands. Versions 0 and 
 their cheat pricing is kept in `scripts/sim_incentives.py`; the skill-score comparison is `scripts/sim_skill.py`. Research: `docs/research/02` (platform), `03` (other trading subnets), `04`
 (what Kokoah has), `05` (reward-design precedents).
 
-> **Version 5 (2026-10-20) is the current design; the formulas are in `02-mechanism-spec.md`.** The whole miner
-> pool is granted by volume with a multiplier between 0.85 and 1.0 (skill and holding 7.5% each); the part of a
-> miner's grant above the Kokoah fee it paid goes to a vault and unlocks at 0.5 alpha-dollars per dollar of new
-> fees, so farms cannot monetize it and liquid supply is at most 1.5 × the day's fees; a coverage figure (buyback
-> over selling) is published daily. Windows 60/30 days, 70/30 daily smoothing, Kokoah-only counting, 10-minute
+> **Version 5.1 (2026-10-20) is the current design; the formulas are in `02-mechanism-spec.md`.** The miner pool
+> is shared by volume with a multiplier between 0.85 and 1.0 (skill and holding 7.5% each); each miner's pay is
+> capped at its multiplier times the Kokoah fee it paid, and the pool above the sum of caps is burned the same day
+> (owner's decision), so farms cannot profit at any pool size and the buyback covers everything paid even if all
+> of it is sold; a coverage figure (buyback over selling) is published daily. Windows 60/30 days, 70/30 daily smoothing, Kokoah-only counting, 10-minute
 > holding-time weighting, position-correlation mirror rule. The sections below describe v3.1 and stay for history.
 
 ## 1. What the subnet is
