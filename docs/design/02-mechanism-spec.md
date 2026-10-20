@@ -1,11 +1,10 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.2, 2026-10-20)
+# Kokoah subnet incentive mechanism: complete specification (v5.3, 2026-10-20)
 
-Self-contained. Every symbol is defined here. Changes from v5.1 (after the second external review): the buyback
-runs on the same 70/30 schedule as the fee credit from a fee reserve, so daily pay is matched by the same day's
-buyback and a global cap enforces it; the turnover cap and the 10-minute holding-time weighting are removed (the
-fee-backed cap makes them unnecessary, and they punished real scalpers and market makers); two coverage figures
-(miner-only and whole-subnet); a burn-impact verification; a pre-launch adversarial test matrix; leaderboard
-metrics for capital and execution.
+Self-contained. Every symbol is defined here. v5.3 (owner, 2026-10-20): the buyback runs whenever the owner
+decides (every two or three weeks is fine), so there is no daily matching rule and no reserve schedule; what the
+design guarantees is cumulative: the alpha paid to miners is never worth more than the fees collected. Validator
+emissions and outside demand are out of scope. The turnover cap and the 10-minute holding-time weighting are
+removed (the fee-backed cap makes them unnecessary and they punished real scalpers and market makers).
 
 ## 0. Purpose and intention
 
@@ -15,14 +14,13 @@ chain state, each miner's share of the daily miner emission. Kokoah collects the
 and spends it buying back the subnet's token (alpha). The intention: maximum trading volume through Kokoah;
 similar volume, similar pay; skill and holding a small nudge (two traders with equal volume differ by at most 15%,
 one perfect at both, the other worst at both); no miner ever paid more than the fee-backed amount, the rest
-burned; every day's pay matched by the same day's buyback; no cheat that lets sell pressure outrun revenue.
+burned; and no cheat that lets what miners can sell outrun what the fees can buy back.
 
 ## 1. Chain facts used
 
 - Blocks 12 s; tempo 360 blocks = 72 min. Validators set weights every tempo; scores are recomputed once a day.
 - Emission `E = 7,200` alpha per day, split `miner_slot = 0.33` (`A = 2,376` alpha a day), `owner_slot = 0.33`
-  (auto-locked, never sold), `validator_slot = 0.34` (validators and their stakers; outside this mechanism but
-  counted in the whole-subnet coverage, §10).
+  (auto-locked, never sold), `validator_slot = 0.34` (validators and their stakers; outside this mechanism).
 - Alpha pool: constant product, `price = tao_reserve / alpha_reserve` (TAO per alpha).
 - Registration: burn plus a minimum collateral in alpha locked on the hotkey (owner-set).
 - **Burning:** weight sent to the subnet owner's hotkey is burned (or recycled, `recycle_or_burn`). The chain
@@ -38,11 +36,12 @@ burned; every day's pay matched by the same day's buyback; no cheat that lets se
 | `f` | a fill of miner `i` carrying the Kokoah builder code; `n_f` notional (USD), `t_f` 1 if taker, `b_f = n_f × fee` the builder fee | |
 | `fee` | builder fee rate per fill | 0.00025 (0.025%) |
 | `c_m` | maker fee credit (taker is 1.0) | 0.4 |
-| `α` | daily smoothing weight of today's value, for credit, skill, revenue and buyback | 0.3 |
+| `α` | daily smoothing weight of today's value, for credit and skill | 0.3 |
 | `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
 | `p_d` | alpha price in USD on day `d` = pool price (TAO) × TAO/USD mark from the node | |
 | `g'_i`, `h'_i` | skill and holding factors, both in [0, 1] | |
 | `c_max` | pay cap as a multiple of the multiplier-scaled Kokoah fee credit | 1.0 |
+| `w_s`, `w_h` | weights of skill and holding in the multiplier; `m_min = 1 − w_s − w_h` is its floor | 0.05, 0.10 |
 
 ## 3. What counts, and what never counts
 
@@ -81,7 +80,7 @@ dollar of fees is counted exactly once. Scalpers and market makers earn credit o
 ## 5. The share: by volume, within 0.85 to 1.0
 
 ```
-M_i,d     = 0.85 + 0.075 × g'_i,d + 0.075 × h'_i,d        the rate multiplier, in [0.85, 1.0]
+M_i,d     = m_min + w_s × g'_i,d + w_h × h'_i,d           the rate multiplier, in [m_min, 1]; 0.85 + 0.05 g' + 0.10 h'
 score_i,d = Φ̂_i,d × M_i,d
 share_i,d = A × score_i,d / Σ_j score_j,d                 the miner's proportional share of the day's pool
 ```
@@ -94,8 +93,6 @@ the volume gets about twice as much. The share is linear in fees with bounded mu
 ```
 cap_i,d   = c_max × M_i,d × Φ̂_i,d / p_d                 alpha worth the miner's Kokoah fee credit times its multiplier
 pay_i,d   = min( share_i,d , cap_i,d )                    per-miner cap
-Σ_i pay_i,d × p_d ≤ buyback_d                             global cap: today's pay never exceeds today's buyback (§10);
-                                                          if it would, every pay_i,d is scaled down by the same factor
 burn_d    = A − Σ_i pay_i,d                               weight to the owner's hotkey: burned
 ```
 
@@ -105,8 +102,9 @@ What this does:
   subnet): everyone gets their cap, 85% to 100% of the Kokoah fee they paid. The 15% rule holds in both regimes.
 - **Farms cannot profit at any pool size.** Income per round trip is at most `c_max × M ×` the credited builder
   fee; the unavoidable cost is Hyperliquid's fees on both legs plus the builder fee (§11).
-- **Every day's pay is matched by the same day's buyback.** The per-miner caps sum to at most `c_max × Σ Φ̂`, and
-  the buyback spends exactly the smoothed revenue (§10); the global cap makes it a rule, not a consequence.
+- **Pay never outruns fees.** The caps sum to at most `c_max × Σ Φ̂`, and the smoothing weights sum to 1, so up to
+  any day the alpha paid is worth at most `c_max ×` the fees collected so far. The buyback can run on any cadence
+  the owner chooses and still covers everything ever paid (at `c_max = 1`).
 - **Nothing is hoarded.** The excess is burned the same day.
 
 ## 7. Skill factor `g'` (windows 60 and 30 days, smoothed)
@@ -147,30 +145,17 @@ most 7.5% by design; whether it reduces selling is measured (§10), not assumed.
 Over the last 30 days: at least 10 completed round trips, at least 7 days with a builder-code fill, mean account
 value at least $500. A miner failing a gate is paid at `M = 0.85`.
 
-## 10. Revenue, reserve, buyback and the two coverage figures
+## 10. Revenue and buyback
 
 ```
-R_d          = Σ_i Σ_f b_f                                 builder-fee revenue of the day (USD), paid into the reserve
-R̂_d          = (1 − α) × R̂_d−1 + α × R_d                   smoothed revenue, the same schedule as the credit
-buyback_d    = β × R̂_d                                     β = 1; the reserve spends 30% of itself a day, on chain, bought alpha burned
-reserve_d    = reserve_d−1 + R_d − buyback_d               never negative: Σ_t≤d buyback_t ≤ Σ_t≤d R_t by construction
-paid_d       = Σ_i pay_i,d × p_d  ≤  buyback_d             the global cap of §6
+R_d        = Σ_i Σ_f b_f                                   builder-fee revenue of the day (USD)
+Σ_{t ≤ d} paid_t  ≤  c_max × Σ_{t ≤ d} R_t                 cumulative backing, by construction (§6)
 ```
 
-Because the credit and the buyback use the same smoothing, `Σ_i Φ̂_i,d = R̂_d`: the alpha paid on a day is worth at
-most what the buyback bought that day. A day with no fees still buys back (from the reserve) exactly what it pays.
-
-Published daily on the leaderboard:
-
-```
-coverage_miner_d   = buyback_d / sold_miner_d              sold_miner_d = alpha sold by miner hotkeys that day (chain data)
-coverage_subnet_d  = buyback_d / sold_all_d                sold_all_d adds sales out of the validator slot and any other
-                                                           alpha that entered the market that day
-```
-
-`coverage_miner ≥ 1` is guaranteed even if everything paid is sold. `coverage_subnet` is not under the mechanism's
-control (validators and their stakers get 34% of emission) and is published so that the shortfall, if any, is
-visible; the owner cut is locked and sells nothing.
+The owner buys back and burns alpha with the collected fees on a cadence of their choosing (every two or three
+weeks is fine). At `c_max = 1` the fees collected up to any date are at least the value of all alpha paid out up
+to that date, so even if every paid token were sold, the fees can absorb it. A coverage figure `coverage =
+cumulative buyback / cumulative alpha sold by miner hotkeys` is published for information.
 
 ## 11. Attack accounting (per round trip of notional, bps, fee 2.5 a side, c_max = 1)
 
@@ -199,12 +184,11 @@ rest stay clearly negative; `c_max` above 1.9 would let that row turn positive, 
 |---|---|
 | builder fee | 0.025% per fill (owner) |
 | maker credit | 0.4 |
-| smoothing `α` | 0.3, for credit, skill, revenue and buyback |
-| multiplier | `0.85 + 0.075 g' + 0.075 h'` |
+| smoothing `α` | 0.3, for credit and skill |
+| multiplier | `0.85 + 0.05 g' + 0.10 h'` (floor `m_min`, weights `w_s`, `w_h`; the owner tunes the balance) |
 | pay cap `c_max` | 1.0 × multiplier × smoothed Kokoah fee credit, in alpha at the day's price (1.5 = generous) |
-| global cap | total pay of the day ≤ the day's buyback |
 | burn | the pool above the caps, same day, via the owner's hotkey (fallbacks in §1) |
-| buyback | 100% of fees into a reserve; the reserve spends 30% of itself a day, on chain |
+| buyback | the collected fees, on the owner's cadence |
 | skill windows | confidence 60 days (PSR, hurdle 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days |
 | `g'` full score | g = 0.65 |
 | return cap | ±10% a day |
@@ -217,13 +201,11 @@ rest stay clearly negative; `c_max` above 1.9 would let that row turn positive, 
 
 ## 13. Worked examples
 
-**Young subnet.** `A = 2,376` alpha at $5.33 (pool $12,667). Yesterday's fees $10,000, today's $0; the reserve
-holds $7,000 after yesterday's $3,000 buyback; today's smoothed revenue is `0.7 × 3,000 = $2,100`, today's buyback
-$2,100, the reserve falls to $4,900. Two miners, equal volume yesterday, none today, `Φ̂ = $1,050` each today.
-Miner A: strong skill and holds everything, `M = 1.0`; miner B: no skill, sold everything, `M = 0.85`. Shares: A
-1,284 alpha, B 1,092. Caps: A `1.0 × 1,050 / 5.33 = 197` alpha, B `0.85 × 1,050 / 5.33 = 167`. Pay: A 197 ($1,050),
-B 167 ($893); total $1,943 ≤ the $2,100 buyback. Burned: 2,012 alpha. Same volume, pay within 15%, and the day's
-pay is bought back the same day even though no fee came in today.
+**Young subnet.** `A = 2,376` alpha at $5.33 (pool $12,667); fees today $2,000 (volume $8M). Two miners, equal
+volume $4M, 100% taker, `Φ̂ = $1,000` each. Miner A: strong skill and holds everything, `M = 1.0`; miner B: no
+skill, sold everything, `M = 0.85`. Shares: A 1,284 alpha, B 1,092. Caps: A `1.0 × 1,000 / 5.33 = 188` alpha, B
+`0.85 × 1,000 / 5.33 = 159`. Pay: A 188 ($1,000), B 159 ($850); burned 2,029 alpha. Same volume, pay within 15%,
+total pay $1,850 against $2,000 of fees collected.
 
 **Busy subnet.** Fees $87,700 a day (volume $350M). Σ caps ≈ 16,450 alpha > `A`: every share is below its cap,
 nothing is burned, the pool is a volume rebate paying about 14% of fees back, shares within 15% for equal volume.
@@ -244,8 +226,8 @@ A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cove
    (checking collateral, gates, holding target and smoothing, which are not linear); volume timed to alpha price
    moves; coordinated groups. Pass criterion: no strategy without a trading edge nets positive at any pool size,
    and real high-volume traders are paid their proportional share.
-3. **Holding bonus.** Measure selling by miners with `h' = 1` against `h' = 0` on testnet; report, do not raise
-   the 7.5% (the 15% rule).
+3. **Holding bonus.** Measure selling by miners with `h' = 1` against `h' = 0` on testnet; report; the weights
+   stay inside the 15% rule.
 4. **Leaderboard metrics** (no effect on pay): skill `g` with its parts, managed capital (mean equity), volume,
    dollar profit, execution quality (realized slippage against the mark), holding, coverage figures.
 
@@ -254,6 +236,5 @@ A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cove
 1. Whether the builder fee is charged on maker fills (Hyperliquid docs silent; if not, maker credit is moot).
 2. Builder attribution needs node data; the public API lacks the builder address and keeps 10,000 fills per address.
 3. The alpha price for the caps: pool price at the scoring block times the node's TAO/USD mark.
-4. The reserve: fees arrive in USDC on Hyperliquid; the daily buyback path (USDC → TAO → alpha) and its
-   on-chain publication.
+4. The buyback path (USDC on Hyperliquid → TAO → alpha) and its publication.
 5. Legal review of paying tokens for trading (pending for the app).

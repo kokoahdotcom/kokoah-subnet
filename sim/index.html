@@ -71,16 +71,16 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
 </style>
 
 <div class="wrap">
-<h1>Subnet Incentive Simulator</h1>
 <p class="verdict bad" id="err" hidden style="display:block;margin-bottom:10px"></p>
-<p class="lead">Day-by-day model of the trader subnet: miners trade through the builder code, the pool of new tokens is split by fees and by size × skill × holding, miners sell a share, the builder fees buy tokens back. Change any dial or any miner and everything recomputes. Volume means the notional of fills per day; each fill pays the builder fee once.</p>
+<h1>Subnet Incentive Simulator</h1>
+<p class="lead">Design v5.3: the day's miner pool is shared by fee credit times a multiplier between the floor and 1.0 (skill and holding), each miner's pay is capped at the value of the Kokoah fee they paid times their multiplier, and the rest of the pool is burned. Fees buy tokens back on the owner's cadence. Change any dial or any miner and everything recomputes. Volume means the notional of fills per day; each fill pays the builder fee once.</p>
 
 <section class="panel">
   <div class="row" style="justify-content:space-between; margin-bottom:10px">
     <h2 style="margin:0">Dials</h2>
     <div class="row">
       <span class="hint">Scenarios:</span>
-      <button data-scn="mix">Realistic mix</button><button data-scn="wash">Wash attack</button><button data-scn="hedge">Hedge attack</button>
+      <button data-scn="mix">Realistic mix</button><button data-scn="young">Young subnet</button><button data-scn="wash">Wash attack</button><button data-scn="hedge">Hedge attack</button>
       <button data-scn="sybil">Sybil split</button><button data-scn="lottery">Lottery farm</button><button data-scn="whale">Whale dominance</button><button data-scn="holders">All honest holders</button>
     </div>
   </div>
@@ -89,23 +89,22 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
       <div class="field"><label for="taoUsd">TAO price, USD</label><input id="taoUsd" type="number" value="266.54" step="1" min="1"></div>
       <div class="field"><label for="price0">Token start price, TAO<small>SN alpha, day 1</small></label><input id="price0" type="number" value="0.02" step="0.001" min="0.0001"></div>
       <div class="field"><label for="depth">Pool depth, TAO<small>TAO reserve in the token's pool</small></label><input id="depth" type="number" value="500" step="50" min="10"></div>
-      <div class="field"><label for="stakers">Staker net buying, TAO/day<small>outside demand; negative = net selling</small></label><input id="stakers" type="number" value="0" step="1"></div>
-      <div class="field"><label for="taoIn">TAO emission to the pool, TAO/day<small>0 for a subnet below the gate</small></label><input id="taoIn" type="number" value="0" step="1" min="0"></div>
+      <div class="field"><label for="stakers">Staker net buying, TAO/day<small>outside demand; 0 to ignore</small></label><input id="stakers" type="number" value="0" step="1"></div>
+      <div class="field"><label for="days">Days to simulate</label><input id="days" type="number" value="90" step="30" min="7" max="365"></div>
     </div>
     <div class="group"><h3>Kokoah and the subnet</h3>
       <div class="field"><label for="fee">Builder fee, % per fill<small>0.025 = 2.5 bps a side; Hyperliquid max 0.1</small></label><input id="fee" type="number" value="0.025" step="0.005" min="0" max="0.1"></div>
-      <div class="field"><label for="beta">Buyback share of fees, %</label><input id="beta" type="number" value="100" step="5" min="0" max="100"></div>
-      <div class="field"><label for="minerSlot">Miner slot of emissions, %<small>chain minimum 33; owner gets 33, locked</small></label><input id="minerSlot" type="number" value="33" step="1" min="33" max="41"></div>
-      <div class="field"><label for="valSell">Validators and stakers sell, %<small>of their 34–41% slot</small></label><input id="valSell" type="number" value="20" step="5" min="0" max="100"></div>
-      <div class="field"><label for="days">Days to simulate</label><input id="days" type="number" value="90" step="30" min="7" max="365"></div>
-    </div>
-    <div class="group"><h3>Formula</h3>
-      <div class="field"><label for="lambda">λ: $1 of profit counts like $ of volume<small>profit credit = fee × λ × profit × skill × holding</small></label><input id="lambda" type="number" value="50" step="10" min="0"></div>
-      <div class="field"><label for="makerCredit">Maker fee credit<small>taker is 1.0</small></label><input id="makerCredit" type="number" value="0.4" step="0.1" min="0" max="1"></div>
-      <div class="field"><label for="mmin">Rate floor<small>a miner with no skill or nothing held earns this × the top rate</small></label><input id="mmin" type="number" value="0.85" step="0.05" min="0" max="1"></div>
-      <div class="field"><label for="gfull">Skill that reaches the top<small>g at which the multiplier is 1.0 (if all held)</small></label><input id="gfull" type="number" value="0.65" step="0.05" min="0.05" max="1"></div>
-      <div class="field"><label for="holding">Holding multiplier<small>sellers get half the skill share</small></label><input id="holding" type="checkbox" checked></div>
+      <div class="field"><label for="makerCredit">Maker fee credit<small>taker is 1.0; keep under 0.76 (market-maker rebates)</small></label><input id="makerCredit" type="number" value="0.4" step="0.05" min="0" max="1"></div>
+      <div class="field"><label for="cmax">Pay cap, × fee paid<small>1.0 = never more than the Kokoah fee; 1.5 = generous</small></label><input id="cmax" type="number" value="1" step="0.1" min="0" max="3"></div>
+      <div class="field"><label for="cadence">Buyback every N days<small>fees accumulate, then buy and burn</small></label><input id="cadence" type="number" value="14" step="1" min="1" max="90"></div>
+      <div class="field"><label for="minerSlot">Miner slot of emissions, %<small>chain minimum 33</small></label><input id="minerSlot" type="number" value="33" step="1" min="33" max="41"></div>
       <div class="field"><label for="hlTaker">Hyperliquid taker / maker, bps a side</label><div class="row" style="gap:4px"><input id="hlTaker" type="number" value="4.5" step="0.5" min="0" style="width:52px"><input id="hlMaker" type="number" value="1.5" step="0.5" min="-1" style="width:52px"></div></div>
+    </div>
+    <div class="group"><h3>Weights</h3>
+      <div class="field"><label for="floor">Multiplier floor<small>no skill, nothing held</small></label><input id="floor" type="number" value="0.85" step="0.01" min="0" max="1"></div>
+      <div class="field"><label for="ws">Skill weight<small>the rest of 1 − floor goes to holding</small></label><input id="ws" type="number" value="0.05" step="0.01" min="0" max="1"></div>
+      <div class="field"><label>Holding weight<small>computed</small></label><div class="num" id="whOut" style="font-family:var(--font-mono);text-align:right">0.10</div></div>
+      <div class="field"><label for="gfull">Skill that reaches the top<small>g at which the skill part is full</small></label><input id="gfull" type="number" value="0.65" step="0.05" min="0.05" max="1"></div>
     </div>
   </div>
 </section>
@@ -123,32 +122,31 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
   <div class="tablewrap">
   <table id="miners">
     <thead><tr>
-      <th class="l">Name</th><th class="l">Type</th><th>Volume $/day</th><th>Taker %</th><th>Skill g</th><th>Profit $/day</th><th>Sells %</th><th>Hidden leg bps</th>
-      <th>Fees to Kokoah</th><th>Fees to HL</th><th>Fee credit</th><th>Multiplier</th><th>Profit credit</th><th>Weight</th><th>Tokens/day</th><th>Earns $/day</th><th>Net cost $/day</th><th class="l">Verdict</th><th></th>
+      <th class="l">Name</th><th class="l">Type</th><th>Volume $/day</th><th>Taker %</th><th>Skill g</th><th>Holds %</th><th>Hidden leg bps</th>
+      <th>Fees to Kokoah</th><th>Fees to HL</th><th>Fee credit</th><th>Multiplier</th><th>Share α</th><th>Cap α</th><th>Pay α</th><th>Earns $/day</th><th>Net cost $/day</th><th class="l">Verdict</th><th></th>
     </tr></thead>
     <tbody></tbody>
-    <tfoot><tr><td class="l" colspan="2">Total</td><td id="tVol"></td><td></td><td></td><td id="tProfit"></td><td></td><td></td><td id="tFees"></td><td id="tHl"></td><td id="tCredit"></td><td></td><td id="tPc"></td><td>100%</td><td id="tAlpha"></td><td id="tEarn"></td><td id="tNet"></td><td class="l"></td><td></td></tr></tfoot>
+    <tfoot><tr><td class="l" colspan="2">Total</td><td id="tVol"></td><td></td><td></td><td></td><td></td><td id="tFees"></td><td id="tHl"></td><td id="tCredit"></td><td></td><td id="tShare"></td><td id="tCap"></td><td id="tPay"></td><td id="tEarn"></td><td id="tNet"></td><td class="l"></td><td></td></tr></tfoot>
   </table>
   </div>
-  <p class="note">Net cost = fees to Hyperliquid + fees to Kokoah + hidden-leg fees − value of the tokens received at the day's price. For a cheat (no real market bet) a negative net cost means the cheat profits. Hidden leg bps: the other venue's fee per side on the same notional, for hedgers (negative for a maker rebate). Skill g is the 0–1 score from the design (confidence × quality, no drawdown): a coin-flip account averages about 0.07, a steady grinder 0.3, a real edge 0.4, a strong one 0.65. Sells % stands in for the holding multiplier (0.5 + 0.5 × kept share). The multiplier column runs from the rate floor (0.85) to 1.0, so skill and holding change a miner's rate by at most 15%.</p>
+  <p class="note">Net cost = fees to Hyperliquid + fees to Kokoah + hidden-leg fees − value of the tokens received at the day's price. For a cheat (no real market bet) a negative net cost means the cheat profits. Hidden leg bps: the other venue's fee per side on the same notional, for hedgers (negative for a maker rebate). Skill g is the 0–1 score from the design (confidence × quality, no drawdown): a coin-flip account averages about 0.07, a steady grinder 0.3, a real edge 0.35, a strong one 0.56. Holds % is the share of paid tokens the miner keeps staked (the holding factor); the rest is sold into the pool every day.</p>
 </section>
 
 <section class="charts">
   <div class="panel chart"><h2>Token price, TAO</h2><div id="cPrice"></div><div class="legend" id="lPrice"></div></div>
-  <div class="panel chart"><h2>Revenue vs sell pressure, $/day</h2><div id="cFlow"></div><div class="legend" id="lFlow"></div></div>
-  <div class="panel chart"><h2>Miner earnings, $/day (day 1)</h2><div id="cEarn"></div></div>
-  <div class="panel chart"><h2>Net cost of trading, $/day (day 1)</h2><div id="cNet"></div><p class="note">Left of zero: paid to trade (good for an honest trader, a failure for a cheat).</p></div>
+  <div class="panel chart"><h2>Cumulative: revenue, buyback, miner selling ($)</h2><div id="cFlow"></div><div class="legend" id="lFlow"></div></div>
+  <div class="panel chart"><h2>Miner earnings, $/day</h2><div id="cEarn"></div></div>
+  <div class="panel chart"><h2>Net cost of trading, $/day</h2><div id="cNet"></div><p class="note">Left of zero: paid to trade (good for an honest trader, a failure for a cheat).</p></div>
 </section>
 
 <section class="panel">
   <h2>How the day is computed</h2>
   <ol class="note" style="padding-left:18px; margin:0">
-    <li>7,200 new tokens a day: the miner slot goes to miners by weight; the owner slot is locked; validators and stakers sell their set share.</li>
-    <li>Fee credit = Kokoah fees paid, taker fills at 1.0, maker fills at the maker credit. Multiplier = rate floor + (1 − floor) × min(1, g ÷ top skill) × holding multiplier (0.5 + 0.5 × kept share), so it runs from the floor (0.85) to 1.0. Profit credit = fee × λ × profit (if positive) × g × holding multiplier, a small tie-breaker.</li>
-    <li>Score = fee credit × multiplier + profit credit. Weight = score ÷ the sum of all scores. Similar volume means similar pay.</li>
-    <li>Miners sell their set share of the tokens into the pool (constant-product, price = TAO reserve ÷ token reserve). Validators' sales join them.</li>
-    <li>Kokoah buys tokens back with the buyback share of the day's fees, plus staker net buying; bought tokens are burned.</li>
-    <li>"Price the buyback holds" = (buyback + staker buying) ÷ tokens sold per day, in TAO: where the price settles with no other demand.</li>
+    <li>7,200 new tokens a day; the miner slot is the pool. Fee credit = Kokoah fees paid, taker fills at 1.0, maker fills at the maker credit.</li>
+    <li>Multiplier = floor + skill weight × min(1, g ÷ top skill) + holding weight × holds. Share = pool × (credit × multiplier) ÷ the sum over miners.</li>
+    <li>Cap = pay cap × multiplier × credit ÷ token price (in tokens). Pay = the smaller of share and cap. The pool above the sum of pays is burned.</li>
+    <li>Miners sell (1 − holds) of their pay into the pool every day (constant product). Every N days the accumulated fees buy tokens from the pool and burn them; staker buying is daily.</li>
+    <li>Paid ÷ revenue never exceeds the pay cap, so the fees always cover what miners could sell.</li>
   </ol>
 </section>
 </div>
@@ -164,19 +162,20 @@ const fmt = {
   n: (v, d = 0) => v.toLocaleString(undefined, { maximumFractionDigits: d }),
 };
 const PRESETS = {
-  retail:  { name: "Losing retail",        cheat: false, vol: 2e6,  taker: 100, g: 0,    profit: -800,  sells: 100, hidden: 0 },
-  day:     { name: "Day trader",           cheat: false, vol: 5e6,  taker: 80,  g: 0.3,  profit: 500,   sells: 70,  hidden: 0 },
-  pro:     { name: "Persistent pro",       cheat: false, vol: 10e6, taker: 50,  g: 0.65, profit: 3000,  sells: 40,  hidden: 0 },
-  whale:   { name: "Whale, low ROI",       cheat: false, vol: 40e6, taker: 60,  g: 0.2,  profit: 8000,  sells: 50,  hidden: 0 },
-  star:    { name: "Small star",           cheat: false, vol: 3e5,  taker: 90,  g: 0.65, profit: 400,   sells: 50,  hidden: 0 },
-  mm:      { name: "Market maker",         cheat: false, vol: 30e6, taker: 5,   g: 0.3,  profit: 2000,  sells: 80,  hidden: 0 },
-  wash:    { name: "Wash bot",             cheat: true,  vol: 50e6, taker: 50,  g: 0,    profit: 0,     sells: 100, hidden: 0 },
-  hedgeMM: { name: "Hedger, top-tier MM",  cheat: true,  vol: 20e6, taker: 0,   g: 0.07, profit: 0,     sells: 100, hidden: -0.3 },
-  hedgeT:  { name: "Hedger, taker",        cheat: true,  vol: 20e6, taker: 100, g: 0.07, profit: 0,     sells: 100, hidden: 1.5 },
-  lottery: { name: "Lottery farm",         cheat: true,  vol: 5e6,  taker: 100, g: 0.07, profit: 0,     sells: 100, hidden: 0 },
+  retail:  { name: "Losing retail",        cheat: false, vol: 2e6,  taker: 100, g: 0,    holds: 0,   hidden: 0 },
+  day:     { name: "Day trader",           cheat: false, vol: 5e6,  taker: 80,  g: 0.3,  holds: 30,  hidden: 0 },
+  pro:     { name: "Persistent pro",       cheat: false, vol: 10e6, taker: 50,  g: 0.65, holds: 60,  hidden: 0 },
+  whale:   { name: "Whale, low ROI",       cheat: false, vol: 40e6, taker: 60,  g: 0.2,  holds: 50,  hidden: 0 },
+  star:    { name: "Small star",           cheat: false, vol: 3e5,  taker: 90,  g: 0.65, holds: 50,  hidden: 0 },
+  mm:      { name: "Market maker",         cheat: false, vol: 30e6, taker: 5,   g: 0.3,  holds: 20,  hidden: 0 },
+  wash:    { name: "Wash bot",             cheat: true,  vol: 50e6, taker: 50,  g: 0,    holds: 0,   hidden: 0 },
+  hedgeMM: { name: "Hedger, top-tier MM",  cheat: true,  vol: 20e6, taker: 0,   g: 0.07, holds: 0,   hidden: -0.3 },
+  hedgeT:  { name: "Hedger, taker",        cheat: true,  vol: 20e6, taker: 100, g: 0.07, holds: 0,   hidden: 1.5 },
+  lottery: { name: "Lottery farm",         cheat: true,  vol: 5e6,  taker: 100, g: 0.07, holds: 0,   hidden: 0 },
 };
 const SCENARIOS = {
   mix: ["retail", "day", "pro", "whale", "star", "mm", "hedgeMM"],
+  young: ["retail", "day", "pro", "star"],
   wash: ["retail", "day", "pro", "whale", "mm", "wash", "wash"],
   hedge: ["retail", "day", "pro", "whale", "mm", "hedgeMM", "hedgeT", "lottery"],
   sybil: ["retail", "day", "pro", "mm", "whale", "whale"],
@@ -187,58 +186,64 @@ const SCENARIOS = {
 let miners = [];
 function load(scn) {
   miners = SCENARIOS[scn].map((k, i) => ({ ...PRESETS[k], type: k, id: i }));
-  if (scn === "sybil") { const w = miners.filter(m => m.type === "whale"); w.forEach((m, i) => { m.name = "Whale half " + (i + 1); m.vol /= 2; m.profit /= 2; }); }
-  if (scn === "holders") miners.forEach(m => { m.sells = 10; });
+  if (scn === "sybil") { const w = miners.filter(m => m.type === "whale"); w.forEach((m, i) => { m.name = "Whale half " + (i + 1); m.vol /= 2; }); }
+  if (scn === "holders") miners.forEach(m => { m.holds = 100; });
+  if (scn === "young") miners.forEach(m => { m.vol /= 4; });
   if (scn === "wash") { miners[6].name = "Wash bot 2"; }
   if (scn === "lottery") miners.forEach((m, i) => { if (m.type === "lottery") m.name = "Lottery farm " + (i - 2); });
   renderTable(); update();
 }
 function dials() {
   const v = (id) => parseFloat($(id).value) || 0;
-  return { taoUsd: v("taoUsd"), price0: v("price0"), depth: v("depth"), stakers: v("stakers"), taoIn: v("taoIn"),
-    fee: v("fee") / 100, beta: v("beta") / 100, minerSlot: v("minerSlot") / 100, valSell: v("valSell") / 100, days: Math.max(7, Math.round(v("days"))),
-    lambda: v("lambda"), makerCredit: v("makerCredit"), mmin: Math.min(1, v("mmin")), gfull: Math.max(0.05, v("gfull")), holding: $("holding").checked, hlTaker: v("hlTaker") / 1e4, hlMaker: v("hlMaker") / 1e4 };
+  const floor = Math.min(1, Math.max(0, v("floor"))), ws = Math.min(1 - floor, Math.max(0, v("ws")));
+  return { taoUsd: v("taoUsd"), price0: v("price0"), depth: v("depth"), stakers: v("stakers"), days: Math.max(7, Math.round(v("days"))),
+    fee: v("fee") / 100, makerCredit: v("makerCredit"), cmax: v("cmax"), cadence: Math.max(1, Math.round(v("cadence"))), minerSlot: v("minerSlot") / 100,
+    hlTaker: v("hlTaker") / 1e4, hlMaker: v("hlMaker") / 1e4, floor, ws, wh: 1 - floor - ws, gfull: Math.max(0.05, v("gfull")) };
 }
-function weights(d) {
+function syncFromTable() {
+  $("miners").querySelectorAll("tbody tr").forEach((tr) => {
+    const m = miners[+tr.dataset.i]; if (!m) return;
+    tr.querySelectorAll("[data-k]").forEach((inp) => {
+      const k = inp.dataset.k;
+      if (k === "name") m.name = inp.value; else if (k === "type") m.type = inp.value; else { const x = parseFloat(inp.value); if (!Number.isNaN(x)) m[k] = x; }
+    });
+  });
+}
+function model(d) {
+  const A = 7200 * d.minerSlot, pUsd = d.price0 * d.taoUsd;
   const rows = miners.map(m => {
-    const taker = m.taker / 100, sells = m.sells / 100;
-    const feesK = m.vol * d.fee;
-    const feesHL = m.vol * (taker * d.hlTaker + (1 - taker) * d.hlMaker);
-    const hidden = m.vol * (m.hidden / 1e4);
+    const taker = m.taker / 100, holds = Math.min(1, Math.max(0, m.holds / 100)), g = Math.max(0, Math.min(1, m.g));
+    const feesK = m.vol * d.fee, feesHL = m.vol * (taker * d.hlTaker + (1 - taker) * d.hlMaker), hidden = m.vol * (m.hidden / 1e4);
     const credit = feesK * (taker + d.makerCredit * (1 - taker));
-    const h = d.holding ? 0.5 + 0.5 * (1 - sells) : 1;
-    const g = Math.max(0, Math.min(1, m.g));
-    const boost = d.mmin + (1 - d.mmin) * Math.min(1, g / d.gfull) * h;
-    const pc = d.fee * d.lambda * Math.max(0, m.profit) * g * h;
-    const score = credit * boost + pc;
-    return { m, feesK, feesHL, hidden, credit, boost, pc, score, sells };
+    const mult = d.floor + d.ws * Math.min(1, g / d.gfull) + d.wh * holds;
+    return { m, taker, holds, feesK, feesHL, hidden, credit, mult, score: credit * mult };
   });
   const sumS = rows.reduce((a, r) => a + r.score, 0);
-  rows.forEach(r => { r.w = sumS > 0 ? r.score / sumS : 1 / rows.length; });
-  return rows;
+  rows.forEach(r => { r.share = sumS > 0 ? A * r.score / sumS : 0; r.cap = pUsd > 0 ? d.cmax * r.mult * r.credit / pUsd : 0; r.pay = Math.min(r.share, r.cap); r.earn = r.pay * pUsd; r.net = r.feesHL + r.feesK + r.hidden - r.earn; });
+  const paid = rows.reduce((a, r) => a + r.pay, 0), R = rows.reduce((a, r) => a + r.feesK, 0);
+  const soldAlpha = rows.reduce((a, r) => a + (1 - r.holds) * r.pay, 0);
+  const avgFactor = R > 0 ? rows.reduce((a, r) => a + r.cap, 0) * pUsd / R : 0; // alpha-dollars of cap per dollar of fees
+  const volumeNoBurn = avgFactor > 0 ? A * pUsd / (avgFactor * d.fee) : Infinity; // volume at which the caps sum to the pool
+  return { rows, A, pUsd, paid, burned: A - paid, R, soldAlpha, volumeNoBurn };
 }
-function simulate(d, rows) {
-  const E = 7200, A = E * d.minerSlot, ownerSlot = 0.33, V = E * Math.max(0, 1 - d.minerSlot - ownerSlot);
-  let tao = d.depth, alpha = d.depth / d.price0;
-  const R = rows.reduce((a, r) => a + r.feesK, 0);
-  const soldMiners = rows.reduce((a, r) => a + r.w * A * r.sells, 0), soldVal = V * d.valSell;
-  const out = { price: [], rev: [], buy: [], sell: [], A, R, soldAlpha: soldMiners + soldVal };
-  for (let t = 0; t < d.days; t++) {
+function simulate(d, mo) {
+  let tao = d.depth, alpha = d.depth / d.price0, feesAcc = 0;
+  const out = { price: [], cumRev: [], cumBuy: [], cumSell: [] };
+  let cumRev = 0, cumBuy = 0, cumSell = 0;
+  for (let t = 1; t <= d.days; t++) {
     const p = tao / alpha;
-    if (d.taoIn > 0) { tao += d.taoIn; alpha += d.taoIn / p; }
-    // sales into the pool
-    const sold = soldMiners + soldVal;
-    const taoOut = sold > 0 ? tao * sold / (alpha + sold) : 0;
-    alpha += sold; tao -= taoOut;
-    // buyback plus staker buying, bought tokens burned
-    const taoBuy = Math.max(0, d.beta * R / d.taoUsd + d.stakers);
-    const alphaOut = taoBuy > 0 ? alpha * taoBuy / (tao + taoBuy) : 0;
-    tao += taoBuy; alpha -= alphaOut;
-    out.price.push(p); out.rev.push(R); out.buy.push(d.beta * R); out.sell.push(taoOut * d.taoUsd);
+    // sales into the pool at today's weights (pay recomputed at today's price for the cap)
+    const pUsd = p * d.taoUsd;
+    let sold = 0;
+    for (const r of mo.rows) { const cap = pUsd > 0 ? d.cmax * r.mult * r.credit / pUsd : 0; const pay = Math.min(r.share, cap); sold += (1 - r.holds) * pay; }
+    const taoOut = sold > 0 ? tao * sold / (alpha + sold) : 0; alpha += sold; tao -= taoOut; cumSell += taoOut * d.taoUsd;
+    cumRev += mo.R; feesAcc += mo.R;
+    let taoBuy = Math.max(0, d.stakers);
+    if (t % d.cadence === 0) { taoBuy += feesAcc / d.taoUsd; cumBuy += feesAcc; feesAcc = 0; }
+    if (taoBuy > 0) { const alphaOut = alpha * taoBuy / (tao + taoBuy); tao += taoBuy; alpha -= alphaOut; }
+    out.price.push(p); out.cumRev.push(cumRev); out.cumBuy.push(cumBuy); out.cumSell.push(cumSell);
   }
-  out.priceEnd = tao / alpha; out.priceMin = Math.min(...out.price);
-  const buyUsd = d.beta * R + Math.max(0, d.stakers) * d.taoUsd;
-  out.floorTao = out.soldAlpha > 0 ? buyUsd / d.taoUsd / out.soldAlpha : Infinity;
+  out.priceEnd = tao / alpha; out.priceMin = Math.min(...out.price); out.cumSellEnd = cumSell; out.cumBuyEnd = cumBuy; out.cumRevEnd = cumRev;
   return out;
 }
 function renderTable() {
@@ -250,23 +255,13 @@ function renderTable() {
       <td><input type="number" data-k="vol" value="${m.vol}" step="any" min="0"></td>
       <td><input type="number" data-k="taker" value="${m.taker}" step="5" min="0" max="100"></td>
       <td><input type="number" data-k="g" value="${m.g}" step="0.05" min="0" max="1"></td>
-      <td><input type="number" data-k="profit" value="${m.profit}" step="any"></td>
-      <td><input type="number" data-k="sells" value="${m.sells}" step="5" min="0" max="100"></td>
+      <td><input type="number" data-k="holds" value="${m.holds}" step="10" min="0" max="100"></td>
       <td><input type="number" data-k="hidden" value="${m.hidden}" step="0.1"></td>
-      <td class="num o-feesK"></td><td class="num o-feesHL"></td><td class="num o-c"></td><td class="num o-b"></td><td class="num o-pc"></td><td class="num o-w"></td><td class="num o-alpha"></td><td class="num o-earn"></td><td class="num o-net"></td><td class="l o-v"></td>
+      <td class="num o-feesK"></td><td class="num o-feesHL"></td><td class="num o-c"></td><td class="num o-b"></td><td class="num o-share"></td><td class="num o-cap"></td><td class="num o-pay"></td><td class="num o-earn"></td><td class="num o-net"></td><td class="l o-v"></td>
       <td><button data-del="${i}" aria-label="remove miner">×</button></td>`;
     tb.appendChild(tr);
   });
   $("minerCount").textContent = "(" + miners.length + ")";
-}
-function syncFromTable() {
-  $("miners").querySelectorAll("tbody tr").forEach((tr) => {
-    const m = miners[+tr.dataset.i]; if (!m) return;
-    tr.querySelectorAll("[data-k]").forEach((inp) => {
-      const k = inp.dataset.k;
-      if (k === "name") m.name = inp.value; else if (k === "type") m.type = inp.value; else { const v = parseFloat(inp.value); if (!Number.isNaN(v)) m[k] = v; }
-    });
-  });
 }
 function update() {
   try { syncFromTable(); compute(); $("err").hidden = true; }
@@ -274,46 +269,46 @@ function update() {
   $("stamp").textContent = "Recomputed at " + new Date().toLocaleTimeString() + ".";
 }
 function compute() {
-  const d = dials(); const rows = weights(d); const sim = simulate(d, rows);
-  const p1 = d.price0 * d.taoUsd; // USD per token on day 1
-  let tVol = 0, tProfit = 0, tFees = 0, tHl = 0, tAlpha = 0, tEarn = 0, tNet = 0, tCredit = 0, tPc = 0;
+  const d = dials(); $("whOut").textContent = d.wh.toFixed(2);
+  const mo = model(d); const sim = simulate(d, mo);
+  let tVol = 0, tFees = 0, tHl = 0, tCredit = 0, tShare = 0, tCap = 0, tPay = 0, tEarn = 0, tNet = 0;
   const trs = $("miners").querySelectorAll("tbody tr");
-  rows.forEach((r, i) => {
-    const alpha = r.w * sim.A, earn = alpha * p1, net = r.feesHL + r.feesK + r.hidden - earn;
+  mo.rows.forEach((r, i) => {
     const tr = trs[i]; const set = (c, v) => tr.querySelector(c).textContent = v;
-    set(".o-feesK", fmt.usdk(r.feesK)); set(".o-feesHL", fmt.usdk(r.feesHL)); set(".o-c", fmt.usdk(r.credit)); set(".o-b", r.boost.toFixed(2) + "×"); set(".o-pc", fmt.usdk(r.pc)); set(".o-w", fmt.pct(r.w));
-    set(".o-alpha", fmt.n(alpha, 1)); set(".o-earn", fmt.usdk(earn)); set(".o-net", fmt.usdk(net));
+    set(".o-feesK", fmt.usdk(r.feesK)); set(".o-feesHL", fmt.usdk(r.feesHL)); set(".o-c", fmt.usdk(r.credit)); set(".o-b", r.mult.toFixed(3) + "×");
+    set(".o-share", fmt.n(r.share, 1)); set(".o-cap", fmt.n(r.cap, 1)); set(".o-pay", fmt.n(r.pay, 1) + (r.cap < r.share ? " (cap)" : "")); set(".o-earn", fmt.usdk(r.earn)); set(".o-net", fmt.usdk(r.net));
     const v = tr.querySelector(".o-v");
-    if (r.m.cheat) v.innerHTML = net < 0 ? `<span class="verdict bad">cheat wins ${fmt.usdk(-net)}/day</span>` : `<span class="verdict good">cheat loses ${fmt.usdk(net)}/day</span>`;
-    else v.innerHTML = net < 0 ? `<span class="verdict good">paid to trade</span>` : net <= r.feesHL ? `<span class="verdict good">cheaper than HL direct</span>` : `<span class="verdict neutral">pays ${fmt.usdk(net - r.feesHL)}/day over HL</span>`;
+    if (r.m.cheat) v.innerHTML = r.net < 0 ? `<span class="verdict bad">cheat wins ${fmt.usdk(-r.net)}/day</span>` : `<span class="verdict good">cheat loses ${fmt.usdk(r.net)}/day</span>`;
+    else v.innerHTML = r.net < 0 ? `<span class="verdict good">paid to trade</span>` : r.net <= r.feesHL ? `<span class="verdict good">cheaper than HL direct</span>` : `<span class="verdict neutral">pays ${fmt.usdk(r.net - r.feesHL)}/day over HL</span>`;
     tr.className = r.m.cheat ? "cheat" : "honest";
-    tVol += r.m.vol; tProfit += r.m.profit; tFees += r.feesK; tHl += r.feesHL; tAlpha += alpha; tEarn += earn; tNet += net; tCredit += r.credit; tPc += r.pc;
+    tVol += r.m.vol; tFees += r.feesK; tHl += r.feesHL; tCredit += r.credit; tShare += r.share; tCap += r.cap; tPay += r.pay; tEarn += r.earn; tNet += r.net;
   });
-  $("tCredit").textContent = fmt.usdk(tCredit); $("tPc").textContent = fmt.usdk(tPc);
-  $("tVol").textContent = fmt.usdk(tVol); $("tProfit").textContent = fmt.usdk(tProfit); $("tFees").textContent = fmt.usdk(tFees); $("tHl").textContent = fmt.usdk(tHl);
-  $("tAlpha").textContent = fmt.n(tAlpha, 0); $("tEarn").textContent = fmt.usdk(tEarn); $("tNet").textContent = fmt.usdk(tNet);
-  // tiles
-  const sell1 = sim.sell[0], buy1 = sim.buy[0], ratio = sell1 > 0 ? buy1 / sell1 : Infinity;
+  $("tVol").textContent = fmt.usdk(tVol); $("tFees").textContent = fmt.usdk(tFees); $("tHl").textContent = fmt.usdk(tHl); $("tCredit").textContent = fmt.usdk(tCredit);
+  $("tShare").textContent = fmt.n(tShare, 0); $("tCap").textContent = fmt.n(tCap, 0); $("tPay").textContent = fmt.n(tPay, 0); $("tEarn").textContent = fmt.usdk(tEarn); $("tNet").textContent = fmt.usdk(tNet);
+  const honest = mo.rows.filter(r => !r.m.cheat);
+  const mMin = honest.length ? Math.min(...honest.map(r => r.mult)) : d.floor, mMax = honest.length ? Math.max(...honest.map(r => r.mult)) : 1;
+  const paidUsd = mo.paid * mo.pUsd, ratio = mo.R > 0 ? paidUsd / mo.R : 0;
+  const cov = sim.cumSellEnd > 0 ? sim.cumBuyEnd / sim.cumSellEnd : Infinity;
   const tiles = [
-    { k: "Revenue (builder fees)", v: fmt.usdk(sim.R) + "/day", s: fmt.usdk(sim.R * 30) + " a month" },
-    { k: "Buyback", v: fmt.usdk(buy1) + "/day", s: fmt.pct(d.beta, 0) + " of fees" },
-    { k: "Miner + staker selling", v: fmt.usdk(sell1) + "/day", s: fmt.n(sim.soldAlpha, 0) + " tokens sold, day 1", cls: sell1 > buy1 ? "bad" : "good" },
-    { k: "Buyback ÷ selling", v: isFinite(ratio) ? ratio.toFixed(2) + "×" : "∞", s: ratio >= 1 ? "revenue beats sell pressure" : "selling beats the buyback", cls: ratio >= 1 ? "good" : "bad" },
-    { k: "Price the buyback holds", v: isFinite(sim.floorTao) ? fmt.tao(sim.floorTao) : "∞", s: isFinite(sim.floorTao) ? fmt.usd(sim.floorTao * d.taoUsd, 2) + " per token" : "nobody sells", cls: sim.floorTao >= d.price0 ? "good" : "warn" },
-    { k: "Price after " + d.days + " days", v: fmt.tao(sim.priceEnd), s: "from " + fmt.tao(d.price0) + ", low " + fmt.tao(sim.priceMin), cls: sim.priceEnd >= d.price0 ? "good" : "bad" },
-    { k: "Pool to miners", v: fmt.n(sim.A, 0) + " tokens/day", s: fmt.usdk(sim.A * p1) + " at the start price" },
-    { k: "Volume needed to hold the start price", v: fmt.usdk(sim.soldAlpha * p1 / Math.max(1e-9, d.beta * d.fee)) + "/day", s: "with these sellers and this fee" },
+    { k: "Revenue (builder fees)", v: fmt.usdk(mo.R) + "/day", s: fmt.usdk(mo.R * 30) + " a month" },
+    { k: "Pool", v: fmt.n(mo.A, 0) + " tokens/day", s: fmt.usdk(mo.A * mo.pUsd) + " at the start price" },
+    { k: "Paid to miners", v: fmt.n(mo.paid, 0) + " tokens", s: fmt.usdk(paidUsd) + " · " + fmt.pct(mo.A > 0 ? mo.paid / mo.A : 0, 0) + " of the pool", cls: "good" },
+    { k: "Burned", v: fmt.n(mo.burned, 0) + " tokens", s: fmt.pct(mo.A > 0 ? mo.burned / mo.A : 0, 0) + " of the pool", cls: mo.burned > 0 ? "warn" : "good" },
+    { k: "Paid ÷ revenue", v: ratio.toFixed(2) + "×", s: "never above the pay cap (" + d.cmax.toFixed(1) + "×)", cls: ratio <= d.cmax + 1e-9 ? "good" : "bad" },
+    { k: "Equal-volume pay range", v: mMin.toFixed(3) + "× to " + mMax.toFixed(3) + "×", s: "multipliers of the honest miners; floor " + d.floor.toFixed(2) },
+    { k: "Volume where burning stops", v: isFinite(mo.volumeNoBurn) ? fmt.usdk(mo.volumeNoBurn) + "/day" : "∞", s: "caps sum to the pool at these miners' mix" },
+    { k: "Price after " + d.days + " days", v: fmt.tao(sim.priceEnd), s: "from " + fmt.tao(d.price0) + ", low " + fmt.tao(sim.priceMin) + " · buyback every " + d.cadence + " days", cls: sim.priceEnd >= d.price0 ? "good" : "bad" },
+    { k: "Coverage over the run", v: isFinite(cov) ? cov.toFixed(2) + "×" : "∞", s: "buyback " + fmt.usdk(sim.cumBuyEnd) + " ÷ miner selling " + fmt.usdk(sim.cumSellEnd), cls: cov >= 1 ? "good" : "bad" },
   ];
   $("tiles").innerHTML = tiles.map(t => `<div class="tile ${t.cls || ""}"><div class="k">${t.k}</div><div class="v">${t.v}</div><div class="s">${t.s}</div></div>`).join("");
-  $("floorNote").textContent = `Pool ${fmt.usdk(sim.A * p1)} a day goes entirely to miners. Every day they sell ${fmt.n(sim.soldAlpha, 0)} tokens (${fmt.pct(sim.soldAlpha / (sim.A + 7200 * Math.max(0, 1 - d.minerSlot - 0.33)), 0)} of what miners, validators and stakers receive) and the buyback plus staker buying absorbs ${fmt.usdk(d.beta * sim.R + Math.max(0, d.stakers) * d.taoUsd)}.`;
-  // charts
+  $("floorNote").textContent = `Each miner's pay is the smaller of its proportional share and its cap (${d.cmax.toFixed(1)} × multiplier × Kokoah fee paid). Today ${fmt.n(mo.paid, 0)} tokens are paid and ${fmt.n(mo.burned, 0)} burned; miners sell ${fmt.n(mo.soldAlpha, 0)} tokens a day (the part they do not hold).`;
   const days = [...Array(d.days).keys()].map(i => i + 1);
   lineChart($("cPrice"), days, [{ name: "price, TAO", values: sim.price, color: "var(--series-1)" }], { fmt: (v) => fmt.tao(v) });
   $("lPrice").innerHTML = `<span><i style="background:var(--series-1)"></i>token price</span><span>start ${fmt.tao(d.price0)} · end ${fmt.tao(sim.priceEnd)}</span>`;
-  lineChart($("cFlow"), days, [{ name: "revenue", values: sim.rev, color: "var(--series-1)", width: 4 }, { name: "buyback", values: sim.buy, color: "var(--series-4)", dash: true }, { name: "selling", values: sim.sell, color: "var(--series-2)" }], { fmt: (v) => fmt.usdk(v) });
-  $("lFlow").innerHTML = `<span><i style="background:var(--series-1);height:4px"></i>revenue (builder fees)</span><span><i style="background:repeating-linear-gradient(90deg,var(--series-4) 0 4px,transparent 4px 7px)"></i>buyback, dashed (${fmt.pct(d.beta, 0)} of revenue)</span><span><i style="background:var(--series-2)"></i>miner + staker selling</span>`;
-  barChart($("cEarn"), rows.map(r => ({ label: r.m.name, value: r.w * sim.A * p1, color: r.m.cheat ? "var(--series-2)" : "var(--series-1)" })), { fmt: fmt.usdk });
-  barChart($("cNet"), rows.map(r => ({ label: r.m.name, value: r.feesHL + r.feesK + r.hidden - r.w * sim.A * p1, color: r.m.cheat ? "var(--series-2)" : "var(--series-1)" })), { fmt: fmt.usdk, diverging: true });
+  lineChart($("cFlow"), days, [{ name: "revenue", values: sim.cumRev, color: "var(--series-1)", width: 4 }, { name: "buyback", values: sim.cumBuy, color: "var(--series-4)", dash: true }, { name: "selling", values: sim.cumSell, color: "var(--series-2)" }], { fmt: (v) => fmt.usdk(v) });
+  $("lFlow").innerHTML = `<span><i style="background:var(--series-1);height:4px"></i>cumulative revenue</span><span><i style="background:repeating-linear-gradient(90deg,var(--series-4) 0 4px,transparent 4px 7px)"></i>cumulative buyback (steps every ${d.cadence} days)</span><span><i style="background:var(--series-2)"></i>cumulative miner selling</span>`;
+  barChart($("cEarn"), mo.rows.map(r => ({ label: r.m.name, value: r.earn, color: r.m.cheat ? "var(--series-2)" : "var(--series-1)" })), { fmt: fmt.usdk });
+  barChart($("cNet"), mo.rows.map(r => ({ label: r.m.name, value: r.net, color: r.m.cheat ? "var(--series-2)" : "var(--series-1)" })), { fmt: fmt.usdk, diverging: true });
 }
 // charts, plain SVG
 const NS = "http://www.w3.org/2000/svg";

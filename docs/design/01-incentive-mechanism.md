@@ -1,4 +1,4 @@
-# Incentive mechanism, version 5.2 (summary; the formulas are in 02-mechanism-spec.md)
+# Incentive mechanism, version 5.3 (summary; the formulas are in 02-mechanism-spec.md)
 
 Date: 2026-10-20. Status: proposal for the owner's review. Version 3.1 (owner's decision): similar volume means
 similar pay; skill and holding move a miner's rate only within 0.85 to 1.0 times, so anyone can trade without fear,
@@ -10,9 +10,9 @@ pressure" through fee level, holding and emission split) stands. Versions 0 and 
 their cheat pricing is kept in `scripts/sim_incentives.py`; the skill-score comparison is `scripts/sim_skill.py`. Research: `docs/research/02` (platform), `03` (other trading subnets), `04`
 (what Kokoah has), `05` (reward-design precedents).
 
-> **Version 5.2 (2026-10-20) is the current design; the formulas are in `02-mechanism-spec.md`.** (5.2: the buyback
-> runs on the same 70/30 schedule from a fee reserve and a global cap matches each day's pay to that day's buyback;
-> the turnover cap and the 10-minute holding-time weighting are removed; two coverage figures; a verification plan.) The miner pool
+> **Version 5.3 (2026-10-20) is the current design; the formulas are in `02-mechanism-spec.md`.** (5.3: buyback on
+> the owner's cadence, cumulative backing by the per-miner cap; turnover cap and 10-minute weighting removed;
+> validator selling out of scope; multiplier weights floor 0.85 / skill 0.05 / holding 0.10 as the proposed balance.) The miner pool
 > is shared by volume with a multiplier between 0.85 and 1.0 (skill and holding 7.5% each); each miner's pay is
 > capped at its multiplier times the Kokoah fee it paid, and the pool above the sum of caps is burned the same day
 > (owner's decision), so farms cannot profit at any pool size and the buyback covers everything paid even if all
