@@ -222,7 +222,7 @@ function model(d) {
     return { m, taker, holds, feesK, feesHL, hidden, credit, mult, score: credit * mult };
   });
   const sumS = rows.reduce((a, r) => a + r.score, 0);
-  rows.forEach(r => { r.share = sumS > 0 ? A * r.score / sumS : 0; r.capUsd = r.mult * Math.min(d.cmax * r.credit, d.ctot * (Math.max(0, r.feesHL) + r.feesK)); r.cap = pUsd > 0 ? r.capUsd / pUsd : 0; r.pay = Math.min(r.share, r.cap); r.earn = r.pay * pUsd; r.net = r.feesHL + r.feesK + r.hidden - r.earn; });
+  rows.forEach(r => { r.share = sumS > 0 ? A * r.score / sumS : 0; r.capUsd = r.mult * Math.min(d.cmax * r.credit, d.ctot * (r.feesHL + r.feesK)); r.cap = pUsd > 0 ? r.capUsd / pUsd : 0; r.pay = Math.min(r.share, r.cap); r.earn = r.pay * pUsd; r.net = r.feesHL + r.feesK + r.hidden - r.earn; });
   const paid = rows.reduce((a, r) => a + r.pay, 0), R = rows.reduce((a, r) => a + r.feesK, 0);
   const soldAlpha = rows.reduce((a, r) => a + (1 - r.holds) * r.pay, 0);
   const avgFactor = R > 0 ? rows.reduce((a, r) => a + r.capUsd, 0) / R : 0; // cap dollars per dollar of fees
