@@ -22,8 +22,10 @@ def test_check_reports_missing_and_stale_things(tmp_path: Path) -> None:
     r = check(s, now=now)
     assert any("failed" in p for p in r["problems"])
     s.put_error(yesterday, "hk", "0xa", "collect", "boom")
+    s.put_weights_submission(yesterday, 300, [1], [65535], True, "Success")
     late = check(s, now=now + timedelta(hours=5))
-    assert any("errors recorded" in p for p in late["problems"]) and any("h ago" in p for p in late["problems"])
+    assert any("errors recorded" in p for p in late["problems"])
+    assert any("weight submission was" in p for p in late["problems"])
     s.put_burn(
         network="test",
         netuid=1,

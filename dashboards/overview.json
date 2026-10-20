@@ -1,0 +1,341 @@
+{
+ "uid": "kokoah-subnet-overview",
+ "title": "Kokoah subnet overview",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "time": {
+  "from": "now-90d",
+  "to": "now"
+ },
+ "refresh": "5m",
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Volume through the builder code (USD per day)",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "time_series",
+     "rawQuery": true,
+     "rawSql": "SELECT day::date AS time, volume_usd AS \"volume\" FROM days ORDER BY day",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD"
+    },
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "Builder fees collected (USD per day)",
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "time_series",
+     "rawQuery": true,
+     "rawSql": "SELECT day::date AS time, builder_fee_usd AS \"fees\" FROM days ORDER BY day",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD"
+    },
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Alpha paid and burned per day",
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "time_series",
+     "rawQuery": true,
+     "rawSql": "SELECT day::date AS time, paid_alpha AS \"paid\", burn_alpha AS \"burned\" FROM days ORDER BY day",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Miners scored and with fills",
+   "gridPos": {
+    "x": 12,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "time_series",
+     "rawQuery": true,
+     "rawSql": "SELECT day::date AS time, miners AS \"scored\", miners_with_fills AS \"with fills\" FROM days ORDER BY day",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Conversion rate inputs (pool rate, TAO/USD)",
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "time_series",
+     "rawQuery": true,
+     "rawSql": "SELECT day::date AS time, price_tao AS \"pool rate (TAO per alpha)\", tao_usd AS \"TAO/USD\" FROM days ORDER BY day",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 6,
+   "type": "timeseries",
+   "title": "Emission per UID per epoch (what the chain paid)",
+   "gridPos": {
+    "x": 12,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "time_series",
+     "rawQuery": true,
+     "rawSql": "SELECT e.at AS time, n.uid::text AS metric, n.emission AS value FROM epoch_neurons n JOIN epochs e ON e.block = n.block ORDER BY e.at",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 7,
+   "type": "table",
+   "title": "Latest day per miner",
+   "gridPos": {
+    "x": 0,
+    "y": 24,
+    "w": 24,
+    "h": 10
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "table",
+     "rawQuery": true,
+     "rawSql": "SELECT m.uid, m.hotkey, m.address, m.notional AS volume_usd, m.builder_fee, m.confidence, m.quality, m.skill, m.holding, m.multiplier, m.cap_alpha, m.pay_alpha, m.reported FROM miner_days m WHERE m.day = (SELECT max(day) FROM days) ORDER BY m.pay_alpha DESC",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 8,
+   "type": "table",
+   "title": "Miners: registration, binding, pay",
+   "gridPos": {
+    "x": 0,
+    "y": 34,
+    "w": 24,
+    "h": 10
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "table",
+     "rawQuery": true,
+     "rawSql": "SELECT uid, role, hotkey, coldkey, address, registered_at, bound_at, first_paid_at, last_paid_at, total_emission_alpha, total_pay_alpha FROM miners ORDER BY uid",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 9,
+   "type": "table",
+   "title": "Fills by day and why they did not count",
+   "gridPos": {
+    "x": 0,
+    "y": 44,
+    "w": 12,
+    "h": 9
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "table",
+     "rawQuery": true,
+     "rawSql": "SELECT day, coalesce(excluded, 'counted') AS reason, count(*) AS fills, sum(notional) AS notional_usd FROM fills GROUP BY day, excluded ORDER BY day, reason",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  },
+  {
+   "id": 10,
+   "type": "table",
+   "title": "Weight submissions and burns",
+   "gridPos": {
+    "x": 12,
+    "y": 44,
+    "w": 12,
+    "h": 9
+   },
+   "datasource": {
+    "type": "grafana-postgresql-datasource",
+    "uid": "kokoah-subnet-pg"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "format": "table",
+     "rawQuery": true,
+     "rawSql": "SELECT submitted_at, 'weights' AS what, ok, uids::text AS detail FROM weights_submitted UNION ALL SELECT submitted_at, 'burn', ok, burn_alpha::text FROM burns ORDER BY 1 DESC LIMIT 50",
+     "datasource": {
+      "type": "grafana-postgresql-datasource",
+      "uid": "kokoah-subnet-pg"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": []
+   },
+   "options": {}
+  }
+ ],
+ "tags": [
+  "kokoah-subnet"
+ ]
+}
