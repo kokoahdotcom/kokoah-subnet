@@ -1,4 +1,4 @@
-# Incentive mechanism, version 3.1
+# Incentive mechanism, version 4 (summary; the formulas are in 02-mechanism-spec.md)
 
 Date: 2026-10-20. Status: proposal for the owner's review. Version 3.1 (owner's decision): similar volume means
 similar pay; skill and holding move a miner's rate only within 0.85 to 1.0 times, so anyone can trade without fear,
@@ -9,6 +9,14 @@ helps, and measures holding as alpha staked on the hotkey. Version 2 (whole pool
 pressure" through fee level, holding and emission split) stands. Versions 0 and 1 (capped payouts) are superseded;
 their cheat pricing is kept in `scripts/sim_incentives.py`; the skill-score comparison is `scripts/sim_skill.py`. Research: `docs/research/02` (platform), `03` (other trading subnets), `04`
 (what Kokoah has), `05` (reward-design precedents).
+
+> **Version 4 (2026-10-20) supersedes the pool rule below.** The pool is paid in two tiers: a fee rebate capped at
+> 100% of the Kokoah fee each miner paid (similar volume, similar pay; no farm can ever get back more than it paid
+> us, so revenue always covers what volume-earners can sell), and the rest of the day's alpha to active miners in
+> proportion to the alpha they hold, with skill as a 15% nudge. Windows are capped at 30 and 60 days, every daily
+> quantity is smoothed 70/30, only Kokoah builder-code fills and the bound address's Hyperliquid account are read,
+> credit is holding-time weighted (10 min), and two-account hedges are caught by position anti-correlation as well
+> as by timing. Full text: `02-mechanism-spec.md` v4. The sections below describe v3.1 and stay for history.
 
 ## 1. What the subnet is
 

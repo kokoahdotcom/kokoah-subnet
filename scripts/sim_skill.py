@@ -190,12 +190,25 @@ def score_v3(returns: list[float]) -> float:
     return conf * qual
 
 
+def score_v4(returns: list[float]) -> float:
+    """v4: windows capped at 60 days. confidence = PSR of capped returns over the last 60 days (hurdle 0.03);
+    quality = recency-weighted gain-to-pain over the last 30 days, half-life 10 days, (GPR - 1)/1.2; blow-up rule
+    over 60 days. The daily EMA smoothing (0.7 previous + 0.3 today) does not change the mean and is left out."""
+    capped = [max(-0.10, min(0.10, r)) for r in returns[-60:]]
+    conf = clip01((prob_sharpe(capped, 0.03) - 0.5) / 0.45)
+    qual = clip01((ew_gain_to_pain(returns[-30:], half_life=10.0) - 1) / 1.2)
+    if blowups(returns[-60:]) >= 2:
+        qual *= 0.5
+    return conf * qual
+
+
 DESIGNS = [
     ("F: Calmar 30/90 + months (current)", score_f),
     ("gain-to-pain 90d", score_gpr),
     ("PSR confidence", score_psr),
     ("composite: PSR x gain-to-pain", score_composite),
     ("v3: PSR x recency-weighted gain-to-pain, no drawdown", score_v3),
+    ("v4: same, windows capped at 60 / 30 days", score_v4),
 ]
 
 
