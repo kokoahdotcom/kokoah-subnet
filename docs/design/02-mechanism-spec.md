@@ -138,7 +138,7 @@ h'_i,d       = min( 1 , staked_i,d / max(target_i,d, collateral_min) )
 ```
 
 Keep what you were paid and the factor is 1; sell it all and it is 0; buying alpha counts. Its effect on pay is at
-most 7.5% by design; whether it reduces selling is measured (§10), not assumed.
+most `w_h` = 10% by design; whether it reduces selling is measured (§15), not assumed.
 
 ## 9. Activity gates (for the multiplier's skill and holding parts, and the leaderboard)
 
@@ -171,7 +171,7 @@ Income is the total pay, at most `c_max × M ×` the credited builder fee, so at
 | Dust account, huge volume | 9 | 5 | 0 | 5 | −9 (no turnover cap needed) |
 | Lottery farm of small accounts | 9 | 5 | 0 | 5 | −9 per account |
 | Volume timed to alpha price moves | its fees | its fees | | the cap is in USD at the day's price | nothing to extract |
-| Whale staking a lot, trading little | its fees | its fees | | pay ∝ its own volume; holding adds ≤ 7.5% | nothing to extract |
+| Whale staking a lot, trading little | its fees | its fees | | pay ∝ its own volume; holding adds ≤ 10% | nothing to extract |
 | Sybil splitting or merging | same | same | | shares and caps linear in credit | 0 gain, burn lost (tested, §15) |
 
 Every row is negative at every pool size. At `c_max = 1.5` the top-tier market maker row becomes −0.8 and the
