@@ -43,7 +43,12 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
   `1 − MinerBurned` next tempo (research note 05, section 9). The design burns this way, in the open, and accepts
   the scaling: a subnet should not draw TAO for miner emission it did not award. Weight sent to a hotkey outside the
   owner's coldkey is a payment, not a burn, and routing the excess there to burn it by hand (`burn_alpha` exists)
-  would dodge the chain's rule; the design does not do that. The cost is measured before launch (§15, item 1).
+  would dodge the chain's rule; the design does not do that. Measured on a local chain (2026-10-20, devnet runtime
+  481, `scripts/measure_burn.py`): with 85% of the miner pool pointed at the owner hotkey, that hotkey's stake grew
+  only by the owner cut, the miner and the validator received exactly their shares, and alpha emission stayed at 1
+  per block; the 85% landed nowhere. The `MinerBurned` counter and the TAO-share scaling could not be observed
+  there (a fresh local subnet receives no TAO injection and the devnet runtime did not update the counter), so
+  that part rests on the main-branch code and docs and is re-checked on testnet (§15).
 - **Buyback.** `add_stake_burn(hotkey, netuid, amount, limit)` buys alpha with TAO and burns it in one
   transaction, emitting `TokensBurned`; every buyback is one verifiable on-chain event.
 
@@ -277,15 +282,17 @@ A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cove
 
 ## 15. Verification
 
-Done (2026-10-20, `scripts/verify_mechanism.py`, `scripts/sim_skill.py`): the one law over 105 fee cases and the
-closed-form bound; cumulative backing on 200 random paths (worst paid / fees 1.36 at `c_max = 2`); the 15% rule in
-both regimes; sybil neutrality for k = 1, 2, 5; the cap price under a 30% spot dip; the skill calibration.
+Done (2026-10-20, `scripts/verify_mechanism.py`, `scripts/sim_skill.py`, `scripts/measure_burn.py`): the one law
+over 105 fee cases and the closed-form bound; cumulative backing on 200 random paths (worst paid / fees 1.36 at
+`c_max = 2`); the 15% rule in both regimes; sybil neutrality for k = 1, 2, 5; the cap price under a 30% spot dip;
+the skill calibration; on the local chain, incentive aimed at the owner hotkey is withheld and alpha emission to
+the other participants is unchanged (§1).
 
 Before launch:
 
-1. **Burn cost.** On the localnet, measure `MinerBurned` and the TAO-share scaling with 85%, 50% and 0% of the
-   miner pool burned, and confirm that `alpha_out` to participants is unchanged; simulate the subnet's TAO inflow
-   over 30, 90 and 180 days.
+1. **Burn cost, TAO side.** On testnet (where subnets have real emission shares), measure `MinerBurned` and the
+   TAO-share scaling with 85%, 50% and 0% of the miner pool burned; simulate the subnet's TAO inflow over 30, 90
+   and 180 days. The alpha side is done (§1).
 2. **Adversarial replay.** Replay real public Hyperliquid histories (scalpers, market makers, swing traders) and
    simulated attackers side by side through the real scoring code: rebated market makers; cross-exchange hedges;
    one trader on several wallets (checking collateral, gates, holding target and smoothing, which are not linear);

@@ -51,4 +51,5 @@ It moves pay by at most 5%.
 
 ## Still open
 
-The burn cost measured on the localnet and testnet; the holding effect measured on testnet; legal review.
+The TAO-side cost of burning, to be measured on testnet (the alpha side is measured: what is aimed at the owner
+hotkey is withheld and everyone else's emission is unchanged); the holding effect measured on testnet; legal review.

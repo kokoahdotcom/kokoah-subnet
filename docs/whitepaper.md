@@ -334,7 +334,9 @@ When the sum of caps is below the pool, the difference is directed to the owner 
 that targets an owner hotkey, records the burned share as `MinerBurned`, and scales the subnet's TAO emission
 share by one minus that fraction in the next tempo. The design accepts this scaling in full. A subnet that did not
 award 70% of its miner emission should not draw TAO for it, and under this rule it does not; alpha emission to
-participants is unchanged, so miners and validators are unaffected. There are ways to burn alpha that the chain
+participants is unchanged, so miners and validators are unaffected. On a local chain, with 85% of the miner pool
+pointed at the owner hotkey, that hotkey's stake grew only by the owner's own cut, the miner and the validator
+received exactly their shares, and alpha emission continued at its full rate; the withheld 85% landed nowhere. There are ways to burn alpha that the chain
 would not see (routing weight to a hotkey outside the owner's coldkey and burning it by hand with `burn_alpha`);
 the design does not use them, because the rule they would dodge is the right rule. As fees grow, the burned
 fraction falls toward zero on its own.
@@ -372,12 +374,14 @@ reason are published.
 **Done.** The one law searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
 paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the cap price under a
 30% spot dip; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
-strong edge, fading edge, one bad day). The verification script and the simulations are in the repository.
+strong edge, fading edge, one bad day); on a local chain, that incentive aimed at the owner hotkey is withheld
+while alpha emission to everyone else is unchanged. The verification script, the simulations and the chain
+measurement are in the repository.
 
 **Before mainnet.**
 
-1. Burn cost on a local chain: measure `MinerBurned` and the TAO-share scaling with 85%, 50% and 0% of the pool
-   burned, and confirm alpha emission to participants is unchanged.
+1. Burn cost, TAO side, on testnet: measure `MinerBurned` and the TAO-share scaling with 85%, 50% and 0% of the
+   pool burned. A fresh local subnet receives no TAO injection, so this cannot be seen locally.
 2. Adversarial replay through the real scoring code: public Hyperliquid histories of scalpers, market makers and
    swing traders beside simulated attackers (rebated market makers, cross-venue hedges, one trader on several
    wallets, volume timed to price, coordinated groups). Pass criterion: no zero-edge strategy nets positive at any
