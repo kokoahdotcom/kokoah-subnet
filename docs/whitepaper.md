@@ -2,289 +2,204 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, version 1.0, October 2026. Mechanism specification v5.8.
+Whitepaper, version 1.1, October 2026. Mechanism specification v5.8.
 
-### Abstract
+### Summary
 
-Kokoah Subnet brings a large, measurable and revenue-generating activity to Bittensor: trading on Hyperliquid,
-one of the most active perpetual-futures venues. Miners are traders. A miner binds a Hyperliquid address to a
-subnet hotkey and trades through the Kokoah application; validators recompute, from public exchange data and
-chain state, each miner's share of the daily miner emission. The work the subnet rewards is real, external, and
-verifiable by anyone, and every validator reaches the same result from the same data.
+Kokoah Subnet brings real trading to Bittensor. Its miners are traders on Hyperliquid, one of the most active
+perpetual-futures venues, who route their trades through the Kokoah application. Every routed trade pays a small
+builder fee to the operator, and those fees buy back and burn the subnet token on chain, so revenue earned
+outside Bittensor flows back into it. Validators score each trader from the exchange's own public records and from
+chain state, so the work the subnet rewards is real, external and checkable by anyone. The pay rule is simple and
+hard to game: a trader's share follows the fees they actually paid, adjusted by a small quality factor, and is
+capped at a fraction of what the trade cost them, so no fake-volume strategy can profit. Emission the caps leave
+unawarded is destroyed.
 
-The subnet is designed to be a net contributor to the network. The builder fee the exchange charges on every
-routed trade funds an on-chain buyback and burn of the subnet token, so revenue earned outside Bittensor flows
-back into it. Traders who were not part of Bittensor become registered, staked participants. The public ranking
-of verified traders is a data product the network did not have. The incentive mechanism shares the miner pool in
-proportion to the builder fees each trader actually paid, adjusted by a small quality factor bounded between 0.85
-and 1.0, and caps what any miner can receive at a fraction of the fees that trader spent on the trade. Emission
-above the caps is directed to a dedicated burn hotkey and destroyed on chain, so unawarded emission never reaches
-the market, and no fake-volume strategy can profit at any fee tier.
+### Key facts
 
-Kokoah, the operator, is building its application into a trading platform with AI assistance that makes trading
-easier for everyone, which widens the funnel of traders into the subnet. This document describes the mechanism,
-the reasoning behind each rule, the economic analysis that supports it, the verification done so far, and what
-remains open before a mainnet launch. Version 1.0 fixes the mechanism and its parameters for launch; the
-validator software implementing it is complete and runs on a test network, and the open items in section 8 are
-measurements, not design decisions. Later changes follow the changelog policy in section 7.
+- **Miners are traders.** They register a hotkey, bind their Hyperliquid address with one signed line, and trade.
+  They run no software and never expose keys.
+- **Scored from public data.** Validators recompute everything from the exchange's per-builder daily file, each
+  trader's public account history and the chain; every validator reaches the same weights from the same inputs.
+- **Pay follows fees paid.** Equal activity, equal pay, within a 15% band set by skill and holding. Twice the
+  activity, about twice the pay.
+- **Nobody is paid more than a fraction of what the trade cost them.** At most twice the builder fee, and at most
+  three quarters of the exchange's fee and the builder fee together. Every fake-volume strategy loses at every fee
+  tier of the exchange; checked, not hoped for.
+- **Unawarded emission is destroyed.** What the caps leave over goes to a dedicated burn hotkey and is burned with
+  the chain's burn call, one public transaction per burn.
+- **Revenue returns to the network.** The builder fees buy back and burn the subnet token, each buyback one
+  on-chain transaction.
+- **Everything is on the record.** Every validator keeps a complete, queryable record of every fill, every figure
+  and every decision, and serves the ranking and the daily artifacts over a read-only interface.
+- **Status.** The mechanism and its parameters are fixed in this version; the validator software is complete and
+  running on a test network; the remaining items are measurements, listed in section 9.
 
 ---
 
-## 1. Motivation
+## 1. What the subnet brings to Bittensor
 
 Bittensor's premise is that token emission should flow to measurable, useful work. Subnets that measure their
 work against an external, independent source of truth are the easiest for the network to trust, and subnets that
 bring revenue and participants from outside the network make the whole network stronger. Kokoah Subnet is built
 to do both.
 
-Trading on a public exchange is such a source of truth. Every fill on Hyperliquid is a public record with a price,
-a size, a side, a fee, and a counterparty; account values and deposits are public; and a venue-level feature, the
-builder code, attributes a fill to the application that routed it and charges a small fee that the venue itself
-publishes. A subnet built on this data can pay for an activity that is real, priced by an outside market, and
-revenue-generating, without asking the network to trust the operator's measurements.
-
-What the subnet brings to Bittensor:
-
-- **Revenue from outside the network.** Every routed trade pays a builder fee to the operator, and those fees buy
-  back and burn the subnet token on chain. Value earned on an external venue is returned to the network in a form
-  anyone can verify, transaction by transaction.
+- **Revenue from outside the network.** Every routed trade pays a builder fee that the exchange itself charges and
+  publishes. Those fees buy back and burn the subnet token on chain, transaction by transaction. Value earned on an
+  external venue is returned to the network in a form anyone can verify.
 - **New participants and capital.** Hyperliquid traders join Bittensor to take part: they register hotkeys, lock
-  collateral, and are paid in alpha that the holding factor rewards them for keeping. A trading community that
-  had no reason to be on Bittensor gets one.
+  collateral, and are paid in alpha that the holding factor rewards them for keeping. A trading community that had
+  no reason to be on Bittensor gets one.
 - **A verifiable data product.** The public ranking of traders, computed by independent validators from the
   traders' own fills, is a signal that did not exist before: who trades well, at what scale, with what
   consistency, with no self-reporting anywhere.
-- **A path toward automated trading.** Kokoah is adding AI assistance to its platform so that trading is easier
-  for everyone, which grows the number of traders the subnet can verify. The longer-term direction (section 9) is
-  trading by AI agents on the platform, which the subnet's verification measures in exactly the same way as human
-  trading.
+- **A path toward automated trading.** Kokoah is adding AI assistance to its platform so that trading is easier for
+  everyone, which grows the number of traders the subnet can verify. The longer-term direction (section 10) is
+  trading by AI agents on the platform, which the subnet measures exactly as it measures human trading.
 
-The hard part is not measurement but incentives. Rewards for trading volume have a long record of failure:
-trans-fee mining in 2018 collapsed when the reward exceeded the fee, dYdX's trading rewards were cut repeatedly for
-paying more than they earned, and academic estimates put wash trading above 70% of reported volume on unregulated
-venues. Kokoah Subnet is designed from that record. The mechanism below is built around one rule that is checked
-rather than hoped for: no strategy without a trading edge can net a profit from the subnet, at any pool size and
-at any fee tier of the exchange. Everything else follows from that rule.
+Trading on a public exchange is a good source of truth. Every fill on Hyperliquid is a public record with a
+price, a size, a side, a fee and a counterparty; account values and deposits are public; and the venue's builder
+code attributes each fill to the application that routed it and charges a fee the venue publishes. A subnet built
+on this data pays for an activity that is real, priced by an outside market and revenue-generating, without asking
+the network to trust the operator's measurements.
 
-## 2. Design goals
+The hard part is not measurement but incentives. Rewards for trading volume have a long record of attracting fake
+volume. The mechanism below is built around one rule that is checked rather than hoped for: no strategy without a
+trading edge can net a profit from the subnet, at any pool size and at any fee tier of the exchange. Everything
+else follows from that rule.
 
-1. **Verifiable.** Every input is public: Hyperliquid fills, account values, deposits, and Bittensor chain state.
-   Validators recompute independently; the operator has no privileged measurement.
-2. **Proportional.** Rewards are linear in the fees a trader actually paid through the builder code. Twice the
-   activity, about twice the reward. Splitting or merging accounts changes nothing.
-3. **Bounded modifiers.** Skill and holding adjust a trader's rate only within 0.85 to 1.0. Two traders with the
-   same activity and fee tier are always within 15% of each other, so anyone can participate without fear of a
-   score they cannot control.
-4. **Fee-backed and farm-proof.** No miner is ever paid more than a fraction of what the trade cost them. Fake
-   volume loses money at every fee tier the exchange offers, whatever the size of the pool.
-5. **Nothing wasted, nothing hidden.** Emission above the fee-backed caps goes to a dedicated burn hotkey and is
-   destroyed with the chain's burn call, one verifiable transaction per burn. Builder fees buy back and burn the
-   subnet token in the same way. All daily scoring artifacts are published.
+## 2. How it works
 
-## 3. Participants and data
-
-**Miners** are traders. A miner registers a hotkey on the subnet, binds one Hyperliquid address to it, and trades
-perpetuals through the Kokoah application, so that every scored fill carries the Kokoah builder code. The binding
-is a one-line message signed by the Hyperliquid address (an Ethereum personal-message signature) and published by
-the hotkey as its on-chain commitment, so the hotkey's own signature is the transaction itself; the exact format
-is in appendix C. Miners run no software; the binding and the trading are the work.
-
-**Validators** run open-source software that, once a day, fetches the public data for every bound address,
-applies the exclusion rules, computes each miner's reward, and sets weights every tempo. The computation is
-deterministic: every validator with the same inputs produces the same weights, and Yuma consensus has nothing to
-reconcile but data availability.
-
-**The operator** (Kokoah) runs the application through which the trades are routed, collects the builder fee the
-exchange charges on those trades, publishes the daily fill file's hash on chain, and spends the collected fees on
-buying back and burning the subnet token on a published cadence. The operator also runs the burn hotkey, a
-registered hotkey on its own coldkey that receives the unawarded remainder of the miner pool, and the process that
-destroys what lands there.
-
-**Data.** Hyperliquid charges the builder fee on maker and taker fills alike (its documentation is silent on the
-point; the builders' own daily files show it). It publishes, for every builder, one file per day listing every fill
-routed under that builder's code, with the user address, coin, side, price, size, whether the order crossed the spread (taker), the
-counterparty, the closed PnL, and the builder fee. This file is the canonical list of scored fills. Each address's
-own public fill history provides the total fee charged by the exchange, and its public account state provides the
-daily account value and deposits. Fills without the builder code count for nothing; no other venue is ever read.
-
-**Clusters.** Addresses that belong together are scored as one and never trade against each other for credit: a
-master account and its sub-accounts, addresses on the same coldkey, addresses funded by the same bridge depositor
-or transferring between each other.
-
-**Migration.** A miner's smoothed records belong to the hotkey, not the address. Once per 60 days a miner may
-move to a new address by publishing a new commitment signed by both the old and the new address; the records carry
-over. The chain keeps only a hotkey's latest commitment, so each validator enforces the 60-day limit from the
-bindings it has itself accepted; a validator that starts later accepts the current commitment on its signatures
-alone and agrees with the others from then on. A fresh binding starts from zero.
-
-## 4. The incentive mechanism
-
-Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` carrying the builder code, `n_f`
-its notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker), `fee_f` the fill's total fee field (the exchange's fee plus the builder fee; a maker rebate makes the
-exchange's part negative). `A` is the day's miner emission (33% of 7,200 alpha, 2,376 alpha). `p_d` is the day's
-conversion rate from dollars to alpha: the mean pool rate (TAO per alpha) sampled at every tempo boundary of the
-day, times the day's mean TAO/USD mark.
-
-### 4.1 Fee credit
-
-Each day, a miner's fee credit is the builder fee paid on its fills. The builder fee is one rate on every order,
-0.025% of notional, attached when the order is placed and therefore the same whether the order rests on the book or
-crosses it; the exchange charges it on maker and taker fills alike. The credit is smoothed with a daily factor of
-0.3:
-
-```
-Φ_i,d  = Σ_f  b_f
-Φ̂_i,d  = 0.7 × Φ̂_i,d−1 + 0.3 × Φ_i,d
+```mermaid
+flowchart LR
+  T[Trader<br/>miner hotkey + Hyperliquid address] -->|trades through the app| K[Kokoah application<br/>builder code on every order]
+  K --> H[Hyperliquid<br/>fills, fees, account state]
+  H -->|builder fee| O[Operator]
+  O -->|buyback and burn| C[(Bittensor chain)]
+  H -->|per-builder daily file,<br/>public account data| V[Validators]
+  C -->|stake, commitments,<br/>pool rate| V
+  V -->|weights: miners by pay,<br/>remainder to the burn hotkey| C
+  C -->|alpha emission| T
+  C -->|unawarded remainder| B[Burn hotkey] -->|burn call| C
 ```
 
-A day's fees are worth 30% on the day, 21% the next, 15% the day after. The weights sum to one, so every dollar of
-fees is counted exactly once over time; the smoothing only spreads it. A dollar of maker fees is worth exactly a
-dollar of taker fees to the subnet's revenue, and the credit treats them the same; the second cap (section 4.4),
-not a credit discount, is what keeps the passive leg of a two-account wash from being subsidized.
+Figure 1. The flow. Trades go through the application to the exchange; the exchange's fee funds the buyback; the
+exchange's public data and the chain feed the validators; the validators' weights pay the traders and send the
+unawarded remainder to be burned.
 
-### 4.2 Quality multiplier
+Once a day, after the UTC day closes, every validator fetches the exchange's file of all fills routed under the
+Kokoah builder code, reads which hotkey each address is bound to, fetches each bound address's public account
+history and fee schedule, reads stake and the pool rate from the chain, and scores the day. The weights it sets
+every tempo pay each trader their share and direct the rest to the burn hotkey. Everything it fetched and decided
+goes into its record and its daily artifact.
 
-```
-M_i,d  = 0.85 + 0.05 × g'_i,d + 0.10 × h'_i,d          g', h' ∈ [0, 1]
-```
-
-`g'` is the skill factor and `h'` the holding factor, both defined below. The multiplier is bounded in [0.85, 1]
-by construction. Traders with the same activity differ by at most 15% whatever their skill or holding.
-
-### 4.3 Share
-
-```
-share_i,d  = A × Φ̂_i,d × M_i,d / Σ_j Φ̂_j,d × M_j,d
-```
-
-The pool is shared in proportion to credit times multiplier. Because the share is linear in a quantity that an
-account can split (fees paid), and the multiplier is bounded, splitting one account into many or merging many
-into one does not change the total received. This is the proportional allocation rule, which Chen, Papadimitriou
-and Roughgarden (2019) show to be the unique rule that is budget-balanced, symmetric, sybil-proof and weakly
-collusion-proof.
-
-### 4.4 Caps and burn
-
-```
-F̂_i,d    = 0.7 × F̂_i,d−1 + 0.3 × Σ_f fee_f                      smoothed total fees on the builder leg
-cap_i,d  = M_i,d × min( 2 × Φ̂_i,d ,  0.75 × F̂_i,d ) / p_d        in alpha
-pay_i,d  = min( share_i,d , cap_i,d )
-burn_d   = A − Σ_i pay_i,d                                       weight to the burn hotkey
+```mermaid
+flowchart TD
+  F[Fees paid through the builder code today] --> S[Smoothed fee credit<br/>30% today, 70% the running figure]
+  S --> M[Rate multiplier 0.85 to 1.0<br/>+0.05 skill, +0.10 holding]
+  M --> SH[Share of the day's pool<br/>in proportion to credit x rate]
+  SH --> P{Pay = the smaller of}
+  C1[2 x the builder fee paid] --> P
+  C2[75% of the trade's total cost<br/>exchange fee + builder fee] --> P
+  P --> PAY[Paid to the trader]
+  P --> R[Remainder of the pool] --> BURN[Burn hotkey, destroyed]
 ```
 
-Two caps apply to every miner. The first says that nobody is paid more than twice the builder fee they paid. The
-second says that nobody is paid more than three quarters of everything the trade cost them on the exchange, the
-exchange's fee and the builder fee together. For an ordinary account, the first cap binds; for an account with
+Figure 2. The pay rule. The share follows fees paid; two caps bound what any trader can receive; what the caps
+leave over is destroyed.
+
+## 3. Who does what
+
+**Traders.** Register a hotkey on the subnet, sign one line with the Hyperliquid wallet (appendix D) and publish
+it as the hotkey's commitment, then trade perpetuals through the Kokoah application. That is all. No software to
+run, no keys to share, no reporting. Pay arrives as alpha on the hotkey every tempo; keeping it earns the holding
+part of the rate; a consistent track record earns the skill part. A trader can move to a new address once per 60
+days and keep their records.
+
+**Validators.** Run the open-source validator with a hotkey and a database. It fetches public data, scores the
+day, sets weights every tempo, keeps the record and serves the daily artifacts and the leaderboard over a
+read-only interface. Any number of validators can run; they agree because the computation is deterministic over
+public inputs.
+
+**The network.** Receives revenue it did not have, through buybacks that anyone can check on chain; gains
+registered, staked participants from a community outside Bittensor; and gets a verifiable ranking of traders as a
+data product. Unawarded emission never reaches the market.
+
+**The operator (Kokoah).** Runs the application that routes the trades, collects the builder fee the exchange
+charges, commits each day's file hash on chain so validators can check theirs, runs the buyback and the burn
+process, and publishes the code, the parameters and every change. What the operator cannot do is in section 7.
+
+## 4. The pay rule
+
+Every number below is a parameter of specification v5.8; the complete formulas are in appendix A.
+
+**Fee credit.** A trader's credit for the day is the builder fee paid on their fills, 0.025% of notional on every
+order, maker and taker alike. The credit is smoothed: 30% of today's fees count today, 21% tomorrow, 15% the day
+after, and so on. The weights sum to one, so every dollar of fees is counted exactly once; smoothing only spreads
+it, which keeps a burst of activity from moving the ranking for a single day.
+
+**Rate multiplier.** The credit is multiplied by a rate between 0.85 and 1.0. Skill moves it by up to 0.05, holding
+by up to 0.10. Two traders with the same activity are therefore always within 15% of each other, whatever their
+skill or holding, so anyone can take part without fear of a score they cannot control.
+
+**Share.** The day's miner pool is shared in proportion to credit times rate. Because the share is linear in fees
+paid and the rate is bounded, splitting one account into many or merging many into one changes nothing (section
+5).
+
+**Caps.** Two caps bound what any trader receives. First, nobody is paid more than twice the builder fee they
+paid. Second, nobody is paid more than three quarters of everything the trade cost them on the exchange, the
+exchange's fee and the builder fee together. For an ordinary account the first cap binds; for an account with
 large volume discounts and staking rebates, the second does. The second cap is what makes the mechanism safe at
-every fee tier (section 5.1); the first sets how generous it is to ordinary traders.
+every fee tier; the first sets how generous it is to ordinary traders. Caps are converted from dollars to alpha at
+the day's average rate, never at a single block's value.
 
-Caps are converted from dollars to alpha at the day's average rate, never at a single block's value, so a momentary
-move at the scoring block cannot inflate anyone's alpha.
+**The remainder.** When the pool is larger than the sum of the caps, the normal state of a young subnet, the
+remainder is not paid to any trader. It is directed to the burn hotkey and destroyed (section 6).
 
-When the pool is larger than the sum of the caps, which is the normal state of a young subnet, the remainder is
-not paid to any trader. It is directed to the burn hotkey and destroyed (section 6.2).
+**Skill.** The skill factor asks two questions of a trader's own daily returns, computed from account value with
+deposits and withdrawals removed and each day capped at ±10%. Is the edge statistically real? The probabilistic
+Sharpe ratio of the last 60 days against a modest benchmark answers that. Are recent gains clearly larger than
+recent losses? A recency-weighted gain-to-pain ratio of the last 30 days answers that, halved if two or more days
+in the last 60 lost more than 10%. The two are multiplied, smoothed like the credit, and scaled so that a strong
+trader scores 1. In simulation, accounts with no edge score 0.05 to 0.10, a steady trader about 0.3, a strong
+one above 0.5. A single bad day is one capped loss that fades; a repeated pattern of blow-ups keeps counting.
 
-### 4.5 Skill factor
+**Holding.** The holding factor is the share of the last 60 days' pay that is still staked on the trader's own
+hotkey, read as the day's minimum so staking for a block earns nothing; alpha bought on the market counts. Keep
+everything and the factor is 1; sell everything and it is 0.
 
-Daily returns of the bound address are computed from account value with deposits and withdrawals removed, and
-each day is capped at ±10%:
+**Gates.** The skill and holding parts, and a place in the public ranking, need at least 10 completed round trips,
+7 active days and a mean account value of $500 over the last 30 days. A trader failing a gate is paid at the floor
+rate of 0.85, not excluded.
 
-```
-r_d = (E_d − E_d−1 − flows_d) / E_d−1          r̃_d = clip(r_d, −0.10, +0.10)
-```
+**What never counts.** Fills against the trader's own cluster (sub-accounts, addresses on the same coldkey,
+addresses funded by or transferring with each other); fills against another bound address, since the subnet does
+not pay for volume between its own miners (the exchange's file names every counterparty, so this is exact); and
+fills priced more than 0.5% from the mark, which are valued at the mark. Persistent hedging through the market is
+caught by position: daily net positions correlated below −0.8 with another bound address on at least 10 days in the
+last 30. Mirrored volume above 25% of an address's notional is removed from its credit; above 50%, both addresses
+lose their rate bonus for 30 days and are reported.
 
-Two statistics are combined. **Confidence** is the probabilistic Sharpe ratio (Bailey and López de Prado 2012,
-adjusted for skew and kurtosis) of the last 60 days of capped returns against a benchmark daily Sharpe ratio of
-0.03, about 0.5 annualized; it asks whether the edge is statistically real rather than lucky. With fewer than 10
-days it is 0.5. **Quality** is the recency-weighted gain-to-pain ratio of the last 30 days (half-life 10 days); it
-asks whether recent gains clearly exceed recent losses. It is halved if two or more days in the last 60 lost more
-than 10%.
+**Parameters.** Builder fee 0.025%; smoothing 0.3 a day; rate 0.85 + 0.05 skill + 0.10 holding; caps 2× the fee
+credit and 0.75× the total fees on the builder leg; skill windows 60 and 30 days; holding window 60 days; gates
+10 round trips, 7 days, $500; mirror thresholds 25% and 50%; migration once per 60 days; emission split miner 33%,
+owner 33% (locked), validators 34%. Changes follow section 7.
 
-```
-confidence = clip((PSR − 0.5) / 0.45, 0, 1)
-quality    = clip((GPR − 1) / 1.2, 0, 1)
-g_raw      = confidence × quality
-g_i,d      = 0.7 × g_i,d−1 + 0.3 × g_raw
-g'_i,d     = min(1, g_i,d / 0.65)
-```
+## 5. Why fake volume loses
 
-A single bad day is one capped loss that fades; a repeated pattern of blow-ups keeps counting. In simulation (6,000 accounts per profile, 60 days), accounts with no edge score 0.05 to
-0.10, a martingale-style account 0.08, a steady low-volatility trader 0.30, a trader with a real edge 0.35, a
-strong trader 0.56. The skill factor moves pay by at most 5%; it exists to recognize skill in the public ranking
-and to nudge, not to dominate.
+The intuition first. Whatever a trader does to generate volume, the exchange charges its fee and the builder fee
+on every fill of the builder leg. The subnet never pays more than three quarters of those two fees together. So
+the builder leg alone loses at least a quarter of its cost, and any other leg, on another venue or in another
+account, only adds cost. The only thing that can offset the loss is a maker rebate on the other leg, and the best
+rebate the exchange offers is too small to close the gap.
 
-### 4.6 Holding factor
-
-```
-staked_i,d = the day's minimum alpha staked on i's own hotkey by its own coldkey
-target_i,d = alpha paid to i in the last 60 days
-h'_i,d     = min(1, staked_i,d / max(target_i,d, collateral_min))
-```
-
-A miner who keeps what they were paid over the last two months has a factor of 1; one who sold everything has 0;
-alpha bought on the market counts. The stake is read as the day's minimum, so staking for one block earns nothing.
-The factor moves pay by at most 10%. Whether it reduces selling in practice is something to measure on testnet,
-not to assume.
-
-### 4.7 Activity gates
-
-The skill and holding parts of the multiplier, and the public ranking, require over the last 30 days at least 10
-completed round trips, at least 7 days with a builder-code fill, and a mean account value of at least $500. A
-miner failing a gate is paid at the floor multiplier of 0.85, not excluded.
-
-### 4.8 Exclusions
-
-Before anything is computed, the following are removed from a miner's fills: fills whose counterparty is the same
-cluster; fills whose counterparty is another bound address, since the subnet does not pay for volume between its
-own miners (the per-builder file names every fill's counterparty, so this is exact and never flags an honest
-trader by coincidence); and fills priced more than 0.5% from the mark, which are valued at the mark. Persistent
-hedging through the market is caught by position: daily net positions in a coin correlated below −0.8 with another
-bound address on at least 10 overlapping days in the last 30. Mirrored notional above 25% of an address's notional
-is removed from its credit; above 50%, both addresses lose their quality multiplier for 30 days and are reported.
-These rules protect the integrity of the public ranking. The economics alone already make mirrored volume a loss
-(section 5.1).
-
-Two abuse signals are published without affecting pay: the share of an address's credit from positions held under
-one minute, and the share from fills against bound counterparties.
-
-### 4.9 Parameters
-
-| Parameter | Value |
-|---|---|
-| Builder fee | 0.025% of notional per fill |
-| Smoothing factor | 0.3 per day (credit, total fees, skill) |
-| Multiplier | 0.85 + 0.05 × skill + 0.10 × holding |
-| First cap | 2 × smoothed fee credit |
-| Second cap | 0.75 × smoothed total fees on the builder leg (must stay below 0.864) |
-| Conversion rate | day's mean pool rate × day's mean TAO/USD |
-| Skill windows | confidence 60 days, quality 30 days (half-life 10), blow-ups 60 days |
-| Holding target | alpha paid in the last 60 days, floor at the collateral minimum |
-| Gates | 10 round trips, 7 active days, $500 mean equity, over 30 days |
-| Mirror rules | fills against bound counterparties never count; correlation < −0.8 on ≥ 10 days; exclude above 25%, zero above 50% |
-| Migration | once per 60 days, signed by old address, new address and hotkey |
-| Emission split | miner 33%, owner 33% (locked), validators 34% |
-
-Any change to a parameter is announced at least seven days before it takes effect and recorded in a public
-changelog.
-
-## 5. Economic analysis
-
-### 5.1 The one law: fake volume loses at every fee tier
-
-Consider any strategy that generates volume without a trading edge: wash trading against oneself on another venue
-or in another account, a hedged pair, instant round trips, dust accounts, a farm of small accounts. Let `C` be the
-total fees such an account pays on the builder leg per round trip (the exchange's fee plus the builder fee, both
-sides) and `H` the cost of the other leg, if any. The subnet pays at most `0.75 × C`, so
-
-```
-net  ≤  −0.25 × C − H
-```
-
-The smallest `C` on Hyperliquid is a maker at the deepest rebate tier, 0.3 bps a side, trading through a 2.5 bps
-builder fee: `C = 2 × (2.5 − 0.3) = 4.4` bps per round trip. The most favorable other leg is the same rebate,
-`H = −0.6`. Hence `net ≤ −1.1 + 0.6 = −0.5` bps per round trip. Every zero-edge strategy loses, at every pool size,
-at every fee tier, whatever the first cap is set to. The inequality holds for any second-cap ratio below 0.864; the
-chosen 0.75 leaves margin.
+In numbers, per round trip of notional, in basis points: let `C` be the total fees paid on the builder leg (the
+exchange's fee plus the builder fee, both sides) and `H` the cost of the other leg. The subnet pays at most
+`0.75 × C`, so the net is at most `−0.25 × C − H`. The smallest `C` on Hyperliquid is a maker at the deepest rebate
+tier trading through the 2.5 bps builder fee, `C = 2 × (2.5 − 0.3) = 4.4`, and the most favorable other leg is the
+same rebate, `H = −0.6`. Hence the net is at most `−1.1 + 0.6 = −0.5` bps per round trip: every zero-edge strategy
+loses, at every pool size, at every fee tier, whatever the first cap is set to. The bound holds for any second-cap
+ratio below 0.864; the chosen 0.75 leaves margin.
 
 | Strategy (bps per round trip, builder fee 2.5 a side) | Exchange fee, builder leg | Builder fee | Other leg | Paid at most | Net |
 |---|---|---|---|---|---|
@@ -298,152 +213,143 @@ chosen 0.75 leaves margin.
 
 The tightest case, the rebated market maker, would need a hidden rebate of 0.55 bps a side to break even, almost
 twice the best rebate the exchange offers. A search over 105 combinations of volume tier, staking discount and
-maker or taker on the builder leg found no positive case.
+maker or taker on the builder leg found no positive case, and a 60-day replay of these strategies through the
+real scoring code, beside honest traders and recorded public fills of real accounts, ended negative for every one
+of them while the honest traders received their proportional share.
 
-What the law does not forbid is honest high-frequency activity. Scalpers and market makers earn credit on every
-fill like everyone else; they are paid less than their costs, like everyone else, and whether that trade-off is
-worth it is their decision, exactly as a fee rebate program on any exchange.
+**Splitting and merging change nothing.** Shares and caps are linear in fees paid and the rate is bounded, so one
+account and the same fills spread over two or five accounts receive the same total. This is the proportional
+allocation rule, which Chen, Papadimitriou and Roughgarden (2019) show to be the unique rule that is
+budget-balanced, symmetric, sybil-proof and weakly collusion-proof. What is not linear works against splitting:
+each registration costs a burn and locks collateral, each account must pass the gates on its own, and the holding
+target is per hotkey.
 
-### 5.2 Sybil neutrality
+**Honest high-frequency trading is welcome.** Scalpers and market makers earn credit on every fill like everyone
+else and are paid less than their costs like everyone else; whether that trade-off is worth it is their decision,
+exactly as with a fee rebate program on any exchange.
 
-Shares and caps are both linear in the splittable quantity, fees paid, and the multiplier is bounded. One account
-and the same fills spread over two or five accounts receive the same total (verified numerically in both pool
-regimes). The things that are not linear all work against splitting: each registration costs a burn and locks
-collateral, each account must pass the activity gates separately, and the holding target is per hotkey.
+## 6. Sustainability
 
-### 5.3 Cumulative backing
+**Fees first.** Each day's pay is at most twice the smoothed fee credit, and the smoothing weights sum to one, so
+up to any day the alpha paid out, counted in dollars when it was paid, is at most twice the builder fees collected
+so far. On 200 random paths of fees, rates and miner populations the worst ratio of paid to collected was 1.36.
+While the operator's builder fee is zero, as it is under the application's launch promotion, nothing is paid and
+the whole pool is destroyed: the subnet does not pay for activity that produced no revenue.
 
-Each day's pay is at most `2 × Φ̂` in dollars at that day's rate, and the smoothing weights sum to one, so up to any
-day the alpha paid out, counted in dollars when it was paid, is at most twice the builder fees collected so far. If miners
-keep half of what they are paid, which the holding factor rewards, the fees cover everything ever paid; if the
-first cap were set to 1, they would cover it unconditionally. On 200 random paths of fees, rates and miner
-populations the worst ratio of paid to collected was 1.36.
+**Burn.** The unawarded remainder of the pool is directed to a dedicated burn hotkey, registered by the operator on
+a coldkey of its own, bound to no trader and scored as no miner. A separate operator process burns what lands there
+with the chain's `burn_alpha` call, signed by that coldkey; every burn emits a `TokensBurned` event, and the daily
+artifact records how much was directed there, so the two can be reconciled by anyone. The burn hotkey is separate
+from the subnet owner's hotkey because the chain treats emission directed to owner hotkeys as a reason to scale
+the subnet's TAO emission share; the subnet's own burn removes unawarded alpha without changing what its miners
+and validators receive. On a local chain, with 85% of the miner pool directed to one hotkey and burned, alpha
+emission to the other participants continued at its full rate.
 
-The operator spends the collected fees on buying back and burning alpha on a published cadence (every two to three
-weeks). A coverage figure, cumulative buyback over cumulative alpha sold by miner hotkeys, is published for
-information.
+**Buyback.** The operator spends the collected fees on buying back and burning the subnet token on a published
+cadence, every two to three weeks, each time as one `add_stake_burn` transaction that buys alpha with TAO and burns
+it in a single call. A coverage figure, cumulative buyback over cumulative alpha sold by miner hotkeys, is
+published for information.
 
-### 5.4 The conversion rate
+**The conversion rate.** The caps convert dollars to alpha at the day's mean pool rate over 20 tempo samples. A 30%
+move engineered at the scoring block would change the alpha cap by 43% at a single-block rate and by 1.5% at the
+mean; holding the rate there for a whole day against everyone else is not a cheap manipulation.
 
-The caps convert dollars to alpha at the day's mean pool rate over 20 tempo samples. A 30% move engineered at the
-scoring block would change the alpha cap by 43% at a single-block rate and by 1.5% at the mean; holding the rate
-there for a whole day against everyone else is not a cheap manipulation.
+**The owner's share.** The owner's 33% of emission is locked by enabling the chain's `owner_cut_auto_lock_enabled`
+hyperparameter, so the operator never sells into its own buyback.
 
-### 5.5 Fee tiers
+## 7. What the operator cannot do
 
-In a busy subnet, where shares bind, equal activity means equal pay regardless of fee tier. In a young subnet,
-where caps bind, pay follows what the account actually spent: an account at the deepest discounts receives about
-59% of what a base-tier account with the same volume receives, because it paid about 56% as much. This is a
-deliberate property of the second cap, and it is stated here so nobody is surprised by it.
+The weights that pay traders are set by validators, not by the operator. Validators run the open-source code on
+public inputs: the exchange's per-builder file, each trader's public account history, and chain state. The
+operator's only input to scoring is the hash of the day's file, committed on chain from the owner hotkey, which
+validators compare with the hash of the file they fetched themselves from the exchange; a mismatch is published.
+The operator cannot add a fill, change a figure, pay a favorite or withhold a payment: any validator would compute
+a different result and the chain's consensus would show it.
 
-### 5.6 What the mechanism does not do
+Parameters are part of the versioned code. A change is announced at least seven days before it takes effect,
+recorded in the changelog (appendix F), and published in every daily artifact as the mechanism's version number.
+Validators adopt it by updating; nothing changes until they do.
 
-It does not pay for profit. Dollar profit is published in the ranking but never enters the share; paying for it
-would reward luck and leverage, and it is not what the exchange charges for. It does not require miners to run
-infrastructure or expose keys; the subnet reads public data only and never trades on anyone's behalf.
+Every validator keeps a complete relational record of what it saw and decided: every fill in the builder file
+with whether it counted and why not, every per-miner figure with the parts behind it (confidence, quality,
+smoothed credit and fees, holding inputs, gate counts, mirror shares, caps and pay), every account value, ledger
+entry and position, every commitment and binding decision, every pool and stake sample, every epoch's payout per
+UID as the chain made it, every weight submission, every burn, every error. Each day's artifact is published
+with its figures per miner, the file hash and whether it matched the operator's commitment, refused bindings with
+their reasons, and the abuse signals; the ranking and the artifacts are served over a read-only interface
+(appendix E) by every validator, so the ranking can be read from any of them.
 
-## 6. Relationship with the Bittensor chain
+## 8. Growth
 
-### 6.1 Emission split and the owner's share
+The subnet's growth is measured in things anyone can count on chain or at the exchange, and never in the
+subnet token's market.
 
-Emission is split 33% to miners, 33% to the owner, 34% to validators and their stakers. The owner's share is
-locked into conviction by enabling the chain's `owner_cut_auto_lock_enabled` hyperparameter, so the operator
-never sells into its own buyback. Validator emission is outside this mechanism's scope.
+**Stage one: the first traders.** A handful of Hyperliquid traders bind their addresses through the Kokoah
+application. Volume through the builder code is small, the builder fee funds small buybacks, and most of the pool
+is destroyed each day. What matters at this stage is that every number is produced and published as designed:
+fills counted, ranks computed, weights set, burns executed, the record complete.
 
-### 6.2 Unawarded emission is burned
+**Stage two: a venue's worth of traders.** The application's assistance features bring traders who would not have
+used a Bittensor subnet on their own. Volume through the builder code grows into the tens of millions of dollars a
+day, the builder fee into thousands of dollars a day, and the pool starts to be shared rather than mostly
+destroyed. Buybacks become regular, each one a public transaction. The ranking becomes a reference: a trader's
+place in it is earned from their own fills, verified by independent validators.
 
-When the sum of caps is below the pool, the difference is directed to the burn hotkey: a hotkey registered on the
-subnet by the operator on a coldkey of its own, bound to no trader and scored as no miner. A separate operator
-process burns the alpha that lands there with the chain's `burn_alpha` call, signed by that coldkey; every burn
-emits a `TokensBurned` event, and the daily artifact records how much was directed there, so the two can be
-reconciled by anyone. The burn hotkey is deliberately not the subnet owner's hotkey: the chain scales a subnet's
-TAO emission share by the fraction of miner incentive directed to owner hotkeys, and the subnet's own burn is
-meant to remove unawarded alpha from circulation without changing what the subnet's miners and validators
-receive. On a local chain, with 85% of the miner pool directed to a hotkey that then burned it, alpha emission to
-the other participants continued at its full rate.
+**Stage three: the pool is scarce.** Routed volume reaches hundreds of millions of dollars a day. The sum of the
+caps exceeds the pool, nothing is destroyed, and the pool works as a volume rebate returning a fixed fraction of
+fees to the traders who generated them, shared within 15% for equal activity. Revenue from outside the network
+returns to it every two to three weeks; a trading community is a registered, staked part of Bittensor; and the
+operator's platform, with AI assistance and later with agents trading on it, keeps widening the funnel.
 
-### 6.3 Buyback and burn, one transaction
+Every stage is read from the same record: traders bound, volume routed, fees collected, alpha paid, alpha burned,
+buybacks executed.
 
-The chain provides `add_stake_burn`, which buys alpha with TAO and burns it in a single call, emitting a
-`TokensBurned` event. Every buyback is therefore one verifiable on-chain event, and the published coverage figure
-can be checked against the chain by anyone.
+## 9. Verification
 
-### 6.4 Validation cadence and consensus
-
-Scores are computed once a day from the previous UTC day's data. Validators set the same weights every tempo (72
-minutes) until the next scoring run. Because the computation is deterministic over public inputs, the chain's
-Yuma consensus converges on identical weights; weight copying harms nothing, and timelock-encrypted weights are
-available if ever needed. The daily fill file's hash, committed on chain by the operator, lets validators detect a
-divergent input immediately.
-
-### 6.5 Registration and collateral
-
-Miners register by burning TAO; a minimum alpha collateral set by the owner is locked on the hotkey. The collateral
-is the holding factor's floor and is stranded if a hotkey is reported for mirroring. Validators score by hotkey
-root, so a hotkey swap keeps the binding.
-
-## 7. Transparency
-
-The validator software is open source. Each day the following are published per miner: fee credit, total fees on
-the builder leg, skill and holding factors, multiplier, share, cap, pay, and the day's burn; plus the builder file's
-hash and whether it matches the operator's on-chain commitment, the refused bindings with their reasons, the abuse
-signals, and the public ranking (skill, managed capital, volume, dollar profit, holding, totals over all days).
-Every validator serves these over a read-only HTTP interface (appendix D) together with a leaderboard page, so the
-ranking can be read from any validator, not only the operator's. Behind the interface, each validator keeps a
-complete relational record of what it saw and decided, from every fill and every per-miner figure with the parts
-behind it to every chain sample, commitment, weight submission and burn, so any day can be audited or re-analysed
-later from the data as it was.
-
-Parameter changes are announced at least seven days in advance and recorded in the changelog (appendix E); the
-mechanism's version number is published in every daily artifact. Reported addresses and the reason are published.
-
-## 8. Verification and limitations
-
-**Done.** An adversarial replay of 60 days through the real scoring code (honest swing trader, scalper and market
-maker beside a wash trader, a maximal-discount hedge, a rebated market maker, instant round trips and a pair
-crossing each other, plus recorded public fills of two of the most active Hyperliquid addresses): every zero-edge
-strategy ends negative and the honest traders receive their proportional share; the replay also found and removed
-a timing heuristic that flagged honest traders by coincidence. The validator ran complete passes against a local
-chain and against a test-network subnet with the real public data: the per-builder daily file is fetchable by
-anyone for the operator's builder address, bindings publish and resolve on chain, weights submit. The one law
-searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
-paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the conversion rate under a
-30% single-block move; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
-strong edge, fading edge, one bad day); on a local chain, that directing most of the miner pool to one hotkey
-and burning it leaves alpha emission to everyone else unchanged. The verification script, the simulations and the
-chain measurement are in the repository.
+**Done.** The one law searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
+paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the conversion rate under
+a 30% single-block move; the skill factor calibrated on simulated track records (luck, lottery, martingale,
+grinder, real edge, strong edge, fading edge, one bad day); a 60-day adversarial replay through the real scoring
+code, with recorded public fills of real accounts beside the synthetic ones, in which every zero-edge strategy
+ended negative and honest traders were paid proportionally; the replay also found and removed a timing heuristic
+that flagged honest traders by coincidence. On a local chain: directing most of the miner pool to one hotkey and
+burning it leaves alpha emission to everyone else unchanged. On a test-network subnet with the real public data:
+the per-builder daily file is fetchable by anyone for the operator's builder address, bindings publish and resolve
+on chain, the validator scores complete days into its record and submits weights. The verification script, the
+simulations and the chain measurements are in the repository.
 
 **Before mainnet.**
 
-1. The burn process on testnet over a month: the alpha directed to the burn hotkey each day against the alpha
+1. The burn process on the test network over a month: alpha directed to the burn hotkey each day against alpha
    actually burned, published side by side.
-2. The same replay on recorded public Hyperliquid histories of real scalpers, market makers and swing traders, and
-   with one trader on several wallets, volume timed to the conversion rate, and coordinated groups. Pass criterion unchanged: no
-   zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their proportional
-   share.
-3. Holding factor: measure selling by miners at factor 1 against factor 0 on testnet.
+2. The same replay on a month of recorded histories of real scalpers, market makers and swing traders, and with one
+   trader on several wallets, volume timed to the conversion rate, and coordinated groups. Pass criterion
+   unchanged: no zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their
+   proportional share.
+3. Holding: selling by traders at factor 1 against factor 0 on the test network.
 4. Total-fee matching against public fill histories checked on real bound traders over a month of data.
 
-**Open assumptions.** The public per-address fill API keeps 10,000 fills, so the per-builder file is
-essential for high-frequency accounts (it is, and it is public). The TAO/USD mark is the node's daily mean, with an exchange median as
-fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
+**Assumptions.** The public per-address fill API keeps 10,000 fills, so the per-builder file is essential for
+high-frequency accounts (it is, and it is public). The TAO/USD mark is the exchange's own TAO perpetual, with a
+configured fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
 operator's. Paying tokens for trading activity is subject to legal review in the operator's jurisdictions.
 
-## 9. Roadmap
+## 10. Roadmap
 
-Done: the scoring library with its tests, the validator with its store and interface, the binding flow, the burn
+Done: the scoring library with its tests, the validator with its record and interface, the binding flow, the burn
 measurement on a local chain, the replay harness, and a test-network subnet with a running validator.
 
-Next: real traders bound on the test network for at least a month, the holding and TAO-side measurements from
-that period, the operator's builder fee switched on, and then mainnet, only after the verification list above is
-complete and published, with the parameters the test-network period supports.
+Next: real traders bound on the test network for at least a month, the measurements of section 9 from that period,
+the operator's builder fee switched on, and then mainnet, only after the verification list is complete and
+published, with the parameters the test-network period supports.
 
-Beyond the subnet itself, Kokoah's platform keeps adding AI assistance so that trading is easier for everyone,
-which grows the number of traders the subnet verifies and the revenue it returns to the network. The long-term
-direction is trading by AI agents on the platform, scored by the same mechanism and verified from the same public
-data; that is a direction for later versions, not a feature of this one.
+Beyond the subnet itself, Kokoah's platform keeps adding AI assistance so that trading is easier for everyone:
+help with reading the market, with sizing and managing positions, and with learning from one's own record, the
+same record the subnet verifies. That grows the number of traders the subnet verifies and the revenue it returns to
+the network. The long-term direction is trading by AI agents on the platform, scored by the same mechanism and
+verified from the same public data; that is a direction for later versions, not a feature of this one.
 
-## 10. References
+## 11. References
 
 - Bailey, D. H., and M. López de Prado (2012). The Sharpe ratio efficient frontier. Journal of Risk 15(2).
 - Chen, Y., C. Papadimitriou, and T. Roughgarden (2019). An axiomatic approach to block rewards. arXiv:1909.10645.
@@ -456,33 +362,79 @@ data; that is a direction for later versions, not a feature of this one.
   https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
 - Bittensor (Rao Foundation) subtensor: emissions, emission weights, `run_coinbase.rs`, `subnet_emissions.rs`.
   https://github.com/RaoFoundation/subtensor
-- dYdX trading rewards. https://docs.dydx.xyz/concepts/trading/rewards/trading-rewards
 
 ---
 
-### Appendix A. Worked example
+### Appendix A. The formulas
+
+Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` carrying the builder code, `n_f` its
+notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker), `fee_f` the fill's total fee
+field (the exchange's fee plus the builder fee; a maker rebate makes the exchange's part negative). `A` is the
+day's miner emission (33% of 7,200 alpha, 2,376 alpha). `p_d` is the day's conversion rate from dollars to alpha:
+the mean pool rate (TAO per alpha) sampled at every tempo boundary of the day, times the day's mean TAO/USD mark.
+
+```
+Φ_i,d     = Σ_f  b_f                                            fee credit of the day
+Φ̂_i,d     = 0.7 × Φ̂_i,d−1 + 0.3 × Φ_i,d                           smoothed credit
+F̂_i,d     = 0.7 × F̂_i,d−1 + 0.3 × Σ_f fee_f                       smoothed total fees on the builder leg
+M_i,d     = 0.85 + 0.05 × g'_i,d + 0.10 × h'_i,d                   rate multiplier, g', h' ∈ [0, 1]
+share_i,d = A × Φ̂_i,d × M_i,d / Σ_j Φ̂_j,d × M_j,d                  share of the pool, in alpha
+cap_i,d   = M_i,d × min( 2 × Φ̂_i,d ,  0.75 × F̂_i,d ) / p_d        cap, in alpha
+pay_i,d   = min( share_i,d , cap_i,d )
+burn_d    = A − Σ_i pay_i,d                                       weight to the burn hotkey
+```
+
+Skill, from daily returns `r_d = (E_d − E_d−1 − flows_d) / E_d−1` capped to `r̃_d = clip(r_d, −0.10, +0.10)`:
+
+```
+confidence = clip((PSR − 0.5) / 0.45, 0, 1)        PSR: probabilistic Sharpe ratio of the last 60 days of r̃,
+                                                    skew- and kurtosis-adjusted, against a daily Sharpe of 0.03;
+                                                    0.5 with fewer than 10 days
+quality    = clip((GPR − 1) / 1.2, 0, 1)            GPR: gain-to-pain of the last 30 days of r̃ with weights
+                                                    0.5^(age / 10 days); halved if 2+ days < −10% in the last 60
+g_raw      = confidence × quality
+g_i,d      = 0.7 × g_i,d−1 + 0.3 × g_raw
+g'_i,d     = min(1, g_i,d / 0.65)
+```
+
+Holding: `h'_i,d = min(1, staked_i,d / max(target_i,d, collateral_min))`, with `staked` the day's minimum alpha
+staked on the hotkey by its own coldkey and `target` the alpha paid in the last 60 days.
+
+Gates, over 30 days: at least 10 round trips, 7 active days, $500 mean account value; otherwise `M = 0.85`.
+
+Exclusions: fills against the same cluster and against other bound addresses removed; fills more than 0.5% from
+the mark valued at the mark; daily net positions per coin correlated below −0.8 with another bound address on at
+least 10 of the last 30 days count as mirrored; mirrored notional above 25% removed from credit, above 50% the rate
+bonus zeroed for 30 days and the pair reported.
+
+The one law: with `C` the total fees on the builder leg and `H` the other leg's cost per round trip,
+`net ≤ −(1 − 0.75) × C − H ≤ −0.25 × 4.4 + 0.6 = −0.5` bps, negative for any second-cap ratio below 0.864.
+
+### Appendix B. Worked example
 
 A young subnet: fees today $2,000 on $8M of volume, and a daily miner pool worth far more than the sum of the caps.
 Two miners, equal volume of $4M, all taker at the base tier, smoothed credit $1,000 each, total fees on the
-builder leg $2,800 each. Miner A has strong skill and holds everything (multiplier 1.0); miner B has no skill and
-sold everything (0.85). Caps: min(2 × 1,000, 0.75 × 2,800) = $2,000, times the multiplier: A is paid alpha worth
-$2,000 and B alpha worth $1,700; the rest of the pool is burned. Same volume, pay within 15%; total pay $3,700
-against $2,000 of fees collected, covered if the two keep at least 46% of it.
+builder leg $2,800 each. Miner A has strong skill and holds everything (rate 1.0); miner B has no skill and sold
+everything (0.85). Caps: min(2 × 1,000, 0.75 × 2,800) = $2,000, times the rate: A is paid alpha worth $2,000 and B
+alpha worth $1,700; the rest of the pool is destroyed. Same volume, pay within 15%; total pay $3,700 against
+$2,000 of fees collected, covered if the two keep at least 46% of it.
 
-A busy subnet: fees $87,700 a day on $350M of volume. The sum of caps exceeds the pool; nothing is burned; the
+A busy subnet: fees $87,700 a day on $350M of volume. The sum of caps exceeds the pool; nothing is destroyed; the
 pool works as a volume rebate returning about 14% of fees, with shares within 15% for equal volume.
 
-### Appendix B. Daily procedure of a validator
+### Appendix C. A validator's day
 
 1. Fetch the previous UTC day's per-builder fill file; verify its hash against the operator's on-chain commitment.
-2. For each bound address: fetch public fills for the total fee field, account value and ledger for returns and
-   flows, and chain state for stake; apply cluster, mark and mirror exclusions.
-3. Update smoothed credit, smoothed total fees and skill; compute holding, gates, multiplier.
-4. Compute shares, caps in alpha at the day's mean rate, pay, and the burn remainder.
-5. Publish the per-miner artifacts; set weights (miners by pay, the remainder to the burn hotkey) every tempo until
-   the next run.
+2. Read every commitment on the subnet; resolve which address each hotkey is bound to.
+3. For each bound address: fetch public fills for the total fee field, account value and ledger for returns and
+   flows, positions, the fee schedule, sub-accounts and transfer partners for clusters; read the day's minimum own
+   stake and the pool rate from the chain.
+4. Update smoothed credit, total fees and skill; compute holding, gates, the rate; compute shares, caps in alpha at
+   the day's mean rate, pay, and the remainder.
+5. Write everything to the record; publish the per-miner artifact; set weights (miners by pay, the remainder to the
+   burn hotkey) every tempo until the next run.
 
-### Appendix C. Binding format
+### Appendix D. Binding format
 
 The Hyperliquid address signs, as an Ethereum personal message (EIP-191), exactly this line:
 
@@ -491,24 +443,29 @@ kokoah-bind-1 netuid=<netuid> hotkey=<hotkey ss58> address=<0x address, lowercas
 ```
 
 The hotkey publishes the result as its commitment on the subnet: one raw field of 116 characters, the base64 of
-`"K1"` + the 20-byte address + the 65-byte signature. A migration adds a second field, `"P1"` + the previous
-address + its signature over the same line (the line names the new address). Validators recover the signer from
-each field and accept the binding only when it is the named address.
+`"K1"` + the 20-byte address + the 65-byte signature. A migration adds a second field, `"P1"` + the previous address
++ its signature over the same line (the line names the new address). Validators recover the signer from each field
+and accept the binding only when it is the named address. The chain keeps only a hotkey's latest commitment, so
+each validator enforces the 60-day limit from the bindings it has itself accepted; a validator that starts later
+accepts the current commitment on its signatures alone and agrees with the others from then on.
 
-### Appendix D. Validator interface
+### Appendix E. Validator interface
 
 Read-only, served by every validator: `/days` (scored days), `/days/latest` and `/days/{day}` (the full daily
-artifact: per-miner credit, factors, multiplier, share, cap, pay; the burn; weights; file hash and whether it
-matches the operator's commitment; refused bindings; errors), `/bindings`, `/leaderboard` (the ranking with
-totals over all days), `/summary` (alpha paid and burned, builder fees, paid-to-fees ratio over all days), and `/`
-(the leaderboard page).
+artifact: per-miner credit, factors, rate, share, cap, pay; the remainder; weights; file hash and whether it
+matches the operator's commitment; refused bindings; errors), `/bindings`, `/leaderboard` (the ranking with totals
+over all days), `/summary` (alpha paid and burned, builder fees, paid-to-fees ratio over all days), and `/` (the
+leaderboard page).
 
-### Appendix E. Changelog
+### Appendix F. Changelog
 
+- **1.1 (2026-10-20).** Restructured for readers who are not engineers: summary and key facts, two figures, a
+  section per role, the pay rule in prose with the formulas moved here, what the operator cannot do, growth
+  stages. Mechanism unchanged (v5.8).
 - **1.0 (2026-10-20).** Mechanism v5.8. Since draft 0.9: the builder fee is confirmed to be charged on maker fills
   (one rate on every order), so maker and taker fills earn the same credit; the 60-second timing rule for mirrored
-  fills is replaced by the exact counterparty rule; the conversion rate is the day's mean pool rate; the holding factor
-  reads the day's minimum stake; the unawarded remainder goes to a dedicated burn hotkey and is destroyed with
-  `burn_alpha` by a separate operator process; validator, binding flow and interface implemented and running on a
-  test network.
+  fills is replaced by the exact counterparty rule; the conversion rate is the day's mean pool rate; the holding
+  factor reads the day's minimum stake; the unawarded remainder goes to a dedicated burn hotkey and is destroyed
+  with `burn_alpha` by a separate operator process; validator, binding flow and interface implemented and running on
+  a test network.
 - **0.9 (2026-10-20).** First public draft.
