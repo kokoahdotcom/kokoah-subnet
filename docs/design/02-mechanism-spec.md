@@ -1,9 +1,9 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.4, 2026-10-20)
+# Kokoah subnet incentive mechanism: complete specification (v5.5, 2026-10-20)
 
-Self-contained. Every symbol is defined here. v5.4 (owner, 2026-10-20): the pay cap is 1.5 × the Kokoah fee
+Self-contained. Every symbol is defined here. v5.5 (owner, 2026-10-20): the pay cap is 2 × the Kokoah fee
 credit, with a second, tier-aware cap of 75% of the total fees the account paid on the Kokoah leg (Hyperliquid's
-fee plus ours, read from its own fills), so that the biggest accounts, whose Hyperliquid fee falls to 0.0144% with
-volume tiers and HYPE staking, still cannot farm. v5.3 (owner, 2026-10-20): the buyback runs whenever the owner
+fee plus ours, read from its own fills). The second cap is what keeps farming unprofitable at every fee tier; the
+first sets how generous the subnet is to ordinary traders. v5.3 (owner, 2026-10-20): the buyback runs whenever the owner
 decides (every two or three weeks is fine), so there is no daily matching rule and no reserve schedule; what the
 design guarantees is cumulative: the alpha paid to miners is never worth more than the fees collected. Validator
 emissions and outside demand are out of scope. The turnover cap and the 10-minute holding-time weighting are
@@ -43,7 +43,7 @@ burned; and no cheat that lets what miners can sell outrun what the fees can buy
 | `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
 | `p_d` | alpha price in USD on day `d` = pool price (TAO) × TAO/USD mark from the node | |
 | `g'_i`, `h'_i` | skill and holding factors, both in [0, 1] | |
-| `c_max` | pay cap as a multiple of the multiplier-scaled Kokoah fee credit | 1.5 |
+| `c_max` | pay cap as a multiple of the multiplier-scaled Kokoah fee credit | 2.0 |
 | `c_tot` | second cap: share of the account's total fees on the Kokoah leg (Hyperliquid fee + builder fee, from `fee` in its fills) | 0.75 |
 | `hl_i,d` | Hyperliquid fees paid on miner i's builder-code fills that day: `Σ_f (fee_f − builderFee_f)` | |
 | `w_s`, `w_h` | weights of skill and holding in the multiplier; `m_min = 1 − w_s − w_h` is its floor | 0.05, 0.10 |
@@ -103,23 +103,23 @@ pay_i,d   = min( share_i,d , cap_i,d )                    per-miner cap
 burn_d    = A − Σ_i pay_i,d                               weight to the owner's hotkey: burned
 ```
 
-The first term is the generous cap (150% of the fee credit). The second follows each account's real cost: an
-ordinary taker pays Hyperliquid 4.5 bps a side, so 75% of (4.5 + 2.5) = 5.25 bps a side, above the first term's
-3.75, and the first term binds; a tier-6 account with the Diamond staking discount pays 1.44 bps a side, so 75% of
-(1.44 + 2.5) = 2.96 bps a side binds instead. Whatever the account's fee tier, it is never paid more than three
-quarters of what it spent on the trade, so no fee-tier makes farming pay (§11).
+The first term is the generous cap (200% of the fee credit). The second follows each account's real cost: an
+ordinary taker pays Hyperliquid 4.5 bps a side, so 75% of (4.5 + 2.5) = 5.25 bps a side, just above the first
+term's 5.0, and the first term binds; a tier-6 account with the Diamond staking discount pays 1.44 bps a side, so
+75% of (1.44 + 2.5) = 2.96 bps a side binds instead. Whatever the account's fee tier, it is never paid more than
+three quarters of what it spent on the trade, so no fee tier makes farming pay (§11), whatever `c_max` is.
 
 What this does:
 
 - **Similar volume, similar pay, always.** Scarce pool (busy subnet): proportional shares. Rich pool (young
-  subnet): everyone gets their cap, up to 150% of the Kokoah fee they paid times their multiplier. The 15% rule
+  subnet): everyone gets their cap, up to 200% of the Kokoah fee they paid times their multiplier. The 15% rule
   holds in both regimes (the second cap is also multiplied by `M`).
-- **Farms cannot profit at any pool size or fee tier.** Income per round trip is at most the smaller of 1.5 × the
+- **Farms cannot profit at any pool size or fee tier.** Income per round trip is at most the smaller of 2 × the
   credited builder fee and 75% of the total fees paid on the Kokoah leg; the unavoidable cost is those total fees
   plus the other leg (§11).
-- **Pay stays within 1.5 × fees, cumulatively.** The caps sum to at most `c_max × Σ Φ̂`, and the smoothing weights
-  sum to 1, so up to any day the alpha paid is worth at most 1.5 × the fees collected so far. Fees cover
-  everything ever paid when miners keep at least a third of it; the holding factor pays them to.
+- **Pay stays within 2 × fees, cumulatively.** The caps sum to at most `c_max × Σ Φ̂`, and the smoothing weights
+  sum to 1, so up to any day the alpha paid is worth at most 2 × the fees collected so far. Fees cover everything
+  ever paid when miners keep at least half of it; the holding factor pays them to.
 - **Nothing is hoarded.** The excess is burned the same day.
 
 ## 7. Skill factor `g'` (windows 60 and 30 days, smoothed)
@@ -168,35 +168,35 @@ R_d        = Σ_i Σ_f b_f                                   builder-fee revenue
 ```
 
 The owner buys back and burns alpha with the collected fees on a cadence of their choosing (every two or three
-weeks is fine). At `c_max = 1.5` the alpha paid out up to any date is worth at most 1.5 × the fees collected, so
-the fees absorb everything paid as long as miners keep a third of it; at `c_max = 1` they absorb it all
-unconditionally. A coverage figure `coverage =
+weeks is fine). At `c_max = 2` the alpha paid out up to any date is worth at most 2 × the fees collected, so the
+fees absorb everything paid as long as miners keep half of it; at `c_max = 1` they absorb it all unconditionally. A coverage figure `coverage =
 cumulative buyback / cumulative alpha sold by miner hotkeys` is published for information.
 
-## 11. Attack accounting (per round trip of notional, bps, fee 2.5 a side, c_max = 1.5, c_tot = 0.75)
+## 11. Attack accounting (per round trip of notional, bps, fee 2.5 a side, c_max = 2, c_tot = 0.75)
 
-Income is the total pay, at most `M × min(1.5 × credited builder fee, 0.75 × (Hyperliquid fee + builder fee))`
-on the Kokoah leg, with `M ≤ 1`.
+Income is the total pay, at most `M × min(2 × credited builder fee, 0.75 × (Hyperliquid fee + builder fee))` on
+the Kokoah leg, with `M ≤ 1`.
 
 | Strategy | Pays Hyperliquid | Pays Kokoah | Hidden leg | Income at most | Net |
 |---|---|---|---|---|---|
-| Wash: taker through Kokoah vs own maker elsewhere (tier 0) | 9 + 3 | 5 | 0 | min(7.5, 0.75 × 14 = 10.5) = 7.5 | −9.5 |
-| Two bound accounts, taker vs maker, both through Kokoah | 9 + 3 | 5 + 5 | 0 | 7.5 + min(3, 6) = 10.5, and mirrored → 0 | −11.5 or worse |
-| Hedge, taker on Kokoah (tier 0), hidden leg maker elsewhere | 9 | 5 | 3 | 7.5 | −9.5 |
-| Hedge, taker on Kokoah, tier 6 + Diamond (1.44 a side), hidden leg at a −1.0 rebate | 2.88 | 5 | −2.0 | min(7.5, 0.75 × 7.88 = 5.91) = 5.91 | −0.0 (break-even at a −1.0 bps hidden rebate; −0.6 at Hyperliquid's best rebate of −0.3) |
-| Top-tier market maker, maker both legs, one through Kokoah | −0.6 | 5 | −0.6 | min(3, 0.75 × 4.4 = 3.3) = 3 | −0.8 |
-| Instant round trips in one account (tier 0) | 9 | 5 | 0 | 7.5 | −6.5 |
-| Dust account, huge volume | 9 | 5 | 0 | 7.5 | −6.5 |
-| Lottery farm of small accounts | 9 | 5 | 0 | 7.5 | −6.5 per account |
+| Wash: taker through Kokoah vs own maker elsewhere (tier 0) | 9 + 3 | 5 | 0 | min(10, 0.75 × 14 = 10.5) = 10 | −7 |
+| Two bound accounts, taker vs maker, both through Kokoah | 9 + 3 | 5 + 5 | 0 | 10 + min(4, 6) = 14, and mirrored → 0 | −8 or worse |
+| Hedge, taker on Kokoah (tier 0), hidden leg maker elsewhere | 9 | 5 | 3 | 10 | −7 |
+| Hedge, taker on Kokoah, tier 6 + Diamond (1.44 a side), hidden leg at a −1.0 rebate | 2.88 | 5 | −2.0 | min(10, 0.75 × 7.88 = 5.91) = 5.91 | −0.0 (break-even at a −1.0 bps hidden rebate; −0.6 at Hyperliquid's best rebate of −0.3) |
+| Top-tier market maker, maker both legs, one through Kokoah | −0.6 | 5 | −0.6 | min(4, 0.75 × 4.4 = 3.3) = 3.3 | −0.5 |
+| Instant round trips in one account (tier 0) | 9 | 5 | 0 | 10 | −4 |
+| Dust account, huge volume | 9 | 5 | 0 | 10 | −4 |
+| Lottery farm of small accounts | 9 | 5 | 0 | 10 | −4 per account |
 | Volume timed to alpha price moves | its fees | its fees | | the caps are in USD at the day's price | nothing to extract |
 | Whale staking a lot, trading little | its fees | its fees | | pay ∝ its own volume; holding adds ≤ 10% | nothing to extract |
 | Sybil splitting or merging | same | same | | shares and caps linear in credit | 0 gain, burn lost (tested, §15) |
 
 Every row is negative at every pool size for any Hyperliquid fee tier; the tightest is the maximal-tier taker
 hedge, which needs a hidden-leg rebate of a full basis point a side just to break even (Hyperliquid's best is
-0.3). Without the second cap, `c_max = 1.5` would pay that account 7.5 against a cost of 7.28, a profit; the
-second cap is what makes 1.5 safe. `c_tot = 0.75` leaves 0.6 bps of margin against Hyperliquid's best rebate;
-lowering it to 0.6 would leave 1.2.
+0.3). Without the second cap, `c_max = 2` would pay that account 10 against a cost of 7.28, a clear profit; the
+second cap is what makes any `c_max` above about 1.4 safe. `c_tot = 0.75` leaves 0.6 bps of margin against
+Hyperliquid's best rebate; lowering it to 0.6 would leave 1.2 and is the knob to turn if generous `c_max` worries
+anyone.
 
 ## 12. Parameters
 
@@ -206,7 +206,7 @@ lowering it to 0.6 would leave 1.2.
 | maker credit | 0.4 |
 | smoothing `α` | 0.3, for credit and skill |
 | multiplier | `0.85 + 0.05 g' + 0.10 h'` (floor `m_min`, weights `w_s`, `w_h`; the owner tunes the balance) |
-| pay caps | `M × min(1.5 × smoothed fee credit, 0.75 × smoothed total fees on the Kokoah leg)`, in alpha at the day's price |
+| pay caps | `M × min(2 × smoothed fee credit, 0.75 × smoothed total fees on the Kokoah leg)`, in alpha at the day's price |
 | burn | the pool above the caps, same day, via the owner's hotkey (fallbacks in §1) |
 | buyback | the collected fees, on the owner's cadence |
 | skill windows | confidence 60 days (PSR, hurdle 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days |
@@ -224,9 +224,9 @@ lowering it to 0.6 would leave 1.2.
 **Young subnet.** `A = 2,376` alpha at $5.33 (pool $12,667); fees today $2,000 (volume $8M). Two miners, equal
 volume $4M, 100% taker at tier 0, `Φ̂ = $1,000` each, Hyperliquid fees $1,800 each. Miner A: strong skill and
 holds everything, `M = 1.0`; miner B: no skill, sold everything, `M = 0.85`. Shares: A 1,284 alpha, B 1,092.
-Caps: `min(1.5 × 1,000, 0.75 × (1,800 + 1,000)) = min(1,500, 2,100) = $1,500` times `M`: A 1,500 / 5.33 = 281
-alpha, B 0.85 × 1,500 / 5.33 = 239. Pay: A 281 ($1,500), B 239 ($1,275); burned 1,856 alpha. Same volume, pay
-within 15%, total pay $2,775 against $2,000 of fees collected: covered if the two keep at least 28% of it.
+Caps: `min(2 × 1,000, 0.75 × (1,800 + 1,000)) = min(2,000, 2,100) = $2,000` times `M`: A 2,000 / 5.33 = 375
+alpha, B 0.85 × 2,000 / 5.33 = 319. Pay: A 375 ($2,000), B 319 ($1,700); burned 1,682 alpha. Same volume, pay
+within 15%, total pay $3,700 against $2,000 of fees collected: covered if the two keep at least 46% of it.
 
 **Busy subnet.** Fees $87,700 a day (volume $350M). Σ caps ≈ 16,450 alpha > `A`: every share is below its cap,
 nothing is burned, the pool is a volume rebate paying about 14% of fees back, shares within 15% for equal volume.
