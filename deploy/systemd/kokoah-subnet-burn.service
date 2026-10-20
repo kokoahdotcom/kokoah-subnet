@@ -1,0 +1,17 @@
+[Unit]
+Description=Kokoah subnet burn loop (burns what the burn hotkey received, every 6 hours)
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/kokoah/kokoah-subnet
+EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
+Environment=BT_NETWORK=test KOKOAH_SUBNET_NETUID=<N> KOKOAH_BURN_WALLET=burn KOKOAH_BURN_EVERY_S=21600
+ExecStart=/kokoah/kokoah-subnet/scripts/burn_loop.sh
+Restart=always
+RestartSec=60
+StandardOutput=append:%h/.local/share/kokoah/subnet-burn.log
+StandardError=append:%h/.local/share/kokoah/subnet-burn.log
+
+[Install]
+WantedBy=multi-user.target

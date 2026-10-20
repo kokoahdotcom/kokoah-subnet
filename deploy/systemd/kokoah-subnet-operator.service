@@ -1,0 +1,7 @@
+[Unit]
+Description=Kokoah subnet operator daily step: commit yesterday's builder file hash from the owner hotkey
+
+[Service]
+Type=oneshot
+WorkingDirectory=/kokoah/kokoah-subnet
+ExecStart=/bin/bash -c 'day=$(date -u -d "yesterday" +%%Y-%%m-%%d); /kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli owner commit-file --network test --netuid <N> --day "$day" --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --wallet <owner wallet> --wallet-hotkey <owner hotkey> >> %h/.local/share/kokoah/subnet-operator.log 2>&1'

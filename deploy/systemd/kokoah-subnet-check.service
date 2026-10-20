@@ -1,0 +1,9 @@
+[Unit]
+Description=Kokoah subnet health check (posts to the alert webhook when something is wrong)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/kokoah/kokoah-subnet
+EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
+EnvironmentFile=-%h/.local/share/kokoah/subnet-alert.env
+ExecStart=/bin/bash -c '/kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli validator check --only-problems >> %h/.local/share/kokoah/subnet-check.log 2>&1 || true'

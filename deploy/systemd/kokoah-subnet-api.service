@@ -1,0 +1,16 @@
+[Unit]
+Description=Kokoah subnet validator interface (read-only, 127.0.0.1:48100)
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/kokoah/kokoah-subnet
+EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
+ExecStart=/kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli validator serve --data-dir %h/kokoah-subnet-data --host 127.0.0.1 --port 48100
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.local/share/kokoah/subnet-validator-api.log
+StandardError=append:%h/.local/share/kokoah/subnet-validator-api.log
+
+[Install]
+WantedBy=multi-user.target

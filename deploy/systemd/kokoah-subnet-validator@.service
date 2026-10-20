@@ -1,0 +1,18 @@
+[Unit]
+Description=Kokoah subnet validator (%i)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/kokoah/kokoah-subnet
+EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
+EnvironmentFile=%h/.local/share/kokoah/subnet-validator-%i.env
+ExecStart=/bin/bash -c 'exec /kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli validator run $KOKOAH_SUBNET_ARGS'
+Restart=always
+RestartSec=30
+StandardOutput=append:%h/.local/share/kokoah/subnet-validator-%i.log
+StandardError=append:%h/.local/share/kokoah/subnet-validator-%i.log
+
+[Install]
+WantedBy=multi-user.target

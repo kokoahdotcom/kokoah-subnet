@@ -48,7 +48,9 @@ providers:
       path: /var/lib/grafana/dashboards
 YAML
   cp dashboards/*.json "$PROV/dashboards/"
-  chown -R 472:472 "$PROV/data" "$PROV/dashboards" 2>/dev/null || true
+  # the container runs as uid 472; the provisioning files (one holds the database password) stay private to it
+  chown -R 472:472 "$PROV" 2>/dev/null || true
+  chmod 700 "$PROV" "$PROV/datasources" "$PROV/dashboards" && chmod 600 "$PROV/datasources/postgres.yaml"
 }
 
 case "${1:-status}" in

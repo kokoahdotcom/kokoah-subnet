@@ -11,6 +11,27 @@ testnet (`--network test`); mainnet needs the owner's go-ahead per transaction.
 running the validator, the API or the burn command, or pass `--db-url`. Without it they use a SQLite file in the
 data directory. What is recorded is in `docs/database.md`.
 
+## Services (systemd)
+
+On a server with systemd, run everything as units that restart on their own (the unit files are in
+`deploy/systemd/`; copy them to `/etc/systemd/system/`, put the arguments in
+`~/.local/share/kokoah/subnet-validator-<name>.env` as `KOKOAH_SUBNET_ARGS=...`, then
+`systemctl enable --now kokoah-subnet-validator@<name> kokoah-subnet-api kokoah-subnet-burn kokoah-subnet-check.timer
+kokoah-subnet-operator.timer`). The hourly check posts to `KOKOAH_SUBNET_ALERT_WEBHOOK` (a Discord or Slack webhook,
+in `~/.local/share/kokoah/subnet-alert.env`) only when something is wrong; the daily operator step commits
+yesterday's file hash from the owner hotkey at 00:20 UTC and retries hourly until noon if the file is late.
+
+`uv run kokoah-subnet validator check` prints the health report (latest day, last weights, last epoch, errors in
+24 h, last burn) and exits 1 on a problem.
+
+## Dashboards
+
+`scripts/dashboard.sh start` runs Grafana (Docker, 127.0.0.1:48120, admin password generated into
+`~/.local/share/kokoah/subnet-grafana.env`) provisioned with the record as its datasource and the dashboards in
+`dashboards/` (overview: volume, fees, paid and burned, miners, conversion-rate inputs, emission per UID per epoch,
+latest day per miner, the miners table, fills by exclusion reason, submissions and burns). Add dashboards as JSON
+files in `dashboards/` and restart.
+
 ## Validator
 
 ```bash
