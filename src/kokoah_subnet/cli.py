@@ -83,7 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
     ocommit = osub.add_parser("commit-file", help="commit the day's builder file hash from the owner hotkey")
     ocommit.add_argument("--netuid", required=True, type=int)
     ocommit.add_argument("--day", required=True, help="YYYY-MM-DD")
-    ocommit.add_argument("--file", required=True, type=Path, help="the builder file (.csv.lz4) as downloaded")
+    ocommit.add_argument("--file", type=Path, default=None, help="the builder file (.csv.lz4) as downloaded")
+    ocommit.add_argument(
+        "--builder", default=None, help="download the day's file for this builder address instead of --file"
+    )
     ocommit.add_argument("--network", default="local")
     ocommit.add_argument("--wallet", default="owner")
     ocommit.add_argument("--wallet-hotkey", default="default")
@@ -99,6 +102,13 @@ def build_parser() -> argparse.ArgumentParser:
     oburn.add_argument("--password-stdin", action="store_true", help="read the coldkey password from stdin")
     oburn.add_argument("--dry-run", action="store_true", help="show what would be burned, submit nothing")
     oburn.add_argument("--db-url", default=None, help="record the burn in the database (default $KOKOAH_SUBNET_DB_URL)")
+    vcheck = vsub.add_parser("check", help="health check over the record (exit 1 on a problem)")
+    vcheck.add_argument("--data-dir", type=Path, default=None)
+    vcheck.add_argument("--db-url", default=None)
+    vcheck.add_argument(
+        "--webhook", default=None, help="post the report to this JSON webhook (default $KOKOAH_SUBNET_ALERT_WEBHOOK)"
+    )
+    vcheck.add_argument("--only-problems", action="store_true", help="post only when there is a problem")
     vserve = vsub.add_parser("serve", help="serve the store over HTTP (read-only)")
     vserve.add_argument("--data-dir", required=True, type=Path)
     vserve.add_argument(
@@ -180,6 +190,16 @@ def _validator(args: argparse.Namespace) -> int:
         )
         asyncio.run(run(cfg, once=args.once, day=args.day))
         return 0
+    if args.validator_command == "check":
+        from kokoah_subnet.validator.health import main_report
+        from kokoah_subnet.validator.store import Store
+
+        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
+        if not url and args.data_dir is None:
+            print("give --db-url or --data-dir")
+            return 2
+        store = Store(url or (args.data_dir / "validator.sqlite"))
+        return main_report(store, args.webhook or os.environ.get("KOKOAH_SUBNET_ALERT_WEBHOOK"), args.only_problems)
     if args.validator_command == "serve":
         import uvicorn
 
@@ -200,7 +220,16 @@ def _owner(args: argparse.Namespace) -> int:
     from kokoah_subnet.validator.builder_feed import sha256
 
     if args.owner_command == "commit-file":
-        digest = sha256(args.file.read_bytes())
+        if args.file is not None:
+            data = args.file.read_bytes()
+        elif args.builder:
+            from kokoah_subnet.validator.builder_feed import download
+
+            data = asyncio.run(download(args.builder, args.day))
+        else:
+            print("give --file or --builder")
+            return 2
+        digest = sha256(data)
         text = file_commitment_text(args.day, digest)
         wallet = (
             bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)

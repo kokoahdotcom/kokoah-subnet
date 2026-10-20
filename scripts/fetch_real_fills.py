@@ -54,9 +54,17 @@ async def main() -> int:
     hl = HyperliquidInfo(rate_limit_s=0.5)
     try:
         for a in addresses:
-            page = await hl.post({"type": "userFillsByTime", "user": a, "startTime": start, "endTime": end})
-            (args.out / f"{a}.json").write_text(json.dumps(page))
-            print(f"{a}: {len(page)} fills in the last {args.days} days")
+            # page forward in 2,000-fill steps (the API keeps the most recent 10,000 per address)
+            records: list[dict[str, object]] = []
+            cursor = start
+            while True:
+                page = await hl.post({"type": "userFillsByTime", "user": a, "startTime": cursor, "endTime": end})
+                records.extend(dict(r) for r in page)
+                if len(page) < 2000:
+                    break
+                cursor = int(page[-1]["time"]) + 1
+            (args.out / f"{a}.json").write_text(json.dumps(records))
+            print(f"{a}: {len(records)} fills in the last {args.days} days")
     finally:
         await hl.close()
     return 0
