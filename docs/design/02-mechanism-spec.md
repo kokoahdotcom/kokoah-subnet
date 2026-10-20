@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v2, 2026-10-19)
+# Kokoah subnet incentive mechanism: complete specification (v3, 2026-10-20)
 
 Self-contained. Every symbol is defined here; nothing else is needed to understand or re-implement the mechanism or
 the simulator (`sim/index.html`).
@@ -37,7 +37,7 @@ subnet's token (alpha) and burn it. The subnet's product is a verified ranking o
 | `mark(f)` | Hyperliquid mark price of the coin at the time of fill `f` | |
 | `λ` | dollar-profit weight | 50 |
 | `c_m` | maker fee credit | 0.4 |
-| `σ` | share of the pool split by fee credit | 0.5 |
+| `κ` | skill premium: full skill and holding multiply the fee credit by `1 + κ` | 4 |
 
 ## 3. Inputs and exclusions
 
@@ -58,7 +58,7 @@ Before anything is computed, remove:
 4. price clipping: if `|price_f − mark(f)| / mark(f) > 0.005`, the fill is valued at `mark(f)` for notional and
    profit (neutralizes off-market self-trades that transfer profit between accounts).
 
-## 4. Fee credit (the "fee half")
+## 4. Fee credit
 
 ```
 Φ_i = Σ_{f ∈ W30}  b_f × ( t_f × 1.0  +  (1 − t_f) × c_m )
@@ -69,98 +69,84 @@ Taker fills earn full credit, maker fills 40%. Reason: to earn taker credit an a
 taker fee (4.5 bps a side), which exceeds anything the subnet returns; a top-tier market maker's maker cost can be a
 rebate, so maker credit stays low (§11).
 
-## 5. Volume, profit, size (the "skill half" base)
+## 5. Dollars made
 
 ```
-V_i = Σ_{f ∈ W30} n_f                                  (after §3 clipping; all builder-code fills)
-P_i = max( 0 ,  Σ_{d ∈ W30} ( E_d − E_{d−1} − flows_d ) )   dollar profit of the whole address, 0 if negative
-S_i = V_i + λ × P_i                                     size; λ = 50 means $1 of profit counts like $50 of volume
+P_i = max( 0 ,  Σ_{d ∈ W30} ( E_d − E_{d−1} − flows_d ) )     dollar profit of the whole address, 0 if negative
 ```
 
-`P_i` is equity-based (includes unrealized PnL, so losers cannot be hidden by never closing them) and net of all
-fees and funding (they are already inside `E_d`). Deposits and withdrawals are removed through `flows_d`.
+Equity-based (includes unrealized PnL), net of fees and funding (inside `E_d`), deposits and withdrawals removed.
 
-## 6. Skill multiplier `g_i ∈ [0, 1]`
+## 6. Skill score `g_i ∈ [0, 1]` = confidence × quality × coverage
 
-### 6.1 Daily returns and the equity curve
+History: all days since the miner's binding (or since migration, §16), at most the last 180. No drawdown is used
+anywhere.
 
-```
-r_d = ( E_d − E_{d−1} − flows_d ) / E_{d−1}             time-weighted daily return
-C_d = Π_{k ≤ d} ( 1 + r_k )                              cumulative curve, C_0 = 1
-R_W = C_end / C_start − 1                                return over window W
-MDD_W = max_{d ∈ W} ( 1 − C_d / max_{k ≤ d, k ∈ W} C_k ) max drawdown over W (0 to 1)
-```
-
-### 6.2 Calmar-type scores
+### 6.1 Daily returns, capped
 
 ```
-g30 = clip( ( R30 / max(MDD30, 0.05) ) / 2 ,  0 ,  1 )     R30 = 2 × MDD30 earns 1.0
-g90 = clip( ( R90 / max(MDD90, 0.05) ) / 3 ,  0 ,  1 )     R90 = 3 × MDD90 earns 1.0
+r_d  = ( E_d − E_{d−1} − flows_d ) / E_{d−1}
+r̃_d  = max( −0.10 , min( 0.10 , r_d ) )                           capped return
+n    = number of days in the history (≤ 180)
 ```
 
-The 0.05 floor on drawdown stops near-zero-volatility accounts from scoring infinitely.
-
-### 6.3 Persistence test ("test F")
-
-Let `m1, m2, m3` be the returns of the last three calendar months. The test passes if at least two of them are
-positive.
-
-### 6.4 Gates (any failure gives `g_i = 0` for this scoring day)
-
-- `R30 ≤ 0`
-- `MDD30 > 0.50`
-- fewer than 10 completed round trips in `W30`
-- fewer than 7 days with at least one builder-code fill in `W30`
-- mean daily equity in `W30` below $500
-- consistency: the best single day's PnL exceeds 50% of the window's total positive daily PnL
-- persistence test (6.3) fails
-
-### 6.5 Coverage and newcomer factors
+### 6.2 Confidence: probabilistic Sharpe ratio (Bailey and López de Prado, 2012)
 
 ```
-C_i        = builder-code notional of the address in W30 / all notional of the address in W30
-coverage_i = min( 1 ,  C_i / 0.9 )
-newcomer_i = min( 1 ,  days_since_binding / 14 )
+μ  = mean(r̃),  σ = population std(r̃),  SR = μ / σ
+γ3 = mean( ((r̃ − μ)/σ)^3 ),  γ4 = mean( ((r̃ − μ)/σ)^4 )
+z  = ( SR − SR* ) × sqrt(n − 1) / sqrt( 1 − γ3 × SR + (γ4 − 1)/4 × SR² )       SR* = 0.03 (daily hurdle)
+PSR = Φ_N(z)                                                                    standard normal CDF; PSR = 0.5 if n < 10 or σ = 0
+confidence_i = clip( (PSR − 0.5) / 0.45 , 0 , 1 )
 ```
 
-### 6.6 The multiplier
+### 6.3 Quality: recency-weighted gain-to-pain
 
 ```
-g_i = ½ × ( g30 + g90 ) × coverage_i × newcomer_i        if all gates pass and history ≥ 90 days
-g_i = g30 × coverage_i × newcomer_i                       if all gates pass and history < 90 days
-g_i = 0                                                   otherwise
+w_d     = 0.5 ^ ( age_d / 45 )                                   age_d in days, newest day = 1
+GPR_ew  = Σ_d w_d × max(r̃_d, 0)  /  Σ_d w_d × max(−r̃_d, 0)       (10 if there are no losses and some gains)
+quality_i = clip( (GPR_ew − 1) / 1.2 , 0 , 1 )
+quality_i ×= 0.5   if  #{ d in the last 90 days : r_d < −0.10 } ≥ 2
 ```
 
-Calibration (20,000 simulated 90-day accounts, `scripts/sim_incentives.py`): a zero-edge account (a hedge leg, a
-coin flip; daily drift 0, daily volatility 2 to 5%) passes 39 to 44% of windows with mean `g = 0.18`; a trader with
-+0.3% daily drift and 2% volatility passes 86% with mean `g = 0.58`; +0.6% drift, 2.5% volatility: 97%, `g = 0.79`.
+### 6.4 Coverage and activity gates
+
+```
+coverage_i = min( 1 ,  C_i / 0.9 )        C_i = builder-code notional / all notional of the address in W30
+g_i = confidence_i × quality_i × coverage_i
+g_i = 0   if round trips in W30 < 10, or active days in W30 < 7, or mean daily equity in W30 < $500
+```
+
+Calibration (6,000 simulated accounts per profile, `scripts/sim_skill.py`), mean `g` after 90 days: zero-edge
+accounts (0% drift, 2% to 8% daily volatility) 0.03 to 0.07; martingale (92% of days +0.5%, 8% of days −7%) 0.07;
+low-volatility grinder (+0.05%, 0.4%) 0.30; real edge (+0.3%, 2%) 0.38; strong edge (+0.6%, 2.5%) 0.65; real edge
+with one −20% day 0.20 (0.32 at 180 days). Pass rates at 90 days: luck 37 to 39%, real edge 86%, strong 97%.
 
 ## 7. Holding multiplier
 
 ```
-held_i = alpha received by i in W90 that is still staked on i's own hotkey  /  alpha received by i in W90
-h_i    = 0.5 + 0.5 × held_i                                                   (1.0 if everything kept, 0.5 if all sold)
+staked_i = alpha staked on i's own hotkey by i's own coldkey (kept rewards + collateral + bought alpha)
+target_i = max( alpha received by i in W90 ,  30 × A / N_active )          N_active = miners with Φ > 0 in W30
+h_i      = 0.5 + 0.5 × min( 1 , staked_i / target_i )
 ```
 
-Alpha moved to another coldkey counts as sold.
+Unstaking or moving alpha to another coldkey lowers `staked_i` at once. A new hotkey has `staked = collateral`.
 
 ## 8. Pool split
 
 ```
-Q_i = S_i × g_i × h_i                                          skill-half score
-
-w_i = σ × Φ_i / Σ_j Φ_j   +   (1 − σ) × Q_i / Σ_j Q_j          σ = 0.5
+score_i  = Φ_i × ( 1 + κ × g_i × h_i )  +  fee × λ × P_i × g_i × h_i          κ = 4, λ = 50
+w_i      = score_i / Σ_j score_j
 ```
 
-If `Σ_j Q_j = 0` (no miner passes the skill gates), the whole pool is split by fee credit: `w_i = Φ_i / Σ_j Φ_j`.
-`Σ_i w_i = 1` always. Validators submit `w_i` as the on-chain weights every tempo; the chain pays
-`alpha_i = w_i × A` per day (spread over the day's 20 tempos).
+`Σ_i w_i = 1`. Validators submit `w_i` as on-chain weights every tempo; the chain pays `alpha_i = w_i × A` per day.
+If `Σ_j score_j = 0` (no fees at all), no weights are set and the chain's fallback applies.
 
-Properties: `Φ_i` is linear in fees, `S_i` is linear in volume and profit, `g_i` and `h_i` are bounded multipliers
-that do not change when an account is split. Hence `w` is homogeneous of degree one in the splittable quantities:
-splitting one miner into two identical halves gives the same total (sybil-neutral), merging gives the same total
-(collusion-neutral). Proportional allocation is the unique rule with both properties (Chen, Papadimitriou,
-Roughgarden 2019); any per-miner cap or concave transform would reward splitting and is deliberately absent.
+Properties: `Φ_i` is linear in fees, `P_i` linear in profit, `g_i` and `h_i` bounded multipliers unchanged by
+splitting an account; `w` is homogeneous of degree one in the splittable quantities (sybil- and collusion-neutral,
+Chen, Papadimitriou, Roughgarden 2019). The share of the pool that skill takes is not fixed: with everyone at
+`g = 0` the pool is split by fees; with everyone at full skill it is split by fees again (the multiplier is
+uniform); only differences in skill, holding and dollars move alpha between miners.
 
 ## 9. Daily payment
 
@@ -236,14 +222,16 @@ early money is Kokoah revenue, not Hyperliquid's.
 | builder fee `fee` | 0.06% per fill (6 bps a side); Hyperliquid maximum 0.1% |
 | Hyperliquid fees | taker 4.5 bps, maker 1.5 bps a side (base tier); maker rebates −0.1 to −0.3 bps above 0.5–3% of 14-day maker volume |
 | maker fee credit `c_m` | 0.4 |
-| pool split `σ` | 0.5 by fee credit, 0.5 by `Q` |
+| pool rule | `score = Φ (1 + κ g h) + fee λ P g h`, proportional |
+| `κ` | 4 |
 | `λ` | 50 |
-| `g30`, `g90` full score | `R = 2 × MDD`, `R = 3 × MDD`; drawdown floor 0.05 |
-| persistence | 2 of the last 3 months positive |
-| gates | `R30 > 0`; `MDD30 ≤ 0.5`; ≥ 10 round trips; ≥ 7 active days; mean equity ≥ $500; best day ≤ 50% of positive PnL |
+| return cap | ±10% a day |
+| confidence | PSR of capped returns, hurdle 0.03 a day, ≥ 10 days, mapped (PSR − 0.5)/0.45 |
+| quality | recency-weighted gain-to-pain, half-life 45 days, mapped (GPR − 1)/1.2; ×0.5 if ≥ 2 days below −10% in 90 days |
+| activity gates | ≥ 10 round trips; ≥ 7 active days; mean equity ≥ $500 (all in W30) |
 | coverage target | 0.9 |
-| newcomer ramp | 14 days; `g30` only under 90 days of history |
-| holding multiplier | `0.5 + 0.5 × held` over 90 days |
+| holding multiplier | `0.5 + 0.5 × min(1, staked / target)`, target = max(90-day receipts, 30 × A / N_active) |
+| migration | once per 90 days, message signed by the old address, the new address and the hotkey; records and holding carry over |
 | mark clip | 0.5% |
 | mirror thresholds | 60 s, 20% size; exclude > 25%; zero both > 50% |
 | emission split | miner 0.33, owner 0.33 (auto-locked), validators 0.34 |
@@ -254,53 +242,45 @@ early money is Kokoah revenue, not Hyperliquid's.
 ## 13. Worked example (one day)
 
 Pool `A = 2,376` alpha; token price 0.02 TAO; TAO $266.54; one alpha = $5.33; pool value $12,667.
-`fee = 0.0006`, `c_m = 0.4`, `λ = 50`, `σ = 0.5`.
+`fee = 0.0006`, `c_m = 0.4`, `λ = 50`, `κ = 4`.
 
-Three miners (daily figures):
+Three miners (daily figures, 30-day totals scaled the same way):
 
-- Anna: volume $5,000,000, 80% taker, profit $500, `g = 0.5`, sells 70% (`h = 0.65`).
-- Bob: volume $40,000,000, 60% taker, profit $8,000, `g = 0.3`, sells 50% (`h = 0.75`).
-- Cara: volume $300,000, 90% taker, profit $400, `g = 1.0`, sells 50% (`h = 0.75`).
+- Anna: volume $5,000,000, 80% taker, profit $500, `g = 0.4`, holding `h = 0.65`.
+- Bob: volume $40,000,000, 60% taker, profit $8,000, `g = 0.25`, holding `h = 0.75`.
+- Cara: volume $300,000, 90% taker, profit $400, `g = 0.8`, holding `h = 0.75`.
 
-Fee credit (`Φ = fee × volume × (taker + 0.4 × maker)`):
-- Anna: 0.0006 × 5,000,000 × (0.8 + 0.4 × 0.2) = 3,000 × 0.88 = 2,640
-- Bob: 0.0006 × 40,000,000 × (0.6 + 0.4 × 0.4) = 24,000 × 0.76 = 18,240
-- Cara: 0.0006 × 300,000 × (0.9 + 0.4 × 0.1) = 180 × 0.94 = 169.2
-- Σ Φ = 21,049.2 → shares: Anna 12.5%, Bob 86.7%, Cara 0.8%
+Fee credit (`Φ = fee × volume × (taker + 0.4 × maker)`): Anna 2,640; Bob 18,240; Cara 169.2.
 
-Skill-half score (`Q = (V + λ P) × g × h`, with daily figures used consistently):
-- Anna: (5,000,000 + 50 × 500) × 0.5 × 0.65 = 5,025,000 × 0.325 = 1,633,125
-- Bob: (40,000,000 + 50 × 8,000) × 0.3 × 0.75 = 40,400,000 × 0.225 = 9,090,000
-- Cara: (300,000 + 50 × 400) × 1.0 × 0.75 = 320,000 × 0.75 = 240,000
-- Σ Q = 10,963,125 → shares: Anna 14.9%, Bob 82.9%, Cara 2.2%
+Skill boost (`1 + κ g h`): Anna 1 + 4 × 0.4 × 0.65 = 2.04; Bob 1 + 4 × 0.25 × 0.75 = 1.75; Cara 1 + 4 × 0.8 × 0.75 = 3.40.
 
-Weights (`w = 0.5 × Φ-share + 0.5 × Q-share`):
-- Anna: 0.5 × 0.125 + 0.5 × 0.149 = 0.137
-- Bob: 0.5 × 0.867 + 0.5 × 0.829 = 0.848
-- Cara: 0.5 × 0.008 + 0.5 × 0.022 = 0.015
+Profit credit (`fee × λ × P × g × h`): Anna 0.0006 × 50 × 500 × 0.4 × 0.65 = 3.9; Bob 0.0006 × 50 × 8,000 × 0.25 ×
+0.75 = 45.0; Cara 0.0006 × 50 × 400 × 0.8 × 0.75 = 7.2.
 
-Tokens and value: Anna 0.137 × 2,376 = 326 alpha = $1,736; Bob 0.848 × 2,376 = 2,014 alpha = $10,735;
-Cara 0.015 × 2,376 = 36 alpha = $190.
+Scores: Anna 2,640 × 2.04 + 3.9 = 5,389.5; Bob 18,240 × 1.75 + 45.0 = 31,965.0; Cara 169.2 × 3.40 + 7.2 = 582.5.
+Σ = 37,937.0 → weights: Anna 14.2%, Bob 84.3%, Cara 1.5%.
 
-Net cost: Anna pays Hyperliquid 5,000,000 × (0.8 × 0.00045 + 0.2 × 0.00015) = $1,950 and Kokoah $3,000, receives
-$1,736 → net $3,214 (pays $1,264 a day more than trading on Hyperliquid directly). Bob: Hyperliquid
-40,000,000 × (0.6 × 0.00045 + 0.4 × 0.00015) = $13,200, Kokoah $24,000, receives $10,735 → net $26,465. Cara:
-Hyperliquid $126, Kokoah $180, receives $190 → net $116 (cheaper than Hyperliquid directly).
+Tokens and value: Anna 0.142 × 2,376 = 338 alpha = $1,800; Bob 0.843 × 2,376 = 2,002 alpha = $10,672; Cara 0.015 ×
+2,376 = 36 alpha = $194.
 
-Economics: `R` = $3,000 + $24,000 + $180 = $27,180; buyback $27,180; sold = 0.7 × 326 + 0.5 × 2,014 + 0.5 × 36 +
-0.2 × 7,200 × 0.34 = 228 + 1,007 + 18 + 490 = 1,743 alpha = $9,290 at today's price. Buyback ÷ selling = 2.9.
-`price*` = 27,180 / (1,743 × 266.54) = 0.0585 TAO: the buyback alone holds about three times today's price.
+Per dollar of fees paid: Bob gets back 44% ($10,672 on $24,000), Anna 60% ($1,800 on $3,000), Cara 108% ($194 on
+$180). Skill and holding set the rate; size sets the total. Net cost: Anna pays Hyperliquid $1,950 and Kokoah
+$3,000, receives $1,800 → net $3,150; Bob $13,200 + $24,000 − $10,672 = $26,528; Cara $126 + $180 − $194 = $112
+(cheaper than Hyperliquid directly).
+
+Economics: `R` = $27,180; buyback $27,180; with Anna selling 70%, Bob and Cara 50%, validators 20%: sold = 237 +
+1,001 + 18 + 490 = 1,746 alpha = $9,306. Buyback ÷ selling = 2.9. `price*` = 27,180 / (1,746 × 266.54) = 0.0584 TAO.
 
 ## 14. Attack arithmetic (what every number must satisfy)
 
 For a strategy with no trading edge, expected pay from the subnet per unit of notional must stay below the fees it
-cannot avoid. With the pool fully paid, pay per unit comes from the fee half (share of `Φ`) and, for the lucky leg of
-a hedge, from the skill half with `E[g] = 0.18`. Costs per round trip of notional (bps): taker-based
+cannot avoid. With the pool fully paid, a zero-edge account's score is its fee credit times `1 + κ g h` with
+`E[g] = 0.07`, so at most about 1.3 times a skill-less account's rate, against 2.5 to 5 times for real traders. Costs per round trip of notional (bps): taker-based
 `2 × 4.5 + F + hidden`, maker-based `2 × 1.5 + F + hidden`, top-tier maker `2 × (−0.3) + F + hidden`, with `F = 2 × fee`
 and `hidden` the other leg's fees. The design makes those costs mostly Kokoah revenue (§11) and keeps the
 subnet's pay to zero-edge accounts small by: the taker/maker credit (§4), `g = 0` for negative-PnL accounts and the
-persistence test (§6), the holding multiplier (§7), the mark clip and mirror exclusions (§3), collateral per
-account and proportional allocation (§8).
+length-of-record confidence and the blow-up rule (§6), the holding multiplier (§7), the mark clip and mirror
+exclusions (§3), collateral per account, migration-only account changes (§16) and proportional allocation (§8).
 
 ## 15. Simulator column map (`sim/index.html`)
 
@@ -314,16 +294,27 @@ account and proportional allocation (§8).
 | Hidden leg bps | input `hidden_bps_i` |
 | Fees to Kokoah | `b_i = V_i × fee` |
 | Fees to HL | `hl_i = V_i × (t × 4.5 + (1 − t) × 1.5) bps` |
-| Fee share | `Φ_i / Σ Φ` |
-| Skill share | `Q_i / Σ Q` with `Q_i = (30 V_i + λ × 30 × max(0, P_i)) × g_i × h_i` |
-| Weight | `w_i = σ × fee share + (1 − σ) × skill share` (or fee share alone if `Σ Q = 0`) |
+| Fee credit | `Φ_i = fee × V_i × (t + 0.4 (1 − t))` |
+| Skill boost | `1 + κ g_i h_i` |
+| Profit credit | `fee × λ × max(0, P_i) × g_i × h_i` |
+| Weight | `w_i = (Φ_i × boost_i + profit credit_i) / Σ_j (…)` |
 | Tokens/day | `w_i × A`, `A = 7,200 × miner_slot` |
 | Earns $/day | tokens × `price_0 × tao_usd` |
 | Net cost $/day | `hl_i + b_i + V_i × hidden_bps_i − earns` |
 | Verdict | honest: paid to trade if net < 0; cheaper than HL direct if net ≤ `hl_i`; else pays (net − hl) over HL. Cheat: wins if net < 0, else loses |
 | Tiles | revenue `R = Σ b_i`; buyback `β R`; selling `sold × price × tao_usd`; ratio; `price*`; price after N days (§10.3); pool; volume needed to hold the start price = `sold × price_0 × tao_usd / (β × fee)` |
 
-## 16. Assumptions and open points
+## 16. Account switching and migration
+
+- A miner's record (returns, receipts, staking) belongs to its binding. Migration to a new Hyperliquid address is
+  allowed once per 90 days by a message signed by the old address, the new address and the hotkey; the record and
+  the holding target carry over.
+- A fresh binding is a new miner: confidence from zero, `staked = collateral` only, activity gates, registration
+  burn and collateral.
+- Addresses funded from the same bridge depositor or transferring between each other, and sub-accounts of a bound
+  master, are one cluster for the mirror rule and the collateral.
+
+## 17. Assumptions and open points
 
 1. Whether the builder fee is charged on maker fills (Hyperliquid docs silent; if not, maker credit is moot).
 2. Builder attribution needs node data; the public API lacks the builder address and keeps 10,000 fills per address.

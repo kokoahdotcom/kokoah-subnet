@@ -1,9 +1,11 @@
-# Incentive mechanism, version 2
+# Incentive mechanism, version 3
 
-Date: 2026-10-19. Status: proposal for the owner's review. Version 2 pays the whole miner pool out every day (no
-caps, no recycling) and makes "revenue bigger than sell pressure" a matter of fee level, holding and emission split,
-not of withholding alpha. Versions 0 and 1 (capped payouts) are superseded; their cheat pricing still applies and
-is kept in `scripts/sim_incentives.py`. Research: `docs/research/02` (platform), `03` (other trading subnets), `04`
+Date: 2026-10-20. Status: proposal for the owner's review. Version 3 replaces the drawdown-based skill score with a
+statistical one (confidence × quality, no drawdown anywhere), replaces the fixed 50/50 pool split with a skill
+multiplier on the fee credit, ties track records and holding to the miner's binding so switching accounts never
+helps, and measures holding as alpha staked on the hotkey. Version 2 (whole pool paid daily; "revenue beats sell
+pressure" through fee level, holding and emission split) stands. Versions 0 and 1 (capped payouts) are superseded;
+their cheat pricing is kept in `scripts/sim_incentives.py`; the skill-score comparison is `scripts/sim_skill.py`. Research: `docs/research/02` (platform), `03` (other trading subnets), `04`
 (what Kokoah has), `05` (reward-design precedents).
 
 ## 1. What the subnet is
@@ -54,80 +56,103 @@ sold. So the fee level is the main lever, holding the second, volume the third. 
 
 ## 3. How the pool is split
 
-Per miner `i`, per daily scoring window (trailing 30 days, with a 90-day component). Two halves, both paid in full:
+Per miner `i`, per daily scoring. One score, all paid out in proportion:
 
 ```
-weight_i = 0.5 × Φ_i / Σ_j Φ_j   +   0.5 × Q_i / Σ_j Q_j
+score_i  =  Φ_i × ( 1 + κ × g_i × h_i )   +   fee × λ × P_i⁺ × g_i × h_i          κ = 4, λ = 50
+weight_i =  score_i / Σ_j score_j
 ```
 
-### 3.1 Fee half: `Φ_i`, the fee credit (everyone who trades)
+In words: every trader's fee credit is the base; skill times holding multiplies it, up to 1 + κ = 5 times; dollars
+made add on top, for skilled traders only. There is no fixed split between a "fee half" and a "skill half": how much
+of the pool skill takes depends on how skilled the miners are. If nobody has skill, the pool is split by fees.
+
+### 3.1 Fee credit `Φ_i` (everyone who trades)
 
 ```
-Φ_i = 1.0 × builder fees on taker fills  +  0.4 × builder fees on maker fills       over W30
+Φ_i = 1.0 × builder fees on taker fills  +  0.4 × builder fees on maker fills       over the last 30 days
 ```
 
-Half the pool is shared in proportion to the builder fees each miner paid, counting market orders fully and limit
-orders at 40%. No skill test; losing traders are most of the volume and they are paid too. The taker/maker split
-is the anti-wash rule: to earn taker credit a cheat must pay Hyperliquid's taker fee on top of ours; maker credit is
-kept low because a market maker's cost can fall to its rebate.
+Market orders count fully, limit orders at 40%. The taker/maker split is the anti-wash rule: to earn taker credit a
+cheat must pay Hyperliquid's taker fee on top of ours; maker credit is kept low because a market maker's cost can
+fall to its rebate.
 
-### 3.2 Skill half: `Q_i = (V_i + λ × P_i⁺) × g_i × h_i`
+### 3.2 Dollars made `P_i⁺`
 
-- `V_i`: notional of builder-code fills in W30 (all fills), each marked at the fill price but clipped to the mark
-  price when the fill is more than 0.5% away (neutralizes profit transfers through off-market self-trades).
-- `P_i⁺`: dollar profit in W30 if positive, else 0 (equity-based, net of fees and funding, deposits and withdrawals
-  removed). `λ = 50`: one dollar made counts like $50 traded.
-- `g_i` in [0, 1]: the skill multiplier (§3.3).
-- `h_i = 0.5 + 0.5 × held_i`: the holding multiplier; `held_i` is the share of the alpha the miner received in the
-  last 90 days that is still staked on its own hotkey. Selling the rewards halves the next bonus.
+Profit of the whole address over the last 30 days, equity-based (unrealized included, deposits and withdrawals
+removed), zero if negative. `fee × λ × P_i⁺` turns it into fee-credit units: at 6 bps and `λ = 50`, $1 of profit
+counts like $50 of volume, which is 3 cents of fee credit.
 
-Big traders earn the most in total; skilled traders earn the most per dollar traded; dollars made count in both the
-ranking and the pay; holders earn more than sellers.
+### 3.3 Skill score `g_i` ∈ [0, 1]: confidence × quality, no drawdown
 
-### 3.3 The skill multiplier `g` (percentage return, risk-adjusted, persistent)
-
-Computed on the whole address from its daily equity curve, deposits and withdrawals removed:
+Computed on the whole address's daily returns since its binding (or since migration, §3.6), up to 180 days. Every
+daily return is capped at ±10% before use, so one disaster counts as one capped loss while a repeated pattern keeps
+counting.
 
 ```
-r_d   = (E_d − E_{d−1} − flows_d) / E_{d−1}
-R_W, MDD_W = window return and max drawdown of the equity curve
-g30   = clip( R30 / max(MDD30, 0.05) / 2 , 0, 1 )       +20% on a 10% drawdown earns the full 30-day score
-g90   = clip( R90 / max(MDD90, 0.05) / 3 , 0, 1 )       +30% on a 10% drawdown over 90 days earns it
-g_i   = ½ (g30 + g90) × coverage_i × newcomer_i          if at least 2 of the last 3 months are positive, else 0
+r_d        = (E_d − E_{d−1} − flows_d) / E_{d−1}                  daily return, capped to [−0.10, +0.10]
+confidence = clip( (PSR − 0.5) / 0.45 , 0, 1 )                      PSR = probabilistic Sharpe ratio of the capped
+                                                                    daily returns against a hurdle of 0.03 a day
+                                                                    (Bailey & López de Prado 2012: skew- and
+                                                                    kurtosis-adjusted; needs ≥ 10 days, else 0)
+quality    = clip( (GPR_ew − 1) / 1.2 , 0, 1 )                      GPR_ew = recency-weighted gain-to-pain: Σ w_d × gains
+                                                                    / Σ w_d × losses, w_d = 0.5^(age_d / 45 days);
+                                                                    1.0 (break-even) → 0, 2.2 → 1
+quality   ×= 0.5   if 2 or more days below −10% in the last 90 days (a blow-up pattern, not one accident)
+g_i        = confidence × quality × coverage_i                      coverage_i = min(1, share of the address's
+                                                                    notional carrying our builder code / 0.9)
+g_i        = 0   if fewer than 10 round trips or fewer than 7 active days in the last 30 days, or mean equity < $500
 ```
 
-Gates (any failure gives `g_i = 0`): `R30 ≤ 0`; `MDD30 > 50%`; fewer than 10 round trips; fewer than 7 active
-days; mean equity under $500; best single day above 50% of the window's positive PnL (the prop-firm consistency
-rule). `coverage_i = min(1, C_i / 0.9)` with `C_i` the share of the address's notional that carries our builder
-code. `newcomer_i = min(1, days_since_binding / 14)`; under 90 days of history `g30` is used alone.
+Why this shape: confidence asks "is the edge real or luck?" and grows with the length of the record (a fresh account
+cannot score high for weeks); quality asks "how good is it?" using every day, not a single worst dip. Nothing is a
+cliff: a bad day lowers the score and fades with a 45-day half-life; no drawdown rule, no monthly test, no single-day
+rule. On 6,000 simulated accounts per profile (`scripts/sim_skill.py`), at 90 days: a coin-flip account scores 0.07
+on average (the old drawdown design: 0.19), a martingale that wins small and loses big 0.07, a steady low-volatility
+grinder 0.30, a real edge 0.38, a strong edge 0.65, and a real edge with one −20% day 0.20 (recovering to 0.32 by
+180 days instead of being zeroed). Real edge is 5.2 times luck, against 3.1 before.
 
-Why this test: over 20,000 simulated 90-day accounts a zero-edge account (one leg of a hedge, a coin flip) scores
-0.18 on average and a trader with a modest real edge 0.58, a strong one 0.79; honest traders pass 86 to 97% of
-windows (`scripts/sim_incentives.py`, test F).
+### 3.4 Holding multiplier `h_i`
 
-### 3.4 Why no caps, and what happens early
+```
+staked_i = alpha staked on miner i's own hotkey by its own coldkey (kept rewards, collateral, bought alpha)
+target_i = max( alpha received by i in the last 90 days ,  30 × A / N_active )
+h_i      = 0.5 + 0.5 × min( 1 , staked_i / target_i )
+```
 
-Everything is proportional: the fee half is linear in fees, the skill half is linear in volume and dollars with
-bounded multipliers. Proportional allocation is the one rule that is both sybil-proof and collusion-proof (Chen,
-Papadimitriou and Roughgarden, 2019); the earlier per-miner caps were concave and are gone.
+Unstaking lowers it immediately; moving alpha to another coldkey counts as unstaking. A new hotkey starts at 0.5 and
+earns the full multiplier only by holding (or buying) about a month of an average miner's pay. Rewards land as stake
+on the hotkey, so "keeping" is simply not unstaking.
 
-With the whole pool always paid, the reward per dollar of fees is high while the subnet is young (big pool, little
-volume). Zero-edge traders then enter until the reward rate falls to their cost divided by their skill score (0.18),
-at which point honest traders with `g ≈ 0.6` are paid about three times a hedger's cost per dollar of size. This is
-the subsidy phase and it is paid for by the emission, not by Kokoah. What matters for law "revenue beats sell
-pressure" is where that early volume's money goes: at 6 bps a side, a taker-based cheat pays Kokoah 12 bps and
-Hyperliquid 9 per round trip on our leg (57% to us; 50% counting its hidden leg's fees), a maker-based one 12 and
-3 (80%; 67%), a top-tier market maker 12 and earns 1.2 in rebates (111%; 118%). At 2.5 bps the same shares are
-36%, 62% and 132% of a far smaller number; at 10 bps, 69%, 87% and 106%. The fee level decides whether the subsidy
-phase feeds the buyback or Hyperliquid.
+### 3.5 Why no caps, and what happens early
 
-### 3.5 Registration collateral and emission split
+Everything is proportional: `Φ` is linear in fees, `P⁺` linear in profit, `g` and `h` bounded multipliers that do
+not change when an account is split. Proportional allocation is the one rule that is both sybil-proof and
+collusion-proof (Chen, Papadimitriou and Roughgarden, 2019); per-miner caps and concave transforms are deliberately
+absent. With the whole pool always paid, the reward per dollar of fees is high while the subnet is young; zero-edge
+traders then enter until the reward rate falls to their cost divided by their multiplier (about 1.3 with `g = 0.07`),
+while real traders earn 2.5 to 5 times the base per dollar of fees. At a 6 bps builder fee most of that early spend
+is Kokoah revenue (a taker-based cheat pays Kokoah 12 bps and Hyperliquid 9 per round trip, 57% to us; maker-based
+80%; a top-tier market maker 111%).
 
-- Miners register by burn with a minimum collateral (the chain's miner collateral, owner-set): they must buy and
-  lock alpha to mine. That is demand at entry, locked supply while they mine, and a cost for every sybil account.
+### 3.6 Account switching
+
+A miner's track record, receipts and holding belong to its binding, not to an address.
+
+- **Migration:** once per 90 days a miner may move to a new Hyperliquid address by a message signed by the old
+  address, the new address and the hotkey. The record carries over, good and bad; so does the holding target.
+- **Rebinding without migration** (a fresh address, a fresh hotkey) is a new miner: confidence from zero (weeks of
+  trading before any skill pay), `h = 0.5`, the activity gates, a new registration burn and collateral. Switching to
+  escape a bad month therefore costs more than the bad month.
+- **Clustering:** addresses funded from the same bridge depositor or by transfers between each other are one cluster
+  for the mirror rule (§5) and the collateral; sub-accounts of a bound master are the same miner.
+
+### 3.7 Registration collateral and emission split
+
+- Miners register by burn with a minimum collateral in alpha locked on the hotkey (owner-set): demand at entry,
+  locked supply, a cost for every extra account. The collateral counts as `staked_i` in §3.4.
 - Emission split: miner 33%, owner 33% with `owner_cut_auto_lock_enabled`, validators 34%.
-- Buyback: `β = 1` at launch, every day, on chain, published. The price floor in §2 only exists if stakers can see
-  it happen.
+- Buyback: 100% of builder fees, every day, on chain, published.
 
 ## 4. Data, binding, epoch, consensus
 
@@ -153,13 +178,17 @@ phase feeds the buyback or Hyperliquid.
 | Attack | Answer |
 |---|---|
 | Wash trading (instant round trips, self or paired) | Pays Hyperliquid's taker fee to earn taker credit; maker credit low; PnL negative so no skill half; at a 10 bps builder fee most of its spend is our revenue anyway. |
-| Hedged pair or basket, other leg bound, unbound or on another venue | Skill score 0.18 on average and only on the lucky leg; no dollars made; holding multiplier halves it if sold; registration collateral per account; the fee level keeps its spend mostly ours. |
-| Lottery farm of small accounts | `newcomer`, 10 round trips, 7 active days, $500 equity, consistency rule, collateral per account. |
+| Hedged pair or basket, other leg bound, unbound or on another venue | Skill score 0.07 on average and only on the lucky leg; no dollars made; holding multiplier halves it if sold; registration collateral per account; the fee level keeps its spend mostly ours. |
+| Lottery farm of small accounts | Confidence needs weeks of data; 10 round trips, 7 active days, $500 equity; collateral and burn per account; a fresh account starts at `h = 0.5`. |
+| Switching accounts to escape a bad record | Records belong to the binding; migration carries them; a fresh binding starts from zero confidence and zero holding. |
+| One lucky streak, then quitting | Quality is recency-weighted and confidence needs a long record; a short streak scores little. |
+| Martingale (small steady wins, rare big loss) | Capped returns keep every −7% day counting; two or more blow-up days halve the quality; the skew-adjusted confidence falls. Scores 0.07 on average. |
 | Sybil splitting or merging | Proportional allocation: nothing gained, collateral and burn lost. |
 | Hiding losers (realize winners, hold losers) | Equity-based returns include unrealized PnL. |
 | Deposits dressed as returns | Flows removed from daily returns. |
 | Profit transfer by off-market self-trades | Fills clipped to the mark price for volume and profit. |
 | Trading elsewhere, token volume through Kokoah | `coverage` scales `g` down. |
+| Selling rewards from another hotkey or coldkey | Holding is alpha staked on the miner's own hotkey; anything moved out counts as sold. |
 | Mirror pairs among bound addresses | Opposite-side fills in the same coin within 60 s and 20% of size: mirrored volume excluded above 25%, both zeroed above 50% and reported; funding-source clustering later; collateral stranded for reported pairs. |
 | Selling the rewards | Holding multiplier; collateral; the owner cut is locked. |
 | Data provider (Kokoah) manipulation | Hash-committed datasets, spot checks against public data, more validators over time. |
@@ -168,27 +197,31 @@ phase feeds the buyback or Hyperliquid.
 
 ## 6. Parameters
 
-| Parameter | v2 value | Why |
+| Parameter | v3 value | Why |
 |---|---|---|
 | Builder fee | 6 bps a side (owner, 2026-10-19; Hyperliquid's maximum is 10), approved by the user in the wallet | the lever that makes revenue beat sell pressure |
-| Pool split | 50% by fee credit, 50% by size × skill × holding | everyone paid, skill rewarded |
+| Pool rule | `score = Φ × (1 + κ g h) + fee λ P⁺ g h`, paid in proportion | base for everyone, skill multiplies, dollars add |
+| κ (skill premium) | 4 | full skill and holding earn 5 × the base per dollar of fees |
+| λ (dollars) | 50 | $1 of profit counts like $50 of volume |
 | Fee credit, taker / maker | 1.0 / 0.4 | anti-wash |
-| λ (dollars in size) | 50 | a $40k month counts like $2M of volume |
-| Skill test | test F: ½(g30 + g90), 2 of 3 months positive | best honest-to-luck ratio |
-| g30 / g90 full score | R = 2 × MDD / R = 3 × MDD | |
-| Gates | R30 > 0, MDD30 ≤ 50%, ≥ 10 round trips, ≥ 7 active days, equity ≥ $500, best day ≤ 50% of profit | |
-| Holding multiplier | 0.5 + 0.5 × share of the last 90 days' rewards still staked | selling halves the next bonus |
-| Collateral | minimum alpha locked per miner, owner-set (start around $500 worth) | demand at entry, sybil cost |
+| Return cap | ±10% a day | one accident is one capped loss |
+| Confidence | PSR of capped returns, hurdle 0.03 a day, ≥ 10 days, (PSR − 0.5)/0.45 | is the edge real |
+| Quality | recency-weighted gain-to-pain, half-life 45 days, (GPR − 1)/1.2 | how good, every day counts |
+| Blow-up rule | ≥ 2 days below −10% in 90 days halves quality | pattern, not accident |
+| Activity gates | ≥ 10 round trips, ≥ 7 active days in 30 days, mean equity ≥ $500 | anti-dust |
+| Coverage target | 0.9 | trade through Kokoah |
+| Holding | `0.5 + 0.5 × min(1, staked / target)`, target = max(90-day receipts, a month of average pay) | selling or switching halves the multiplier |
+| Migration | once per 90 days, signed by old and new address | records follow the person |
+| Mark clip | fills > 0.5% from mark scored at mark | profit-transfer guard |
+| Mirror thresholds | 60 s, 20% size; exclude > 25%, zero both > 50% | |
 | Emission split | miner 33%, owner 33% auto-locked, validators 34% | least alpha to sellers |
 | Buyback | 100% of builder fees, daily, on chain | the price floor |
-| Mark clip | fills > 0.5% from mark scored at mark | profit-transfer guard |
-| Mirror thresholds | 60 s, 20% size; exclude > 25%, zero > 50% | |
-| Scoring time | 00:00 UTC daily; weights every tempo | |
+| Scoring | 00:00 UTC daily; weights every tempo | |
 
 ## 7. The leaderboard
 
-Public, sorted by skill (`g`, with the 30- and 90-day returns and drawdowns), showing dollar profit, volume,
-coverage and holding next to it. Emissions follow §3.
+Public, sorted by skill (`g`, with its confidence and quality parts, the 30- and 90-day returns), showing dollar
+profit, volume, coverage and holding next to it. Emissions follow §3.
 
 ## 8. Open points
 
