@@ -49,6 +49,7 @@ def test_day_fees_maker_and_taker_credit_alike() -> None:
     assert fees.total_fee == pytest.approx(5.0025)  # unknown total fee counts the builder fee only
     assert fees.taker_notional == pytest.approx(10_000.0)
     assert fees.fills == 2
+    assert fees.closed_pnl == pytest.approx(10.0)  # published only
 
 
 def test_total_fee_fallback_rates() -> None:

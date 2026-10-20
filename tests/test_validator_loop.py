@@ -224,4 +224,15 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         assert len((await c.get("/bindings")).json()) == 2
         board = (await c.get("/leaderboard")).json()
         assert len(board) == 2 and board[0]["volume_usd"] >= board[1]["volume_usd"]
+        assert board[0]["days"] == 1 and board[0]["total_volume_usd"] == board[0]["volume_usd"]
+        assert board[0]["cap_binds"] is True  # a young subnet: the cap, not the share, sets the pay
+        page = await c.get("/")
+        assert page.status_code == 200 and "Leaderboard" in page.text and 'fetch("leaderboard")' in page.text
+        summary = (await c.get("/summary")).json()
+        assert summary["latest_day"] == DAY and summary["days"] == 1
+        assert summary["burn_alpha"] == pytest.approx(DEFAULT.miner_pool_alpha - summary["paid_alpha"])
+        assert summary["builder_fee_usd"] == pytest.approx(300.0)
+        assert "access-control-allow-origin" in {
+            k.lower() for k in (await c.get("/summary", headers={"Origin": "https://x"})).headers
+        }
     await hl.close()

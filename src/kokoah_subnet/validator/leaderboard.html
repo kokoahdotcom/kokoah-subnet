@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kokoah Subnet Leaderboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* layout: a summary strip, then one sortable table; every number from the validator's published artifacts */
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --fg: #1b2129; --muted: #5a6470; --rule: #d8dde4; --accent: #27588a;
+  --accent-soft: #e7eef6; --good: #1f7a4d; --warn: #a3581a; --bad: #a32424;
+  --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; --mono: "IBM Plex Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121519; --panel: #181c22; --fg: #e4e8ed; --muted: #9aa5b1; --rule: #2c333c; --accent: #8fb8e4;
+  --accent-soft: #1b2733; --good: #5fcf8f; --warn: #e3a05a; --bad: #e07070; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #121519; --panel: #181c22; --fg: #e4e8ed; --muted: #9aa5b1; --rule: #2c333c; --accent: #8fb8e4;
+  --accent-soft: #1b2733; --good: #5fcf8f; --warn: #e3a05a; --bad: #e07070; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px; }
+.wrap { max-width: 1120px; margin: 0 auto; min-width: 0; }
+header { padding-block: 28px 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; border-bottom: 1px solid var(--rule); }
+h1 { font-size: 24px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+.eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.stamp { color: var(--muted); font-size: 13px; margin-left: auto; }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0; }
+.stat { background: var(--panel); border: 1px solid var(--rule); padding: 12px 14px; min-width: 0; }
+.stat .k { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; }
+.stat .v { font-family: var(--mono); font-size: 20px; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
+.stat .s { font-size: 12px; color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 8px 0 12px; font-size: 13px; color: var(--muted); }
+.controls label { display: inline-flex; align-items: center; gap: 6px; }
+select, button { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--rule); padding: 5px 8px; border-radius: 3px; }
+button:focus-visible, select:focus-visible, a:focus-visible, th button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tbl { overflow-x: auto; background: var(--panel); border: 1px solid var(--rule); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 9px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child, th.l, td.l { text-align: left; }
+th { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); background: var(--accent-soft); position: sticky; top: 0; }
+th button { all: unset; cursor: pointer; font: inherit; color: inherit; }
+th button[aria-sort="descending"]::after { content: " ▾"; }
+th button[aria-sort="ascending"]::after { content: " ▴"; }
+tbody tr:last-child td { border-bottom: 0; }
+.addr { font-family: var(--mono); font-size: 13px; }
+.bar { display: inline-block; height: 8px; background: var(--accent); vertical-align: middle; border-radius: 2px; margin-right: 6px; }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 10px; border: 1px solid currentColor; }
+.pill.good { color: var(--good); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
+.empty { padding: 32px; text-align: center; color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); margin-top: 14px; max-width: 72ch; }
+.note code { font-family: var(--mono); font-size: 12px; background: var(--accent-soft); padding: 1px 4px; border-radius: 3px; }
+@media (max-width: 560px) { .stamp { margin-left: 0; width: 100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div><div class="eyebrow">Kokoah Subnet</div><h1>Leaderboard</h1></div>
+  <div class="stamp" id="stamp">Loading the latest scored day…</div>
+</header>
+<section class="strip" id="strip" aria-label="Subnet summary"></section>
+<div class="controls">
+  <label>Sort by <select id="sort">
+    <option value="skill">skill</option><option value="volume_usd">volume (day)</option><option value="pay_alpha">pay (day)</option>
+    <option value="total_pay_alpha">pay (all days)</option><option value="total_volume_usd">volume (all days)</option>
+    <option value="profit_usd">profit (all days)</option><option value="holding">holding</option><option value="mean_equity_usd">capital</option>
+  </select></label>
+  <label><input type="checkbox" id="hideInactive" checked> hide miners without fills today</label>
+  <button id="refresh">Refresh</button>
+  <span id="count"></span>
+</div>
+<div class="tbl"><table id="table" aria-describedby="note">
+  <thead><tr>
+    <th class="l">#</th><th class="l">Miner</th><th>Skill</th><th>Holding</th><th>Rate</th><th>Volume (day)</th>
+    <th>Builder fee (day)</th><th>Pay (day)</th><th>Cap (day)</th><th>Capital</th><th>Volume (all)</th><th>Pay (all)</th><th>Profit (all)</th><th>Days</th><th class="l">Flags</th>
+  </tr></thead>
+  <tbody id="rows"><tr><td colspan="15" class="empty">Loading…</td></tr></tbody>
+</table></div>
+<p class="note" id="note">Skill is the subnet's statistical score of the trader's own daily returns (0 to 1); holding is the share of
+the last 60 days' pay still staked; the rate is the multiplier between 0.85 and 1.0 that both move. Pay is capped at
+twice the builder fee and at three quarters of the trade's total cost; what the pool holds above the caps is burned.
+Profit is the exchange's closed PnL on builder-code fills and never affects pay. Every number comes from the
+validator's published daily artifact (<code>/days/latest</code>).</p>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fmt = {
+    usd: (x) => x == null ? "—" : (Math.abs(x) >= 1e6 ? "$" + (x / 1e6).toFixed(2) + "M" : Math.abs(x) >= 1e3 ? "$" + (x / 1e3).toFixed(1) + "k" : "$" + x.toFixed(0)),
+    alpha: (x) => x == null ? "—" : x.toFixed(x >= 100 ? 0 : 2) + " α",
+    pct: (x) => x == null ? "—" : (100 * x).toFixed(0) + "%",
+    num: (x, d) => x == null ? "—" : x.toFixed(d),
+    short: (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "—",
+  };
+  let board = [], latest = null, summary = null;
+  async function load() {
+    $("stamp").textContent = "Loading…";
+    try {
+      const [b, l, s] = await Promise.all([fetch("leaderboard").then(r => r.json()), fetch("days/latest").then(r => r.ok ? r.json() : null), fetch("summary").then(r => r.json())]);
+      board = b; latest = l; summary = s;
+      render();
+    } catch (e) {
+      $("stamp").textContent = "Could not load the leaderboard: " + e;
+    }
+  }
+  function strip() {
+    const s = summary || {}, d = latest || {};
+    const items = [
+      ["Scored day", d.day || "none yet", d.block ? "block " + d.block : ""],
+      ["Miners", board.length, (d.miners || []).filter(m => m.fees.fills > 0).length + " with fills"],
+      ["Volume (day)", fmt.usd((d.miners || []).reduce((a, m) => a + m.fees.notional, 0)), fmt.usd(s.volume_usd) + " all days"],
+      ["Builder fees (day)", fmt.usd((d.miners || []).reduce((a, m) => a + m.fees.builder_fee, 0)), fmt.usd(s.builder_fee_usd) + " all days"],
+      ["Paid (day)", fmt.alpha(d.paid_alpha), fmt.alpha(s.paid_alpha) + " all days"],
+      ["Burned (day)", fmt.alpha(d.burn_alpha), fmt.alpha(s.burn_alpha) + " all days"],
+      ["Alpha price", d.price_usd == null ? "—" : "$" + d.price_usd.toFixed(3), d.price_tao == null ? "" : d.price_tao.toFixed(4) + " τ · TAO $" + (d.tao_usd || 0).toFixed(2)],
+      ["Paid / fees (all days)", s.builder_fee_usd > 0 ? fmt.num(s.paid_usd / s.builder_fee_usd, 2) + "×" : "—", "bounded by 2× by design"],
+    ];
+    $("strip").innerHTML = items.map(([k, v, sub]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || ""}</div></div>`).join("");
+  }
+  function render() {
+    strip();
+    const key = $("sort").value;
+    const hide = $("hideInactive").checked;
+    let rows = board.filter(r => !hide || r.fills > 0);
+    rows.sort((a, b) => (b[key] || 0) - (a[key] || 0) || (b.volume_usd || 0) - (a.volume_usd || 0));
+    $("count").textContent = rows.length + " of " + board.length + " miners";
+    const maxVol = Math.max(1, ...rows.map(r => r.volume_usd || 0));
+    $("rows").innerHTML = rows.length ? rows.map((r, i) => {
+      const flags = [];
+      if (r.reported) flags.push('<span class="pill bad">reported</span>');
+      else if (r.mirrored_share > 0.25) flags.push('<span class="pill warn">mirrored ' + fmt.pct(r.mirrored_share) + '</span>');
+      if (!r.gates_pass) flags.push('<span class="pill warn">gates</span>');
+      if (r.cap_binds) flags.push('<span class="pill good">capped</span>');
+      return `<tr><td class="l">${i + 1}</td><td class="l"><span class="addr" title="${r.hotkey}">${fmt.short(r.address)}</span></td>
+        <td>${fmt.num(r.skill, 2)}</td><td>${fmt.pct(r.holding)}</td><td>${fmt.num(r.multiplier, 3)}</td>
+        <td><span class="bar" style="width:${Math.round(60 * (r.volume_usd || 0) / maxVol)}px"></span>${fmt.usd(r.volume_usd)}</td>
+        <td>${fmt.usd(r.builder_fee_usd)}</td><td>${fmt.alpha(r.pay_alpha)}</td><td>${fmt.alpha(r.cap_alpha)}</td>
+        <td>${fmt.usd(r.mean_equity_usd)}</td><td>${fmt.usd(r.total_volume_usd)}</td><td>${fmt.alpha(r.total_pay_alpha)}</td>
+        <td>${fmt.usd(r.profit_usd)}</td><td>${r.days || 0}</td><td class="l">${flags.join(" ")}</td></tr>`;
+    }).join("") : `<tr><td colspan="15" class="empty">No miners to show for this day.</td></tr>`;
+    $("stamp").textContent = latest ? "Day " + latest.day + " · refreshed " + new Date().toLocaleTimeString() : "No day scored yet";
+  }
+  $("sort").addEventListener("change", render);
+  $("hideInactive").addEventListener("change", render);
+  $("refresh").addEventListener("click", load);
+  load();
+  setInterval(load, 5 * 60 * 1000);
+})();
+</script>
+</body>
+</html>

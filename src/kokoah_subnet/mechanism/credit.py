@@ -19,6 +19,7 @@ class DayFees:
     notional: float
     taker_notional: float
     fills: int
+    closed_pnl: float = 0.0  # Σ closedPnl of the fills: published in the ranking, never used for pay
 
     @staticmethod
     def zero() -> DayFees:
@@ -31,11 +32,12 @@ def day_fees(fills: Iterable[Fill], params: Params, fallback_rates_bps: tuple[fl
     `fallback_rates_bps` = (taker, maker) exchange rates for fills whose total fee is unknown; without it an
     unknown total fee counts the builder fee only, which can only lower the second cap.
     """
-    credit = builder = total = notional = taker_notional = 0.0
+    credit = builder = total = notional = taker_notional = pnl = 0.0
     n = 0
     for f in fills:
         n += 1
         notional += f.notional
+        pnl += f.closed_pnl
         builder += f.builder_fee
         credit += f.builder_fee * (1.0 if f.crossed else params.maker_credit)
         if f.crossed:
@@ -47,7 +49,7 @@ def day_fees(fills: Iterable[Fill], params: Params, fallback_rates_bps: tuple[fl
             total += f.builder_fee + f.notional * rate / 1e4
         else:
             total += f.builder_fee
-    return DayFees(credit, builder, total, notional, taker_notional, n)
+    return DayFees(credit, builder, total, notional, taker_notional, n, pnl)
 
 
 def ema(previous: float, today: float, params: Params) -> float:

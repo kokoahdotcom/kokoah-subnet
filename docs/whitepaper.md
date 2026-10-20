@@ -2,7 +2,7 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, draft 0.9, October 2026. Mechanism specification v5.8.
+Whitepaper, version 1.0, October 2026. Mechanism specification v5.8.
 
 ### Abstract
 
@@ -21,7 +21,10 @@ from genuine activity, whose rewards cannot be farmed by fake volume at any fee 
 auditable end to end.
 
 This document describes the mechanism, the reasoning behind each rule, the economic analysis that supports it, the
-verification done so far, and the questions that remain open before a mainnet launch.
+verification done so far, and the questions that remain open before a mainnet launch. Version 1.0 fixes the
+mechanism and its parameters for launch; the validator software implementing it is complete and runs on a test
+network, and the open items in section 8 are measurements, not design decisions. Later changes follow the
+changelog policy in section 7.
 
 ---
 
@@ -64,10 +67,11 @@ any fee tier of the exchange. Everything else follows from that rule.
 
 ## 3. Participants and data
 
-**Miners** are traders. A miner registers a hotkey on the subnet, binds one Hyperliquid address to it with a
-message signed by both the address and the hotkey, and trades perpetuals through the Kokoah application, so that
-every scored fill carries the Kokoah builder code. Miners run no software; the binding and the trading are the
-work.
+**Miners** are traders. A miner registers a hotkey on the subnet, binds one Hyperliquid address to it, and trades
+perpetuals through the Kokoah application, so that every scored fill carries the Kokoah builder code. The binding
+is a one-line message signed by the Hyperliquid address (an Ethereum personal-message signature) and published by
+the hotkey as its on-chain commitment, so the hotkey's own signature is the transaction itself; the exact format
+is in appendix C. Miners run no software; the binding and the trading are the work.
 
 **Validators** run open-source software that, once a day, fetches the public data for every bound address,
 applies the exclusion rules, computes each miner's reward, and sets weights every tempo. The computation is
@@ -90,9 +94,11 @@ daily account value and deposits. Fills without the builder code count for nothi
 master account and its sub-accounts, addresses on the same coldkey, addresses funded by the same bridge depositor
 or transferring between each other.
 
-**Migration.** A miner's smoothed records belong to the binding, not the address. Once per 60 days a miner may
-move to a new address by a message signed by the old address, the new address, and the hotkey; the records carry
-over. A fresh binding starts from zero.
+**Migration.** A miner's smoothed records belong to the hotkey, not the address. Once per 60 days a miner may
+move to a new address by publishing a new commitment signed by both the old and the new address; the records carry
+over. The chain keeps only a hotkey's latest commitment, so each validator enforces the 60-day limit from the
+bindings it has itself accepted; a validator that starts later accepts the current commitment on its signatures
+alone and agrees with the others from then on. A fresh binding starts from zero.
 
 ## 4. The incentive mechanism
 
@@ -366,17 +372,24 @@ root, so a hotkey swap keeps the binding.
 ## 7. Transparency
 
 The validator software is open source. Each day the following are published per miner: fee credit, total fees on
-the builder leg, skill and holding factors, multiplier, share, cap, pay, and the day's burn; plus the abuse signals,
-the coverage figure, and the public ranking (skill with its parts, managed capital, volume, dollar profit, execution
-quality, holding). Parameter changes are announced at least seven days in advance. Reported addresses and the
-reason are published.
+the builder leg, skill and holding factors, multiplier, share, cap, pay, and the day's burn; plus the builder file's
+hash and whether it matches the operator's on-chain commitment, the refused bindings with their reasons, the abuse
+signals, and the public ranking (skill, managed capital, volume, dollar profit, holding, totals over all days).
+Every validator serves these over a read-only HTTP interface (appendix D) together with a leaderboard page, so the
+ranking can be read from any validator, not only the operator's.
+
+Parameter changes are announced at least seven days in advance and recorded in the changelog (appendix E); the
+mechanism's version number is published in every daily artifact. Reported addresses and the reason are published.
 
 ## 8. Verification and limitations
 
 **Done.** An adversarial replay of 60 days through the real scoring code (honest swing trader, scalper and market
 maker beside a wash trader, a maximal-discount hedge, a rebated market maker, instant round trips and a pair
-crossing each other): every zero-edge strategy ends negative and the honest traders receive their proportional
-share; the replay also found and removed a timing heuristic that flagged honest traders by coincidence. The one law
+crossing each other, plus recorded public fills of two of the most active Hyperliquid addresses): every zero-edge
+strategy ends negative and the honest traders receive their proportional share; the replay also found and removed
+a timing heuristic that flagged honest traders by coincidence. The validator ran complete passes against a local
+chain and against a test-network subnet with the real public data: the per-builder daily file is fetchable by
+anyone for the operator's builder address, bindings publish and resolve on chain, weights submit. The one law
 searched over 105 fee cases and proven in closed form; cumulative backing on 200 random
 paths; the 15% rule in both pool regimes; sybil neutrality for one, two and five accounts; the cap price under a
 30% spot dip; the skill factor calibrated on simulated track records (luck, lottery, martingale, grinder, real edge,
@@ -393,19 +406,20 @@ measurement are in the repository.
    zero-edge strategy nets positive at any pool size, and genuine high-volume traders receive their proportional
    share.
 3. Holding factor: measure selling by miners at factor 1 against factor 0 on testnet.
-4. Data plane: confirm the per-builder daily file is fetchable by anyone for the live builder address, and that
-   total-fee matching against public fill histories is exact.
+4. Total-fee matching against public fill histories checked on real bound traders over a month of data.
 
 **Open assumptions.** The public per-address fill API keeps 10,000 fills, so the per-builder file is
-essential for high-frequency accounts. The TAO/USD mark is the node's daily mean, with an exchange median as
+essential for high-frequency accounts (it is, and it is public). The TAO/USD mark is the node's daily mean, with an exchange median as
 fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
 operator's. Paying tokens for trading activity is subject to legal review in the operator's jurisdictions.
 
 ## 9. Roadmap
 
-Local chain: scoring library with tests, validator loop, burn-cost measurement. Testnet: wallets, registration, a
-validator and miners running for at least a month, the holding measurement, public dashboards. Mainnet: only after
-the verification list above is complete and published, and with the parameters that the testnet period supports.
+Done: the scoring library with its tests, the validator with its store and interface, the binding flow, the
+burn measurement on a local chain, the replay harness, and a test-network subnet with a running validator. Next:
+real traders bound on the test network for at least a month, the holding and TAO-side measurements from that
+period, and the operator's builder fee switched on. Mainnet: only after the verification list above is complete
+and published, and with the parameters that the test-network period supports.
 
 ## 10. References
 
@@ -447,3 +461,33 @@ volume.
 4. Compute shares, caps in alpha at the day's mean price, pay, and the burn remainder.
 5. Publish the per-miner artifacts; set weights (miners by pay, the remainder to the owner hotkey) every tempo until
    the next run.
+
+### Appendix C. Binding format
+
+The Hyperliquid address signs, as an Ethereum personal message (EIP-191), exactly this line:
+
+```
+kokoah-bind-1 netuid=<netuid> hotkey=<hotkey ss58> address=<0x address, lowercase>
+```
+
+The hotkey publishes the result as its commitment on the subnet: one raw field of 116 characters, the base64 of
+`"K1"` + the 20-byte address + the 65-byte signature. A migration adds a second field, `"P1"` + the previous
+address + its signature over the same line (the line names the new address). Validators recover the signer from
+each field and accept the binding only when it is the named address.
+
+### Appendix D. Validator interface
+
+Read-only, served by every validator: `/days` (scored days), `/days/latest` and `/days/{day}` (the full daily
+artifact: per-miner credit, factors, multiplier, share, cap, pay; the burn; weights; file hash and whether it
+matches the operator's commitment; refused bindings; errors), `/bindings`, `/leaderboard` (the ranking with
+totals over all days), `/summary` (alpha paid and burned, builder fees, paid-to-fees ratio over all days), and `/`
+(the leaderboard page).
+
+### Appendix E. Changelog
+
+- **1.0 (2026-10-20).** Mechanism v5.8. Since draft 0.9: the builder fee is confirmed to be charged on maker fills
+  (one rate on every order), so maker and taker fills earn the same credit; the 60-second timing rule for mirrored
+  fills is replaced by the exact counterparty rule; the cap price is the day's mean pool price; the holding factor
+  reads the day's minimum stake; burning through the owner hotkey measured on a local chain; validator, binding
+  flow and interface implemented and running on a test network.
+- **0.9 (2026-10-20).** First public draft.

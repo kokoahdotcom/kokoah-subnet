@@ -156,6 +156,54 @@ class Store:
     def days_list(self) -> list[str]:
         return [str(r[0]) for r in self._db.execute("SELECT day FROM days ORDER BY day").fetchall()]
 
+    def miner_totals(self) -> dict[str, dict[str, float]]:
+        """Per hotkey over every stored day: days scored, days with fills, alpha paid, builder fees, volume, closed
+        PnL. Read from the published artifacts, so the ranking shows exactly what was published."""
+        totals: dict[str, dict[str, float]] = {}
+        for (text,) in self._db.execute("SELECT json FROM days ORDER BY day").fetchall():
+            for m in json.loads(str(text)).get("miners", []):
+                t = totals.setdefault(
+                    str(m["hotkey"]),
+                    {
+                        "days": 0.0,
+                        "active_days": 0.0,
+                        "pay_alpha": 0.0,
+                        "builder_fee_usd": 0.0,
+                        "volume_usd": 0.0,
+                        "profit_usd": 0.0,
+                    },
+                )
+                fees = m.get("fees", {})
+                t["days"] += 1
+                t["active_days"] += 1 if fees.get("fills", 0) else 0
+                t["pay_alpha"] += float(m.get("pay_alpha", 0.0))
+                t["builder_fee_usd"] += float(fees.get("builder_fee", 0.0))
+                t["volume_usd"] += float(fees.get("notional", 0.0))
+                t["profit_usd"] += float(fees.get("closed_pnl", 0.0))
+        return totals
+
+    def subnet_totals(self) -> dict[str, float]:
+        """Over every stored day: alpha paid and burned, their USD value at each day's price, builder fees."""
+        out = {
+            "days": 0.0,
+            "paid_alpha": 0.0,
+            "burn_alpha": 0.0,
+            "paid_usd": 0.0,
+            "builder_fee_usd": 0.0,
+            "volume_usd": 0.0,
+        }
+        for (text,) in self._db.execute("SELECT json FROM days").fetchall():
+            d = json.loads(str(text))
+            price = float(d.get("price_usd", 0.0))
+            out["days"] += 1
+            out["paid_alpha"] += float(d.get("paid_alpha", 0.0))
+            out["burn_alpha"] += float(d.get("burn_alpha", 0.0))
+            out["paid_usd"] += float(d.get("paid_alpha", 0.0)) * price
+            for m in d.get("miners", []):
+                out["builder_fee_usd"] += float(m.get("fees", {}).get("builder_fee", 0.0))
+                out["volume_usd"] += float(m.get("fees", {}).get("notional", 0.0))
+        return out
+
     def put_file(self, day: str, sha256: str, fills: int) -> None:
         with self._db:
             self._db.execute("INSERT OR REPLACE INTO files VALUES (?, ?, ?)", (day, sha256, int(fills)))
