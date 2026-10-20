@@ -18,10 +18,48 @@ from kokoah_subnet.mechanism.payout import to_u16
 
 @dataclass(frozen=True)
 class Neuron:
+    """One UID as the metagraph reports it (everything, for the record)."""
+
     uid: int
     hotkey: str
     coldkey: str
     collateral_min_alpha: float
+    validator_permit: bool = False
+    active: bool = True
+    alpha_stake: float = 0.0
+    tao_stake: float = 0.0
+    incentive: float = 0.0
+    emission: float = 0.0
+    dividends: float = 0.0
+    rank: float = 0.0
+    trust: float = 0.0
+    consensus: float = 0.0
+    pruning_score: float = 0.0
+    last_update: int = 0
+    block_at_registration: int = 0
+    collateral_locked_alpha: float = 0.0
+
+    def as_row(self) -> dict[str, Any]:
+        return {
+            "uid": self.uid,
+            "hotkey": self.hotkey,
+            "coldkey": self.coldkey,
+            "active": self.active,
+            "validator_permit": self.validator_permit,
+            "alpha_stake": self.alpha_stake,
+            "tao_stake": self.tao_stake,
+            "incentive": self.incentive,
+            "emission": self.emission,
+            "dividends": self.dividends,
+            "rank": self.rank,
+            "trust": self.trust,
+            "consensus": self.consensus,
+            "pruning_score": self.pruning_score,
+            "last_update": self.last_update,
+            "block_at_registration": self.block_at_registration,
+            "collateral_locked": self.collateral_locked_alpha,
+            "collateral_min": self.collateral_min_alpha,
+        }
 
 
 @dataclass(frozen=True)
@@ -51,7 +89,29 @@ async def snapshot(client: Any, netuid: int, block: int | None = None) -> Subnet
     mg = await client.subnets.metagraph(netuid, block=block, commitments=False)
     if mg is None:
         raise RuntimeError(f"subnet {netuid} has no metagraph")
-    neurons = [Neuron(n.uid, n.hotkey, n.coldkey, _alpha(n.collateral_min)) for n in mg.neurons]
+    neurons = [
+        Neuron(
+            uid=int(n.uid),
+            hotkey=n.hotkey,
+            coldkey=n.coldkey,
+            collateral_min_alpha=_alpha(getattr(n, "collateral_min", None)),
+            validator_permit=bool(getattr(n, "validator_permit", False)),
+            active=bool(getattr(n, "active", True)),
+            alpha_stake=_alpha(getattr(n, "alpha_stake", None)),
+            tao_stake=_alpha(getattr(n, "tao_stake", None)),
+            incentive=float(getattr(n, "incentive", 0.0) or 0.0),
+            emission=_alpha(getattr(n, "emission", None)),
+            dividends=float(getattr(n, "dividends", 0.0) or 0.0),
+            rank=float(getattr(n, "rank", 0.0) or 0.0),
+            trust=float(getattr(n, "trust", 0.0) or 0.0),
+            consensus=float(getattr(n, "consensus", 0.0) or 0.0),
+            pruning_score=float(getattr(n, "pruning_score", 0.0) or 0.0),
+            last_update=int(getattr(n, "last_update", 0) or 0),
+            block_at_registration=int(getattr(n, "block_at_registration", 0) or 0),
+            collateral_locked_alpha=_alpha(getattr(n, "collateral_locked", None)),
+        )
+        for n in mg.neurons
+    ]
     return SubnetSnapshot(netuid, int(mg.block), int(mg.tempo), mg.owner_hotkey, neurons, mg.price)
 
 
@@ -60,21 +120,35 @@ def sample_blocks(end_block: int, tempo: int, samples: int) -> list[int]:
     return [max(1, end_block - i * tempo) for i in range(samples)][::-1]
 
 
+async def stake_samples(
+    client: Any, netuid: int, coldkey: str, hotkey: str, blocks: Sequence[int]
+) -> list[tuple[int, float]]:
+    """Own stake (alpha) on the hotkey at each sampled block."""
+    out: list[tuple[int, float]] = []
+    for b in blocks:
+        out.append((int(b), _alpha(await client.staking.stake(coldkey, hotkey, netuid, block=b))))
+    return out
+
+
 async def own_stake_min(client: Any, netuid: int, coldkey: str, hotkey: str, blocks: Sequence[int]) -> float:
     """The smallest own stake (alpha) on the hotkey across the sampled blocks (spec section 8)."""
-    values = []
-    for b in blocks:
-        values.append(_alpha(await client.staking.stake(coldkey, hotkey, netuid, block=b)))
+    values = [v for _, v in await stake_samples(client, netuid, coldkey, hotkey, blocks)]
     return min(values) if values else 0.0
 
 
-async def mean_price_tao(client: Any, netuid: int, blocks: Sequence[int]) -> float:
-    """Mean spot pool price (τ per alpha) over the sampled blocks (spec section 2, `p_d` before the TAO/USD mark)."""
-    prices: list[float] = []
+async def price_samples(client: Any, netuid: int, blocks: Sequence[int]) -> list[tuple[int, float]]:
+    """Spot pool rate (τ per alpha) at each sampled block."""
+    out: list[tuple[int, float]] = []
     for b in blocks:
         mg = await client.subnets.metagraph(netuid, block=b, commitments=False)
         if mg is not None and mg.price is not None:
-            prices.append(float(mg.price))
+            out.append((int(b), float(mg.price)))
+    return out
+
+
+async def mean_price_tao(client: Any, netuid: int, blocks: Sequence[int]) -> float:
+    """Mean spot pool rate (τ per alpha) over the sampled blocks (spec section 2, `p_d` before the TAO/USD mark)."""
+    prices = [p for _, p in await price_samples(client, netuid, blocks)]
     if not prices:
         raise RuntimeError("no price samples")
     return sum(prices) / len(prices)

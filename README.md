@@ -6,6 +6,7 @@ holds the whitepaper, the mechanism specification, the research behind it, and t
 
 - `docs/whitepaper.md`: the public description of the subnet and its incentive mechanism.
 - `docs/runbook.md`: how to run a validator, how a miner binds an address, what the operator does.
+- `docs/database.md`: the record every validator keeps (PostgreSQL via `scripts/db.sh`, SQLite for tests).
 - The validator's read-only interface (`kokoah-subnet validator serve`, port 48100) serves the daily artifacts,
   the bindings, a summary and the leaderboard page at `/`.
 - `docs/design/02-mechanism-spec.md`: the complete formal specification (every formula and parameter);

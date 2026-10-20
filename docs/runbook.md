@@ -4,6 +4,13 @@ How to run each role of the subnet. Commands assume the repo is set up (`uv sync
 `~/.bittensor/wallets`. Everything below works on the local chain (`scripts/localnet.sh start --slow`) and on
 testnet (`--network test`); mainnet needs the owner's go-ahead per transaction.
 
+## The record (database)
+
+`scripts/db.sh start` runs the project's PostgreSQL (Docker, loopback port 48110) and writes the connection URL to
+`~/.local/share/kokoah/subnet-db.env`. Export it (`set -a; . ~/.local/share/kokoah/subnet-db.env; set +a`) before
+running the validator, the API or the burn command, or pass `--db-url`. Without it they use a SQLite file in the
+data directory. What is recorded is in `docs/database.md`.
+
 ## Validator
 
 ```bash

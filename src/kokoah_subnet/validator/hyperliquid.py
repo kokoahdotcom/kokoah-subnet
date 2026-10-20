@@ -72,27 +72,24 @@ class HyperliquidInfo:
         state = await self.post({"type": "clearinghouseState", "user": user})
         return float(state["marginSummary"]["accountValue"])
 
-    async def net_flows(self, user: str, start_ms: int, end_ms: int) -> float:
-        """Deposits minus withdrawals (and account transfers in minus out) in the window, USD."""
+    async def ledger_updates(self, user: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """The raw non-funding ledger records (deposits, withdrawals, transfers) in the window."""
         updates = await self.post(
             {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
         )
-        total = 0.0
-        for u in updates:
-            delta = u.get("delta", {})
-            kind = delta.get("type")
-            if kind == "deposit":
-                total += float(delta.get("usdc", 0.0))
-            elif kind == "withdraw":
-                total -= float(delta.get("usdc", 0.0))
-            elif kind in ("accountClassTransfer", "internalTransfer", "subAccountTransfer"):
-                amount = float(delta.get("usdc", 0.0))
-                total += (
-                    amount
-                    if delta.get("toPerp", True) and delta.get("destination", user).lower() == user.lower()
-                    else -amount
-                )
-        return total
+        return [dict(u) for u in updates]
+
+    async def net_flows(self, user: str, start_ms: int, end_ms: int) -> float:
+        """Deposits minus withdrawals (and account transfers in minus out) in the window, USD."""
+        return flows_from_updates(user, await self.ledger_updates(user, start_ms, end_ms))
+
+    async def fee_rates_raw(self, user: str) -> dict[str, Any]:
+        """The address's fee schedule as the exchange reports it."""
+        return dict(await self.post({"type": "userFees", "user": user}))
+
+    async def account_state(self, user: str) -> dict[str, Any]:
+        """The raw clearinghouse state (margin summary and open positions)."""
+        return dict(await self.post({"type": "clearinghouseState", "user": user}))
 
     async def fee_rates_bps(self, user: str) -> tuple[float, float]:
         """The address's current (taker, maker) perps rates in bps, after volume tiers and discounts."""
@@ -147,4 +144,45 @@ async def positions_notional(client: HyperliquidInfo, user: str) -> dict[str, fl
         value = float(pos.get("positionValue", 0.0) or 0.0)
         if szi != 0 and value != 0:
             out[str(pos["coin"])] = value if szi > 0 else -value
+    return out
+
+
+def flows_from_updates(user: str, updates: list[dict[str, Any]]) -> float:
+    """Deposits minus withdrawals (and account transfers in minus out), USD, from raw ledger records."""
+    total = 0.0
+    for u in updates:
+        delta = u.get("delta", {})
+        kind = delta.get("type")
+        if kind == "deposit":
+            total += float(delta.get("usdc", 0.0))
+        elif kind == "withdraw":
+            total -= float(delta.get("usdc", 0.0))
+        elif kind in ("accountClassTransfer", "internalTransfer", "subAccountTransfer"):
+            amount = float(delta.get("usdc", 0.0))
+            total += (
+                amount
+                if delta.get("toPerp", True) and delta.get("destination", user).lower() == user.lower()
+                else -amount
+            )
+    return total
+
+
+def positions_from_state(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per perp coin: signed notional (positive long) and the position's details, from a clearinghouse state."""
+    out: dict[str, dict[str, Any]] = {}
+    for ap in state.get("assetPositions", []):
+        pos = ap.get("position", {})
+        szi = float(pos.get("szi", 0.0) or 0.0)
+        value = float(pos.get("positionValue", 0.0) or 0.0)
+        if szi == 0 or value == 0:
+            continue
+        lev = pos.get("leverage", {})
+        out[str(pos["coin"])] = {
+            "notional": value if szi > 0 else -value,
+            "szi": szi,
+            "entry_px": float(pos["entryPx"]) if pos.get("entryPx") else None,
+            "unrealized_pnl": float(pos["unrealizedPnl"]) if pos.get("unrealizedPnl") else None,
+            "leverage": float(lev.get("value", 0.0)) if isinstance(lev, dict) and lev.get("value") else None,
+            "raw": dict(pos),
+        }
     return out

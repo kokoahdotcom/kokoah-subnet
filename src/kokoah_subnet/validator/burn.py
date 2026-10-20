@@ -26,6 +26,8 @@ async def burn_received(
     min_alpha: float = 1.0,
     password: str | None = None,
     dry_run: bool = False,
+    store: Any = None,
+    network: str = "",
 ) -> dict[str, Any]:
     """Burn the burn hotkey's unlocked stake above `keep_alpha`; do nothing below `min_alpha`."""
     hotkey = wallet.hotkey.ss58_address
@@ -49,9 +51,21 @@ async def burn_received(
         return report
     if dry_run:
         report.update({"ok": True, "dry_run": True})
-        return report
-    signer = wallet.get_coldkey(password) if password is not None else wallet
-    call = calls.SubtensorModule.burn_alpha(hotkey=hotkey, amount=int(amount * RAO), netuid=netuid)
-    result = await client.submit_call(call, signer, signer="coldkey")
-    report.update({"ok": bool(getattr(result, "success", False)), "message": str(getattr(result, "message", ""))})
+    else:
+        signer = wallet.get_coldkey(password) if password is not None else wallet
+        call = calls.SubtensorModule.burn_alpha(hotkey=hotkey, amount=int(amount * RAO), netuid=netuid)
+        result = await client.submit_call(call, signer, signer="coldkey")
+        report.update({"ok": bool(getattr(result, "success", False)), "message": str(getattr(result, "message", ""))})
+    if store is not None:
+        store.put_burn(
+            network=network,
+            netuid=netuid,
+            hotkey=hotkey,
+            staked_alpha=staked,
+            locked_alpha=locked,
+            burn_alpha=max(0.0, amount),
+            ok=bool(report.get("ok")),
+            message=str(report.get("message", "")),
+            dry_run=dry_run,
+        )
     return report

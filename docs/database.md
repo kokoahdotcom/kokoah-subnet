@@ -1,0 +1,42 @@
+# The record
+
+Every validator keeps a complete record of what it saw and decided, in one relational database: PostgreSQL in
+production (`scripts/db.sh`, the project's own container on 127.0.0.1:48110), SQLite for tests and quick local
+runs. Dashboards and analysis read it directly; nothing in it affects pay. The schema is `src/kokoah_subnet/
+validator/schema.py`; the tables, by what they answer:
+
+| Question | Tables |
+|---|---|
+| What ran, with what settings? | `runs` (one row per validator start: network, netuid, hotkeys, versions, config) |
+| What happened each scored day? | `days` (headline figures, file hash, whether it matched the operator's commitment, the full published artifact as JSON), `builder_files` |
+| Every trade, counted or not, and why not | `fills` (every row of the builder file: address, hotkey if bound, coin, side, price, size, notional, taker flag, builder fee, total fee, counterparty, closed PnL, `excluded` = unbound / cluster / bound_counterparty / mark_clip / NULL) |
+| Every miner's figures and the parts behind them | `miner_days` (credit, fees, notional, PnL, smoothed credit and fees, confidence, quality, raw and smoothed skill, holding with its inputs, gates with their counts, mirror shares, multiplier, share, caps in USD and alpha, pay in alpha and USD, exchange fee rates) |
+| The smoothed state over time | `state_history` (per day), `states` (latest) |
+| The trader's account | `equity` (account value and flows per day, with the raw margin summary), `ledger_updates` (every deposit, withdrawal and transfer), `positions` (end-of-day positions per coin with size, entry, unrealized PnL, leverage), `activity` (round trips, fills, notional per day), `fee_rates` (the exchange's fee schedule for the address) |
+| Who is who | `miners` (per hotkey: coldkey, uid, registration block and estimated time, first and last seen, bound address and when, first and last pay, total emission from the chain and total pay from the scoring, role), `neurons` (the metagraph at scoring time), `commitments` (every commitment seen each day), `bindings` (accepted now), `binding_events` (accepted / migrated / refused with the reason), `clusters`, `cluster_edges` (coldkey, sub-account, transfer links) |
+| What the chain paid, tempo by tempo | `epochs`, `epoch_neurons` (per UID per epoch: incentive, emission = alpha paid that epoch, dividends, rank, trust, consensus, stake, registration block) |
+| The inputs to the conversion rate | `price_samples` (pool rate per sampled block), `tao_marks`, `stake_samples` (own stake per hotkey per sampled block) |
+| What the validator submitted | `weights_submitted` (uids, values, block, result) |
+| What the operator burned | `burns` (per run of `owner burn`: staked, locked, burned, result) |
+| What went wrong | `errors` (day, hotkey, address, stage, message) |
+
+Conventions: `day` is the scored UTC day (YYYY-MM-DD); money is USD; alpha is in alpha, not rao; addresses are
+lowercase; `raw` columns keep the source record as JSON. Registration and binding times are estimated from block
+heights at 12 seconds a block; epoch and submission times are wall-clock at the validator.
+
+Connect: `scripts/db.sh psql` opens a shell; the URL is in `~/.local/share/kokoah/subnet-db.env` as
+`KOKOAH_SUBNET_DB_URL`, which the validator, the API and the burn command read when `--db-url` is not given.
+Back up with `scripts/db.sh backup file.dump`.
+
+Useful queries:
+
+```sql
+-- pay and burn per day
+SELECT day, miners, miners_with_fills, volume_usd, builder_fee_usd, paid_alpha, burn_alpha, price_usd FROM days ORDER BY day;
+-- a trader's history with the parts behind the multiplier
+SELECT day, notional, builder_fee, confidence, quality, skill, holding, multiplier, cap_alpha, pay_alpha FROM miner_days WHERE hotkey = '...' ORDER BY day;
+-- what the chain actually paid each UID per epoch
+SELECT e.at, n.uid, n.hotkey, n.emission, n.incentive FROM epoch_neurons n JOIN epochs e ON e.block = n.block ORDER BY e.at, n.uid;
+-- why fills were not counted
+SELECT day, excluded, count(*), sum(notional) FROM fills GROUP BY day, excluded ORDER BY day;
+```

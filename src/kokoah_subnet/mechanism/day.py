@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from .credit import DayFees, day_fees
 from .exclusions import (
@@ -74,6 +75,19 @@ class MinerRecord:
     share_alpha: float
     cap_alpha: float
     pay_alpha: float
+    # the parts behind the figures above (published, for the record)
+    confidence: float = 0.0
+    quality: float = 0.0
+    g: float = 0.0
+    phi_hat: float = 0.0
+    fee_hat: float = 0.0
+    counterparty_share: float = 0.0
+    position_share: float = 0.0
+    zeroed: bool = False
+    round_trips_window: int = 0
+    active_days_window: int = 0
+    returns_days: int = 0
+    cap_usd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -97,7 +111,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     position_share = mirror_position_share(inputs.positions, params)
 
     miner_days: list[MinerDay] = []
-    partial: list[tuple[MinerInputs, MinerState, DayFees, float, float, bool, float, float, float, bool, float]] = []
+    partial: list[tuple[Any, ...]] = []
     for m in inputs.miners:
         state = inputs.states.get(m.hotkey, MinerState())
         own = bound_fills.get(m.address, [])
@@ -134,6 +148,15 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 hold,
                 gates,
                 mult,
+                parts,
+                g_smoothed,
+                phi_hat,
+                fee_hat,
+                counterparty_share,
+                position_share.get(m.address, 0.0),
+                zeroed,
+                rt,
+                ad,
             )
         )
 
@@ -141,7 +164,28 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
 
     records: list[MinerRecord] = []
     states: dict[str, MinerState] = dict(inputs.states)
-    for m, state, fees, mirrored, credit_factor, reported, raw, skill, hold, gates, mult in partial:
+    for (
+        m,
+        state,
+        fees,
+        mirrored,
+        credit_factor,
+        reported,
+        raw,
+        skill,
+        hold,
+        gates,
+        mult,
+        parts,
+        g_s,
+        phi_hat,
+        fee_hat,
+        cp_share,
+        pos_share,
+        zeroed,
+        rt,
+        ad,
+    ) in partial:
         pay = allocation.pays[m.hotkey]
         records.append(
             MinerRecord(
@@ -159,6 +203,18 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 allocation.shares[m.hotkey],
                 allocation.caps[m.hotkey],
                 pay,
+                confidence=parts.confidence,
+                quality=parts.quality,
+                g=g_s,
+                phi_hat=phi_hat,
+                fee_hat=fee_hat,
+                counterparty_share=cp_share,
+                position_share=pos_share,
+                zeroed=zeroed,
+                round_trips_window=rt,
+                active_days_window=ad,
+                returns_days=len(m.returns),
+                cap_usd=allocation.caps[m.hotkey] * inputs.price_usd,
             )
         )
         states[m.hotkey] = advance(

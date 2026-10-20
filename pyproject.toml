@@ -10,6 +10,8 @@ dependencies = [
   "fastapi==0.148.0",
   "httpx==0.28.1",
   "lz4==4.4.4",
+  "psycopg[binary]==3.2.9",
+  "sqlalchemy==2.0.41",
   "uvicorn==0.54.0",
 ]
 

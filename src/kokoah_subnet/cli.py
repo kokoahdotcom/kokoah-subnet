@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -62,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--burn-hotkey", required=True, help="registered hotkey (own coldkey) that receives the remainder"
     )
     vrun.add_argument("--data-dir", required=True, type=Path)
+    vrun.add_argument(
+        "--db-url",
+        default=None,
+        help="the record (SQLAlchemy URL); default $KOKOAH_SUBNET_DB_URL, else SQLite in --data-dir",
+    )
     vrun.add_argument("--wallet", default="validator")
     vrun.add_argument("--wallet-hotkey", default="default")
     vrun.add_argument("--wallet-path", default=None)
@@ -92,8 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
     oburn.add_argument("--min-alpha", type=float, default=1.0, help="do nothing below this amount")
     oburn.add_argument("--password-stdin", action="store_true", help="read the coldkey password from stdin")
     oburn.add_argument("--dry-run", action="store_true", help="show what would be burned, submit nothing")
+    oburn.add_argument("--db-url", default=None, help="record the burn in the database (default $KOKOAH_SUBNET_DB_URL)")
     vserve = vsub.add_parser("serve", help="serve the store over HTTP (read-only)")
     vserve.add_argument("--data-dir", required=True, type=Path)
+    vserve.add_argument(
+        "--db-url",
+        default=None,
+        help="the record (SQLAlchemy URL); default $KOKOAH_SUBNET_DB_URL, else SQLite in --data-dir",
+    )
     vserve.add_argument("--host", default="127.0.0.1")
     vserve.add_argument("--port", type=int, default=48100)
     return parser
@@ -164,6 +176,7 @@ def _validator(args: argparse.Namespace) -> int:
             builder_base_url=args.builder_base_url or BASE_URL,
             tao_usd_fallback=args.tao_usd_fallback,
             poll_s=args.poll_seconds,
+            db_url=args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", ""),
         )
         asyncio.run(run(cfg, once=args.once, day=args.day))
         return 0
@@ -173,7 +186,8 @@ def _validator(args: argparse.Namespace) -> int:
         from kokoah_subnet.validator.serve import create_app
         from kokoah_subnet.validator.store import Store
 
-        app = create_app(Store(args.data_dir / "validator.sqlite"))
+        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
+        app = create_app(Store(url or (args.data_dir / "validator.sqlite")))
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
     return 2
@@ -213,6 +227,11 @@ def _owner(args: argparse.Namespace) -> int:
             else bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
         )
 
+        from kokoah_subnet.validator.store import Store
+
+        db_url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
+        store = Store(db_url) if db_url else None
+
         async def _burn() -> int:
             async with bt.Subtensor(args.network) as client:
                 report = await burn_received(
@@ -223,6 +242,8 @@ def _owner(args: argparse.Namespace) -> int:
                     min_alpha=args.min_alpha,
                     password=password,
                     dry_run=args.dry_run,
+                    store=store,
+                    network=args.network,
                 )
             print(json.dumps(report, default=str))
             return 0 if report.get("ok", True) else 1
