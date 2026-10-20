@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "5.6"
+SPEC_VERSION = "5.7"
 
 # The best maker rebate anywhere on Hyperliquid, bps a side (fee schedule read 2026-10-19). It bounds the smallest
 # total fee a round trip through the builder can carry, and with it the safe range of `c_tot` (spec section 11).
@@ -19,7 +19,7 @@ class Params:
     """Every number the mechanism uses. Money is USD, rates are fractions, windows are days."""
 
     builder_fee_rate: float = 0.00025  # 0.025% of notional per fill
-    maker_credit: float = 0.4  # maker fills earn 40% of their builder fee as credit
+    maker_credit: float = 1.0  # maker fills earn their builder fee in full (the fee is charged on both; v5.7)
     smoothing: float = 0.3  # today's weight in the daily smoothing (70/30)
     c_max: float = 2.0  # first cap: multiple of the smoothed fee credit
     c_tot: float = 0.75  # second cap: share of the smoothed total fees on the builder leg

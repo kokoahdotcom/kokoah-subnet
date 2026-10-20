@@ -2,7 +2,7 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, draft 0.9, October 2026. Mechanism specification v5.6.
+Whitepaper, draft 0.9, October 2026. Mechanism specification v5.7.
 
 ### Abstract
 
@@ -79,8 +79,9 @@ exchange charges on those trades, publishes the daily fill file's hash on chain,
 buying back and burning the subnet token on a published cadence. The operator holds the owner hotkey, through
 which unawarded emission is burned.
 
-**Data.** Hyperliquid publishes, for every builder, one file per day listing every fill routed under that
-builder's code, with the user address, coin, side, price, size, whether the order crossed the spread (taker), the
+**Data.** Hyperliquid charges the builder fee on maker and taker fills alike (its documentation is silent on the
+point; the builders' own daily files show it). It publishes, for every builder, one file per day listing every fill
+routed under that builder's code, with the user address, coin, side, price, size, whether the order crossed the spread (taker), the
 counterparty, the closed PnL, and the builder fee. This file is the canonical list of scored fills. Each address's
 own public fill history provides the total fee charged by the exchange, and its public account state provides the
 daily account value and deposits. Fills without the builder code count for nothing; no other venue is ever read.
@@ -96,26 +97,27 @@ over. A fresh binding starts from zero.
 ## 4. The incentive mechanism
 
 Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` carrying the builder code, `n_f`
-its notional in USD, `t_f` 1 for a taker fill and 0 for a maker fill, `b_f` the builder fee it paid (0.025% of
-notional), `fee_f` the fill's total fee field (the exchange's fee plus the builder fee; a maker rebate makes the
+its notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker), `fee_f` the fill's total fee field (the exchange's fee plus the builder fee; a maker rebate makes the
 exchange's part negative). `A` is the day's miner emission (33% of 7,200 alpha, 2,376 alpha). `p_d` is the alpha
 price in USD for the day: the mean of the pool price sampled at every tempo boundary of the day, times the day's
 mean TAO/USD mark.
 
 ### 4.1 Fee credit
 
-Each day, a miner's fee credit is the builder fee paid on taker fills, plus 40% of the builder fee paid on maker
-fills. The credit is smoothed with a daily factor of 0.3:
+Each day, a miner's fee credit is the builder fee paid on its fills. The builder fee is one rate on every order,
+0.025% of notional, attached when the order is placed and therefore the same whether the order rests on the book or
+crosses it; the exchange charges it on maker and taker fills alike. The credit is smoothed with a daily factor of
+0.3:
 
 ```
-Φ_i,d  = Σ_f  b_f × ( t_f + 0.4 × (1 − t_f) )
+Φ_i,d  = Σ_f  b_f
 Φ̂_i,d  = 0.7 × Φ̂_i,d−1 + 0.3 × Φ_i,d
 ```
 
 A day's fees are worth 30% on the day, 21% the next, 15% the day after. The weights sum to one, so every dollar of
-fees is counted exactly once over time; the smoothing only spreads it. Maker fills count less because the exchange
-charges them less, and the rebate structure of maker tiers would otherwise subsidize the passive leg of a
-two-account wash.
+fees is counted exactly once over time; the smoothing only spreads it. A dollar of maker fees is worth exactly a
+dollar of taker fees to the subnet's revenue, and the credit treats them the same; the second cap (section 4.4),
+not a credit discount, is what keeps the passive leg of a two-account wash from being subsidized.
 
 ### 4.2 Quality multiplier
 
@@ -226,7 +228,6 @@ one minute, and the share from fills against bound counterparties.
 | Parameter | Value |
 |---|---|
 | Builder fee | 0.025% of notional per fill |
-| Maker credit | 0.4 |
 | Smoothing factor | 0.3 per day (credit, total fees, skill) |
 | Multiplier | 0.85 + 0.05 × skill + 0.10 × holding |
 | First cap | 2 × smoothed fee credit |
@@ -264,7 +265,7 @@ chosen 0.75 leaves margin.
 | Strategy (bps per round trip, builder fee 2.5 a side) | Exchange fee, builder leg | Builder fee | Other leg | Paid at most | Net |
 |---|---|---|---|---|---|
 | Wash: taker through the builder vs own maker elsewhere, base tier | 9 | 5 | 3 | 10 | −7 |
-| Two bound accounts, taker vs maker, both through the builder | 12 | 10 | 0 | 14, and mirrored → 0 | −8 or worse |
+| Two bound accounts, taker vs maker, both through the builder | 12 | 10 | 0 | 16, and mirrored → 0 | −6 or worse |
 | Hedge, taker through the builder, hidden maker leg elsewhere | 9 | 5 | 3 | 10 | −7 |
 | Hedge, taker at the deepest volume and staking discounts (1.44 a side), hidden leg at the best rebate | 2.88 | 5 | −0.6 | 5.91 | −1.37 |
 | Market maker at the deepest rebate, maker both legs, one through the builder | −0.6 | 5 | −0.6 | 3.3 | −0.5 |
@@ -385,8 +386,7 @@ strong edge, fading edge, one bad day). The verification script and the simulati
 4. Data plane: confirm the per-builder daily file is fetchable by anyone for the live builder address, and that
    total-fee matching against public fill histories is exact.
 
-**Open assumptions.** Whether the exchange charges the builder fee on maker fills (its documentation is silent;
-if not, the maker credit is moot). The public per-address fill API keeps 10,000 fills, so the per-builder file is
+**Open assumptions.** The public per-address fill API keeps 10,000 fills, so the per-builder file is
 essential for high-frequency accounts. The TAO/USD mark is the node's daily mean, with an exchange median as
 fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
 operator's. Paying tokens for trading activity is subject to legal review in the operator's jurisdictions.

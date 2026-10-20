@@ -6,6 +6,7 @@ from kokoah_subnet.mechanism import (
     DEFAULT,
     Fill,
     MinerState,
+    Params,
     advance,
     by_user,
     day_fees,
@@ -39,11 +40,12 @@ def test_parse_rejects_other_headers() -> None:
         parse_builder_csv("time,user\n1,2\n")
 
 
-def test_day_fees_taker_full_maker_at_40_percent() -> None:
+def test_day_fees_maker_and_taker_credit_alike() -> None:
     fills = parse_builder_csv(CSV)
     fees = day_fees(fills, DEFAULT)
     assert fees.builder_fee == pytest.approx(5.0025)
-    assert fees.credit == pytest.approx(2.5 + 0.4 * 2.5025)
+    assert fees.credit == pytest.approx(5.0025)  # the builder fee is charged on both, so both count in full
+    assert day_fees(fills, Params(maker_credit=0.4)).credit == pytest.approx(2.5 + 0.4 * 2.5025)
     assert fees.total_fee == pytest.approx(5.0025)  # unknown total fee counts the builder fee only
     assert fees.taker_notional == pytest.approx(10_000.0)
     assert fees.fills == 2

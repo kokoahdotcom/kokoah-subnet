@@ -1,4 +1,4 @@
-"""Verify the incentive mechanism (spec v5.6) numerically.
+"""Verify the incentive mechanism (spec v5.7) numerically.
 
 Run: uv run python scripts/verify_mechanism.py
 
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 # ----- parameters (spec section 12) ---------------------------------------------------------------------------------
 
 BUILDER = 2.5  # bps a side
-C_M = 0.4  # maker credit
+C_M = 1.0  # maker credit: the builder fee is charged on maker fills too (confirmed 2026-10-20), so full credit
 ALPHA = 0.3  # daily smoothing weight of today
 C_MAX = 2.0
 C_TOT = 0.75

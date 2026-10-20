@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v5.6, 2026-10-20)
+# Incentive mechanism in plain words (v5.7, 2026-10-20)
 
 The formulas are in `02-mechanism-spec.md`; this page says what they do. The public, polished version is the
 whitepaper (`docs/whitepaper.md`).
@@ -12,8 +12,9 @@ uses the fees to buy back and burn the subnet's token. Miners run nothing: regis
 
 ## How a miner's daily pay is decided
 
-1. **Count the fees the miner paid through Kokoah today.** Taker trades count fully, maker trades at 40%. Mix today
-   with the past: 30% today, 70% the running figure. Every dollar of fees is counted exactly once over time.
+1. **Count the fees the miner paid through Kokoah today.** Every fill counts the same, maker or taker, because the
+   fee is the same on every order. Mix today with the past: 30% today, 70% the running figure. Every dollar of fees
+   is counted exactly once over time.
 2. **Multiply by a small quality factor between 0.85 and 1.** Skill adds up to 0.05 and holding (not selling the
    tokens you were paid) up to 0.10. Two miners with the same volume are always within 15% of each other.
 3. **Share the day's pool in proportion.** Twice the volume, about twice the pay.
@@ -50,5 +51,4 @@ It moves pay by at most 5%.
 
 ## Still open
 
-Whether Hyperliquid charges the builder fee on maker fills; the burn cost measured on the localnet; the holding
-effect measured on testnet; legal review.
+The burn cost measured on the localnet and testnet; the holding effect measured on testnet; legal review.

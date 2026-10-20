@@ -1,6 +1,10 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.6, 2026-10-20)
+# Kokoah subnet incentive mechanism: complete specification (v5.7, 2026-10-20)
 
-Self-contained. Every symbol is defined here. v5.6 is the verified form of v5.5: `scripts/verify_mechanism.py` checks
+Self-contained. Every symbol is defined here. v5.7 (owner, 2026-10-20): the builder fee is one rate on every order,
+0.025%, attached when the order is placed, so maker and taker fills pay it alike, and Hyperliquid charges it on
+both (confirmed from Kokoah's own fills and from other builders' daily files). Maker fills therefore earn their
+fee credit in full (`c_m = 1`); the maker discount of earlier versions is no longer needed, because the second cap
+already bounds every account by what it actually paid. v5.6 was the verified form of v5.5: `scripts/verify_mechanism.py` checks
 every claim below numerically, and the verification corrected four things. (1) The tightest zero-edge strategy is a
 rebated market maker (net −0.5 bps per round trip; it would need a hidden rebate of 0.55 bps a side to break even),
 not the maximal-tier taker hedge (net −1.37 at Hyperliquid's best rebate); the second cap is safe for any `c_tot`
@@ -50,7 +54,7 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
 | `i`, `d` | a miner (one bound Hyperliquid address with its sub-accounts, and its hotkey); a scoring day (00:00 UTC) | |
 | `f` | a fill of miner `i` carrying the Kokoah builder code; `n_f` notional (USD), `t_f` 1 if taker (`crossed`), `b_f = n_f × fee` the builder fee (`builderFee`), `fee_f` the fill's total fee field (Hyperliquid's fee plus `b_f`; negative Hyperliquid part means a rebate) | |
 | `fee` | builder fee rate per fill | 0.00025 (0.025%) |
-| `c_m` | maker fee credit (taker is 1.0) | 0.4 |
+| `c_m` | maker fee credit (taker is 1.0); kept as a parameter, set to 1 since the builder fee is charged on maker fills too | 1.0 |
 | `α` | daily smoothing weight of today's value, for credit, fees and skill | 0.3 |
 | `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
 | `p_d` | alpha price in USD for day `d`: the mean of the pool price sampled at every tempo boundary of the day (20 samples) times the day's mean TAO/USD mark from the node | |
@@ -92,12 +96,14 @@ positions held under one minute, and the share from fills against bound counterp
 ## 4. Daily fee credit, smoothed
 
 ```
-Φ_i,d  = Σ_{f on day d}  b_f × ( t_f + (1 − t_f) × c_m )          taker fills count fully, maker fills at 0.4
+Φ_i,d  = Σ_{f on day d}  b_f × ( t_f + (1 − t_f) × c_m )          with c_m = 1: the builder fee paid, maker or taker
 Φ̂_i,d  = (1 − α) × Φ̂_i,d−1 + α × Φ_i,d                            70/30 smoothing; Φ̂ = 0 at the binding
 ```
 
 A day's fees are worth 30% today, 21% tomorrow, 15% the day after; the weights sum to 1, so over time every
-dollar of fees is counted exactly once. Scalpers and market makers earn credit on every fill like everyone else.
+dollar of fees is counted exactly once. Scalpers and market makers earn credit on every fill like everyone else:
+the fee is the same on every order, so a dollar of maker fees is worth exactly a dollar of taker fees to the
+subnet's revenue, and the credit says so.
 
 ## 5. The share: by volume, within 0.85 to 1.0
 
@@ -213,10 +219,10 @@ Searched over 105 combinations of fee tier, staking discount and maker or taker 
 | Strategy | Pays Hyperliquid (Kokoah leg) | Pays Kokoah | Other leg | Income at most | Net |
 |---|---|---|---|---|---|
 | Wash: taker through Kokoah vs own maker elsewhere (tier 0) | 9 | 5 | 3 | min(10, 0.75 × 14 = 10.5) = 10 | −7 |
-| Two bound accounts, taker vs maker, both through Kokoah | 9 + 3 | 5 + 5 | 0 | 10 + min(4, 0.75 × 8 = 6) = 14, and mirrored → 0 | −8 or worse |
+| Two bound accounts, taker vs maker, both through Kokoah | 9 + 3 | 5 + 5 | 0 | 10 + min(10, 0.75 × 8 = 6) = 16, and mirrored → 0 | −6 or worse |
 | Hedge, taker on Kokoah (tier 0), hidden leg maker elsewhere | 9 | 5 | 3 | 10 | −7 |
 | Hedge, taker on Kokoah, tier 6 + Diamond (1.44 a side), hidden leg at the best rebate | 2.88 | 5 | −0.6 | min(10, 0.75 × 7.88 = 5.91) = 5.91 | −1.37 (break-even needs a 0.99 bps rebate a side) |
-| **Top-tier market maker, maker both legs, one through Kokoah** | −0.6 | 5 | −0.6 | min(4, 0.75 × 4.4 = 3.3) = 3.3 | **−0.5 (the tightest; break-even needs 0.55 bps a side)** |
+| **Top-tier market maker, maker both legs, one through Kokoah** | −0.6 | 5 | −0.6 | min(10, 0.75 × 4.4 = 3.3) = 3.3 | **−0.5 (the tightest; break-even needs 0.55 bps a side)** |
 | Instant round trips in one account (tier 0) | 9 | 5 | 0 | 10 | −4 |
 | Dust account, huge volume | 9 | 5 | 0 | 10 | −4 |
 | Lottery farm of small accounts | 9 | 5 | 0 | 10 | −4 per account |
@@ -233,7 +239,7 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | Parameter | Value |
 |---|---|
 | builder fee | 0.025% per fill (owner) |
-| maker credit | 0.4 |
+| maker credit | 1.0 (the builder fee is charged on maker fills; the second cap makes a discount unnecessary) |
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | multiplier | `0.85 + 0.05 g' + 0.10 h'` (floor `m_min`, weights `w_s`, `w_h`; the owner tunes the balance) |
 | pay caps | `M × min(2 × smoothed fee credit, 0.75 × smoothed total fees on the Kokoah leg)`, in alpha at the day's average price; `c_tot` must stay below 0.864 |
@@ -294,7 +300,8 @@ Before launch:
 
 ## 16. Assumptions and open points
 
-1. Whether the builder fee is charged on maker fills (Hyperliquid docs silent; if not, maker credit is moot).
+1. Resolved 2026-10-20: the builder fee is charged on maker fills as on taker fills (Kokoah attaches one rate,
+   0.025%, at order placement; other builders' daily files show maker fills paying it).
 2. Builder attribution relies on Hyperliquid's per-builder daily file (public per builder, confirmed for the
    backend's ingest; see §15 item 4); the public per-user API keeps 10,000 fills per address.
 3. The TAO/USD mark for `p_d`: the node's daily mean; an exchange median is the fallback.
