@@ -30,31 +30,32 @@ revenue beats sell pressure   ⟺   β × R  >  s × A × price
 
 `A` is fixed by the chain and `price` is set by the market, so this holds when:
 
-1. **the builder fee is high.** `R = volume × fee`. Hyperliquid allows up to 10 bps a side for perps. **Decision
-   (owner, 2026-10-19): 6 bps a side**, to be set on the Kokoah platform when the subnet launches. At 6 bps the
-   builder fee is bigger than Hyperliquid's own taker fee (4.5 bps), so most of what any trader (honest or not)
-   spends to earn alpha comes to Kokoah, not to Hyperliquid. At today's 2.5 bps it is the other way round and most
-   of the money leaks.
+1. **the builder fee.** `R = volume × fee`. Hyperliquid allows up to 10 bps a side for perps. **Decision (owner,
+   2026-10-20): 2.5 bps a side (0.025%)**, the app's existing target. At this level Hyperliquid's taker fee (4.5
+   bps) is bigger than ours, so of what a trader spends to earn alpha, 36% (market orders) to 62% (limit orders)
+   comes to Kokoah and the rest goes to Hyperliquid; the fee level is a pure revenue dial and every doubling of it
+   halves the volume needed for the same price support (the earlier 6 bps option is kept in the table for
+   comparison).
 2. **miners keep alpha.** `s` falls with the holding multiplier, the registration collateral and, later, vesting.
 3. **less alpha reaches sellers.** The miner slot is at its 33% minimum; the owner's 33% is auto-locked into
    conviction and never sold; validators take 34%.
 
 The price the buyback can hold on its own, with no other buyers: `price* = β × R / (s × A)`. Above it the market
-needs stakers; below it the buyback lifts the price. At 6 bps a side (TAO $266.54 on 2026-10-19, `A` = 2,380,
-`β` = 1):
+needs stakers; below it the buyback lifts the price. At 2.5 bps a side (TAO $266.54, `A` = 2,380, `β` = 1), with
+the 6 bps alternative for comparison:
 
-| Daily volume | Fees a day | `s` (share sold) | Price the buyback holds |
-|---|---|---|---|
-| $10M | $6k | 1.0 | $2.5 = 0.009 TAO |
-| $10M | $6k | 0.5 | $5.0 = 0.019 TAO |
-| $20M | $12k | 1.0 | $5.0 = 0.019 TAO |
-| $20M | $12k | 0.5 | $10.1 = 0.038 TAO |
-| $30M | $18k | 0.4 | $18.9 = 0.071 TAO |
-| $50M | $30k | 0.4 | $31.5 = 0.118 TAO |
-| $100M | $60k | 0.4 | $63 = 0.236 TAO |
+| Daily volume | `s` (share sold) | Fees a day at 2.5 bps | Price held at 2.5 bps | Price held at 6 bps |
+|---|---|---|---|---|
+| $10M | 1.0 | $2.5k | 0.004 TAO | 0.009 TAO |
+| $10M | 0.5 | $2.5k | 0.008 TAO | 0.019 TAO |
+| $20M | 0.5 | $5k | 0.016 TAO | 0.038 TAO |
+| $30M | 0.4 | $7.5k | 0.030 TAO | 0.071 TAO |
+| $50M | 0.4 | $12.5k | 0.049 TAO | 0.118 TAO |
+| $100M | 0.4 | $25k | 0.099 TAO | 0.236 TAO |
 
-To hold 0.02 TAO: $21M a day if every miner sells everything, $10.6M a day if half is held, $8.5M a day at 40%
-sold. So the fee level is the main lever, holding the second, volume the third. Nothing is held back from miners.
+To hold 0.02 TAO at 2.5 bps: $51M a day if every miner sells everything, $25M a day if half is held, $20M a day at
+40% sold. So the fee level is the main lever, holding the second, volume the third. Nothing is held back from
+miners.
 
 ## 3. How the pool is split
 
@@ -73,15 +74,17 @@ tie-breaker (about 1% of the score at `λ = 50`); the leaderboard shows them in 
 day one: no waiting period for pay, only for the bonus.
 
 **Why this is safe (owner's requirement: encourage everyone to trade, generate volume).** The protection against
-fake volume is the fee level and the taker/maker credit, not the skill score. At 6 bps a side, the cheapest
-zero-edge strategy per unit of fee credit is a taker hedge with a rebate on the hidden leg: 9 + 12 − 0.6 = 20.4 bps
-per round trip for 1.0 credit (a maker-based top-tier market maker: −0.6 + 12 − 0.6 = 10.8 bps for 0.4 credit, 27
-per credit). So fake volume cannot break even until the pool pays about 20 bps per round trip of taker credit, which
-is 170% of the builder fee; honest market-order traders are paid at least that much back before any farm appears,
-and a farm's spend is mostly Kokoah revenue anyway (§3.5). What the narrow range gives up: skilled traders are no
-longer paid several times more per dollar than luck, so the "pay for skill" story rests on the leaderboard, and the
-holding incentive is mild, so the price floor sits near "fees back" rather than above it (§2). If the builder fee is
-ever lowered below Hyperliquid's taker fee, this range must be widened again or the farms win.
+fake volume is Hyperliquid's own fees plus the taker/maker credit, not the skill score. At 2.5 bps a side (5 per
+round trip), the cheapest zero-edge strategy per unit of fee credit is a maker-based top-tier market maker with a
+rebate on both legs: −0.6 + 5 − 0.6 = 3.8 bps for 0.4 credit, 9.5 bps per credit; a taker hedge with a rebate on
+the hidden leg costs 9 + 5 − 0.6 = 13.4 bps for 1.0 credit. So fake volume cannot break even until the pool pays
+about 9.5 bps per round trip of credit, which is 190% of the builder fee; honest market-order traders are paid at
+least that much back before any farm appears. What the narrow range gives up: skilled traders are no longer paid
+several times more per dollar than luck, so the "pay for skill" story rests on the leaderboard; the holding
+incentive is mild, so the price floor sits near "fees back" (§2); and at 2.5 bps most of a cheat's spend goes to
+Hyperliquid (64% for market orders), so the early overpay phase feeds Hyperliquid more than the buyback. The maker
+credit (0.4) is the number to watch: it is what makes the market-maker route the cheapest, and lowering it to 0.25
+would raise that route's cost to 15 bps per credit.
 
 ### 3.1 Fee credit `Φ_i` (everyone who trades)
 
@@ -146,8 +149,10 @@ Everything is proportional: `Φ` is linear in fees, `P⁺` linear in profit, `g`
 not change when an account is split. Proportional allocation is the one rule that is both sybil-proof and
 collusion-proof (Chen, Papadimitriou and Roughgarden, 2019); per-miner caps and concave transforms are deliberately
 absent. With the whole pool always paid, the reward per dollar of fees is high while the subnet is young; zero-edge
-traders then enter until the reward per round trip of taker credit falls to about 20 bps (170% of the builder fee),
-and honest traders are paid the same rate, times 0.85 to 1.0. At a 6 bps builder fee most of that early spend
+traders then enter until the reward per round trip of credit falls to about 9.5 bps (190% of the builder fee at
+2.5 bps), and honest traders are paid the same rate, times 0.85 to 1.0. Where that early spend goes: a taker-based
+cheat pays Kokoah 5 bps and Hyperliquid 9 per round trip on our leg (36% to us), a maker-based one 5 and 3 (62%), a
+top-tier market maker 5 and earns 1.2 in rebates (132%). At a 6 bps builder fee most of that early spend
 is Kokoah revenue (a taker-based cheat pays Kokoah 12 bps and Hyperliquid 9 per round trip, 57% to us; maker-based
 80%; a top-tier market maker 111%).
 
@@ -215,7 +220,7 @@ A miner's track record, receipts and holding belong to its binding, not to an ad
 
 | Parameter | v3 value | Why |
 |---|---|---|
-| Builder fee | 6 bps a side (owner, 2026-10-19; Hyperliquid's maximum is 10), approved by the user in the wallet | the lever that makes revenue beat sell pressure |
+| Builder fee | 2.5 bps a side (owner, 2026-10-20; the app's target; Hyperliquid's maximum is 10), approved by the user in the wallet | the revenue dial; doubling it halves the volume needed for the same price support |
 | Pool rule | `score = Φ × M + fee λ P⁺ g h`, `M = 0.85 + 0.15 × min(1, g/0.65) × h`, paid in proportion | similar volume, similar pay; skill and holding a small bonus |
 | m_min, g_full | 0.85, 0.65 | the rate range 0.85 to 1.0; a strong trader reaches the top |
 | λ (dollars) | 50 | $1 of profit counts like $50 of volume |
@@ -243,9 +248,8 @@ profit, volume, coverage and holding next to it. Emissions follow §3.
 
 1. Builder attribution (node data only) and whether the builder fee is charged on maker fills (docs silent; a
    57,000-fill sample showed none). If not, maker credit is moot.
-2. The 6 bps builder fee needs the user's approval in the wallet (`approveBuilderFee`) and a platform change (not
-   implemented yet; today's target is 2.5 bps and the launch promotion is 0): the alpha paid to traders is the
-   offset for the higher fee.
+2. The 2.5 bps builder fee is the app's existing target, but the launch promotion currently charges 0; nothing to
+   rebate until the fee is live. Raising it later (up to 10 bps) is the quickest way to more price support.
 3. The burn or recycle path for bought-back alpha and the fees → TAO path; how the collateral minimum is set.
 4. Root's `subnet_emission_enabled` switch: criteria unknown; the "verified trader ranking" is the pitch.
 5. Legal review of paying tokens for trading (pending for the app).

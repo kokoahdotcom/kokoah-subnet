@@ -93,7 +93,7 @@ tfoot td { font-weight: 600; font-family: var(--font-mono); font-size: 13px; bor
       <div class="field"><label for="taoIn">TAO emission to the pool, TAO/day<small>0 for a subnet below the gate</small></label><input id="taoIn" type="number" value="0" step="1" min="0"></div>
     </div>
     <div class="group"><h3>Kokoah and the subnet</h3>
-      <div class="field"><label for="fee">Builder fee, % per fill<small>0.06 = 6 bps a side; Hyperliquid max 0.1</small></label><input id="fee" type="number" value="0.06" step="0.005" min="0" max="0.1"></div>
+      <div class="field"><label for="fee">Builder fee, % per fill<small>0.025 = 2.5 bps a side; Hyperliquid max 0.1</small></label><input id="fee" type="number" value="0.025" step="0.005" min="0" max="0.1"></div>
       <div class="field"><label for="beta">Buyback share of fees, %</label><input id="beta" type="number" value="100" step="5" min="0" max="100"></div>
       <div class="field"><label for="minerSlot">Miner slot of emissions, %<small>chain minimum 33; owner gets 33, locked</small></label><input id="minerSlot" type="number" value="33" step="1" min="33" max="41"></div>
       <div class="field"><label for="valSell">Validators and stakers sell, %<small>of their 34–41% slot</small></label><input id="valSell" type="number" value="20" step="5" min="0" max="100"></div>

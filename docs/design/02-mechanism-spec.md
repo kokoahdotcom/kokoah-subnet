@@ -31,7 +31,7 @@ subnet's token (alpha) and burn it. The subnet's product is a verified ranking o
 | `n_f` | notional of fill `f` = size × price | USD |
 | `t_f` | 1 if the fill was a taker fill (`crossed = true`), 0 if maker | |
 | `b_f` | builder fee paid on fill `f` = `n_f × fee` | USD |
-| `fee` | builder fee rate per fill | 0.0006 (= 0.06% = 6 bps) |
+| `fee` | builder fee rate per fill | 0.00025 (= 0.025% = 2.5 bps) |
 | `E_d` | account value of the whole address at the end of day `d`, including unrealized PnL | USD |
 | `flows_d` | net deposits into the address during day `d` (deposits − withdrawals − transfers out) | USD |
 | `mark(f)` | Hyperliquid mark price of the coin at the time of fill `f` | |
@@ -208,9 +208,11 @@ For an honest trader `net_i` is compared with `hl_i` (what trading on Hyperliqui
 is cheaper; below zero, the trader is paid to trade. For a cheat (no real market bet) `net_i < 0` means the cheat
 profits.
 
-Per round trip of notional, in bps, with `fee = 6 bps` a side (`F = 12` per round trip): a taker-based wash or hedge
-pays Hyperliquid 9 and Kokoah 12 on our leg (57% of its spend is our revenue; 50% counting its hidden leg's fees);
-a maker-based one 3 and 12 (80%; 67%); a top-tier market maker −1.2 and 12 (111%; 118%). The subnet pays a
+Per round trip of notional, in bps, with `fee = 2.5 bps` a side (`F = 5` per round trip): a taker-based wash or
+hedge pays Hyperliquid 9 and Kokoah 5 on our leg (36% of its spend is our revenue; 29% counting its hidden leg's
+fees); a maker-based one 3 and 5 (62%; 45%); a top-tier market maker −1.2 and 5 (132%; 156%). Cost per unit of fee
+credit: taker hedge with a rebate on the hidden leg 13.4 bps per 1.0 credit; maker-based top-tier market maker 3.8
+bps per 0.4 credit = 9.5 per credit (the cheapest); normal maker hedge 11 per 0.4 = 27.5. The subnet pays a
 zero-edge account only through the fee half (its `g` is 0 for a wash bot, 0.18 on average for a hedge leg), so the
 cheapest attack must out-earn `Φ`-share pay that is itself bounded by the pool. In the young-subnet phase the pool
 per dollar of fees is high and zero-edge traders enter until pay per unit of size ≈ cost / 0.18, at which point
@@ -221,7 +223,7 @@ early money is Kokoah revenue, not Hyperliquid's.
 
 | Parameter | Value |
 |---|---|
-| builder fee `fee` | 0.06% per fill (6 bps a side); Hyperliquid maximum 0.1% |
+| builder fee `fee` | 0.025% per fill (2.5 bps a side), the app's target; Hyperliquid maximum 0.1% |
 | Hyperliquid fees | taker 4.5 bps, maker 1.5 bps a side (base tier); maker rebates −0.1 to −0.3 bps above 0.5–3% of 14-day maker volume |
 | maker fee credit `c_m` | 0.4 |
 | pool rule | `score = Φ × M + fee λ P g h`, `M = m_min + (1 − m_min) × min(1, g/g_full) × h`, proportional |
@@ -244,7 +246,7 @@ early money is Kokoah revenue, not Hyperliquid's.
 ## 13. Worked example (one day)
 
 Pool `A = 2,376` alpha; token price 0.02 TAO; TAO $266.54; one alpha = $5.33; pool value $12,667.
-`fee = 0.0006`, `c_m = 0.4`, `λ = 50`, `κ = 4`.
+`fee = 0.00025`, `c_m = 0.4`, `λ = 50`, `m_min = 0.85`, `g_full = 0.65`.
 
 Three miners (daily figures, 30-day totals scaled the same way):
 
@@ -252,34 +254,38 @@ Three miners (daily figures, 30-day totals scaled the same way):
 - Bob: volume $40,000,000, 60% taker, profit $8,000, `g = 0.25`, holding `h = 0.75`.
 - Cara: volume $300,000, 90% taker, profit $400, `g = 0.8`, holding `h = 0.75`.
 
-Fee credit (`Φ = fee × volume × (taker + 0.4 × maker)`): Anna 2,640; Bob 18,240; Cara 169.2.
+Fee credit (`Φ = fee × volume × (taker + 0.4 × maker)`): Anna 0.00025 × 5,000,000 × 0.88 = 1,100; Bob 0.00025 ×
+40,000,000 × 0.76 = 7,600; Cara 0.00025 × 300,000 × 0.94 = 70.5.
 
 Multiplier (`M = 0.85 + 0.15 × min(1, g/0.65) × h`): Anna 0.85 + 0.15 × 0.615 × 0.65 = 0.910; Bob 0.85 + 0.15 × 0.385 × 0.75 = 0.893; Cara 0.85 + 0.15 × 1 × 0.75 = 0.963.
 
-Profit credit (`fee × λ × P × g × h`): Anna 0.0006 × 50 × 500 × 0.4 × 0.65 = 3.9; Bob 0.0006 × 50 × 8,000 × 0.25 ×
-0.75 = 45.0; Cara 0.0006 × 50 × 400 × 0.8 × 0.75 = 7.2.
+Profit credit (`fee × λ × P × g × h`): Anna 0.00025 × 50 × 500 × 0.4 × 0.65 = 1.6; Bob 0.00025 × 50 × 8,000 × 0.25 ×
+0.75 = 18.8; Cara 0.00025 × 50 × 400 × 0.8 × 0.75 = 3.0.
 
-Scores: Anna 2,640 × 0.910 + 3.9 = 2,406; Bob 18,240 × 0.893 + 45.0 = 16,333; Cara 169.2 × 0.963 + 7.2 = 170.
-Σ = 18,909 → weights: Anna 12.7%, Bob 86.4%, Cara 0.9%.
+Scores: Anna 1,100 × 0.910 + 1.6 = 1,002.6; Bob 7,600 × 0.893 + 18.8 = 6,805.6; Cara 70.5 × 0.963 + 3.0 = 70.9.
+Σ = 7,879.1 → weights: Anna 12.7%, Bob 86.4%, Cara 0.9% (the fee level cancels out of the shares).
 
 Tokens and value: Anna 0.127 × 2,376 = 302 alpha = $1,611; Bob 0.864 × 2,376 = 2,052 alpha = $10,937; Cara 0.009 ×
 2,376 = 21 alpha = $114.
 
-Per dollar of fees paid: Bob gets back 46% ($10,937 on $24,000), Anna 54% ($1,611 on $3,000), Cara 63% ($114 on
-$180): nearly the same rate for everyone, size sets the total. Net cost: Anna pays Hyperliquid $1,950 and Kokoah
-$3,000, receives $1,611 → net $3,339; Bob $13,200 + $24,000 − $10,937 = $26,263; Cara $126 + $180 − $114 = $192.
+Per dollar of fees paid: Bob gets back 109% ($10,937 on $10,000), Anna 129% ($1,611 on $1,250), Cara 152% ($114
+on $75): nearly the same rate for everyone, size sets the total. Net cost: Anna pays Hyperliquid $1,950 and Kokoah
+$1,250, receives $1,611 → net $1,589 (cheaper than Hyperliquid directly); Bob $13,200 + $10,000 − $10,937 =
+$12,263 (cheaper); Cara $126 + $75 − $114 = $87 (cheaper).
 
-Economics: `R` = $27,180; buyback $27,180; with Anna selling 70%, Bob and Cara 50%, validators 20%: sold = 237 +
-1,001 + 18 + 490 = 1,746 alpha = $9,306. Buyback ÷ selling = 2.9. `price*` = 27,180 / (1,746 × 266.54) = 0.0584 TAO.
+Economics: `R` = $11,325; buyback $11,325; with Anna selling 70%, Bob and Cara 50%, validators 20%: sold = 211 +
+1,026 + 11 + 490 = 1,738 alpha = $9,263. Buyback ÷ selling = 1.22. `price*` = 11,325 / (1,738 × 266.54) = 0.0244
+TAO: at this volume ($45M a day) the buyback alone holds a little above today's price.
 
 ## 14. Attack arithmetic (what every number must satisfy)
 
 For a strategy with no trading edge, expected pay from the subnet per unit of notional must stay below the fees it
 cannot avoid. With the pool fully paid and `M ∈ [0.85, 1]`, a zero-edge account earns 85 to 90% of an honest
-trader's rate per unit of fee credit, so the fee level must carry the defense: at 6 bps a side the cheapest
-zero-edge strategy per unit of credit (a taker hedge with a rebate on the hidden leg) costs 20.4 bps per round
-trip, 170% of the builder fee; a maker-based top-tier market maker 27 bps per credit. Fake volume breaks even only
-once the pool pays that much per credit, by which time honest traders receive the same. Costs per round trip of notional (bps): taker-based
+trader's rate per unit of fee credit, so Hyperliquid's fees and the maker credit must carry the defense: at 2.5 bps
+a side the cheapest zero-edge strategy per unit of credit (a maker-based top-tier market maker with rebates on both
+legs) costs 9.5 bps per round trip per credit, 190% of the builder fee; a taker hedge with a rebate on the hidden
+leg 13.4. Fake volume breaks even only once the pool pays that much per credit, by which time honest traders
+receive the same. Costs per round trip of notional (bps): taker-based
 `2 × 4.5 + F + hidden`, maker-based `2 × 1.5 + F + hidden`, top-tier maker `2 × (−0.3) + F + hidden`, with `F = 2 × fee`
 and `hidden` the other leg's fees. The design makes those costs mostly Kokoah revenue (§11) and keeps the
 subnet's pay to zero-edge accounts small by: the taker/maker credit (§4), `g = 0` for negative-PnL accounts and the
@@ -322,7 +328,8 @@ exclusions (§3), collateral per account, migration-only account changes (§16) 
 
 1. Whether the builder fee is charged on maker fills (Hyperliquid docs silent; if not, maker credit is moot).
 2. Builder attribution needs node data; the public API lacks the builder address and keeps 10,000 fills per address.
-3. The 0.06% fee is a decision for the Kokoah platform (today's target is 0.025% and the launch promotion is 0).
+3. The fee is the app's 0.025% target; the launch promotion currently charges 0, so there is nothing to rebate until
+   the fee is live.
 4. Root must enable `subnet_emission_enabled` for a new subnet; criteria undocumented.
 5. Legal review of paying tokens for trading (pending for the app).
 6. Vesting via an on-chain contract (later) to lower the sold share further.
