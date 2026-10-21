@@ -50,6 +50,12 @@ larger than its losses (recency-weighted gain-to-pain over 30 days)? Luck scores
 trader 0.30 to 0.35, a strong one 0.55. No drawdown anywhere; one bad day costs about half the score for a month.
 It moves pay by at most 5%.
 
+## Faking a track record
+
+Two accounts trading each other at off-market prices to move money into the scored one does not work: every fill
+is compared with the exchange's own minute price, the money moved through an off-market price is treated like a
+deposit, and the credit is valued at the market price.
+
 ## Leaving and coming back
 
 Come back with the same hotkey and your records resume. Come back as a new identity and you start from zero, lose

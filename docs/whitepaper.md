@@ -160,7 +160,9 @@ the day's average rate, never at a single block's value.
 remainder is not paid to any trader. It is directed to the burn hotkey and destroyed (section 6).
 
 **Skill.** The skill factor asks two questions of a trader's own daily returns, computed from account value with
-deposits and withdrawals removed and each day capped at ±10%. Is the edge statistically real? The probabilistic
+deposits, withdrawals and vault transfers removed, with any money moved in through off-market fills removed as well
+(so two accounts cannot manufacture a steady profit by trading each other at off-market prices), and each day
+capped at ±10%. Is the edge statistically real? The probabilistic
 Sharpe ratio of the last 60 days against a modest benchmark answers that. Are recent gains clearly larger than
 recent losses? A recency-weighted gain-to-pain ratio of the last 30 days answers that, halved if two or more days
 in the last 60 lost more than 10%. The two are multiplied, smoothed like the credit, and scaled so that a strong
@@ -180,7 +182,8 @@ rate of 0.85, not excluded.
 builder code are recorded but not counted. Fills against the trader's own cluster (sub-accounts, addresses on the same coldkey,
 addresses funded by or transferring with each other); fills against another bound address, since the subnet does
 not pay for volume between its own miners (the exchange's file names every counterparty, so this is exact); and
-fills priced more than 0.5% from the mark, which are valued at the mark. Persistent hedging through the market is
+fills priced more than 0.5% from the exchange's minute mark, which are valued at the mark. Persistent hedging
+through the market is
 caught by position: daily net positions correlated below −0.8 with another bound address on at least 10 days in the
 last 30. Mirrored volume above 25% of an address's notional is removed from its credit; above 50%, both addresses
 lose their rate bonus for 30 days and are reported.
@@ -378,7 +381,8 @@ Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` ca
 notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker), `fee_f` the fill's total fee
 field (the exchange's fee plus the builder fee; a maker rebate makes the exchange's part negative). `A` is the
 day's miner emission (41% of 7,200 alpha, 2,952 alpha). `p_d` is the day's conversion rate from dollars to alpha:
-the mean pool rate (TAO per alpha) sampled at every tempo boundary of the day, times the day's mean TAO/USD mark.
+the mean pool rate (TAO per alpha) at 20 blocks anchored to the scored day (identical for every validator), times
+the day's mean TAO/USD from the exchange's hourly TAO-perpetual candles.
 
 ```
 Φ_i,d     = Σ_f  b_f                                            fee credit of the day
@@ -391,7 +395,9 @@ pay_i,d   = min( share_i,d , cap_i,d )
 burn_d    = A − Σ_i pay_i,d                                       weight to the burn hotkey
 ```
 
-Skill, from daily returns `r_d = (E_d − E_d−1 − flows_d) / E_d−1` capped to `r̃_d = clip(r_d, −0.10, +0.10)`:
+Skill, from daily returns `r_d = (E_d − E_d−1 − flows_d − offmarket_d) / E_d−1` (flows: deposits, withdrawals,
+account and vault transfers; offmarket: money moved in through off-market fills) capped to
+`r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
 confidence = clip((PSR − 0.5) / 0.45, 0, 1)        PSR: probabilistic Sharpe ratio of the last 60 days of r̃,
@@ -434,9 +440,10 @@ pool works as a volume rebate returning about 18% of fees, with shares within 15
 
 1. Fetch the previous UTC day's per-builder fill file; verify its hash against the operator's on-chain commitment.
 2. Read every commitment on the subnet; resolve which address each hotkey is bound to.
-3. For each bound address: fetch public fills for the total fee field, account value and ledger for returns and
-   flows, positions, the fee schedule, sub-accounts and transfer partners for clusters; read the day's minimum own
-   stake and the pool rate from the chain.
+3. For each bound address: fetch public fills for the total fee field and the off-market check against the
+   exchange's minute candles, account value and ledger for returns and flows, positions, the fee schedule,
+   sub-accounts and transfer partners for clusters; read the day's minimum own stake and the pool rate from the
+   chain at blocks anchored to the day. A failed read never costs the trader the day's credit.
 4. Update smoothed credit, total fees and skill; compute holding, gates, the rate; compute shares, caps in alpha at
    the day's mean rate, pay, and the remainder.
 5. Write everything to the record; publish the per-miner artifact; set weights (miners by pay, the remainder to the
@@ -467,7 +474,10 @@ leaderboard page).
 
 ### Appendix F. Changelog
 
-- **1.1 (2026-10-21).** Leaving, returning and switching handled: departed hotkeys release their address, a mirror
+- **1.1 (2026-10-21).** Off-market fills valued at the exchange's minute marks and their transfers removed from
+  the returns; the day's TAO/USD from hourly candles; chain samples anchored to the scored day; vault transfers as
+  flows; a failed exchange read never costs the day's credit; re-scores start from the state before the day; the
+  builder file is re-checked later in the day. Leaving, returning and switching handled: departed hotkeys release their address, a mirror
   report follows the address, hotkey swaps carry the records, the exchange's account history counts from the first
   day, collateral no longer counts as holding, the burn hotkey always keeps a minimal slice. Perpetuals only: spot fills are recorded but not counted. Emission split set to owner 18%, validators 41%, miners 41% (the chain's default; the
   miner pool is 2,952 alpha a day). Restructured for readers who are not engineers: summary and key facts, two figures, a
