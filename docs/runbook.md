@@ -21,6 +21,9 @@ kokoah-subnet-operator.timer`). The hourly check posts to `KOKOAH_SUBNET_ALERT_W
 in `~/.local/share/kokoah/subnet-alert.env`) only when something is wrong; the daily operator step commits
 yesterday's file hash from the owner hotkey at 00:20 UTC and retries hourly until noon if the file is late.
 
+If the exchange never publishes a day's file, close it by announcement on every validator:
+`uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>` (scored as a day with no fills).
+
 `uv run kokoah-subnet validator check` prints the health report (latest day, last weights, last epoch, errors in
 24 h, last burn) and exits 1 on a problem.
 

@@ -340,8 +340,10 @@ transaction. The verification script, the simulations and the chain measurements
 4. Total-fee matching against public fill histories checked on real bound traders over a month of data.
 
 **Assumptions.** The public per-address fill API keeps 10,000 fills, so the per-builder file is essential for
-high-frequency accounts (it is, and it is public). The TAO/USD mark is the exchange's own TAO perpetual, with a
-configured fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
+high-frequency accounts (it is, and it is public). The exchange publishes a day's file hours after the day ends;
+validators score days in order and wait for a late file, and a day never published is closed by announcement, the
+same on every validator. The caps need the builder fee to stay above 0.015%, which the validator checks in every
+file. The TAO/USD rate is the day's mean of the exchange's own TAO perpetual, with a configured fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
 operator's. Paying tokens for trading activity is subject to legal review in the operator's jurisdictions.
 
 ## 10. Roadmap
