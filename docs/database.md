@@ -9,7 +9,7 @@ validator/schema.py`; the tables, by what they answer:
 |---|---|
 | What ran, with what settings? | `runs` (one row per validator start: network, netuid, hotkeys, versions, config) |
 | What happened each scored day? | `days` (headline figures, file hash, whether it matched the operator's commitment, the full published artifact as JSON), `builder_files` |
-| Every trade, counted or not, and why not | `fills` (every row of the builder file: address, hotkey if bound, coin, side, price, size, notional, taker flag, builder fee, total fee, counterparty, closed PnL, `excluded` = unbound / cluster / bound_counterparty / mark_clip / NULL) |
+| Every trade, counted or not, and why not | `fills` (every row of the builder file: address, hotkey if bound, coin, side, price, size, notional, taker flag, builder fee, total fee, counterparty, closed PnL, `excluded` = spot / unbound / cluster / bound_counterparty / mark_clip / NULL) |
 | Every miner's figures and the parts behind them | `miner_days` (credit, fees, notional, PnL, smoothed credit and fees, confidence, quality, raw and smoothed skill, holding with its inputs, gates with their counts, mirror shares, multiplier, share, caps in USD and alpha, pay in alpha and USD, exchange fee rates) |
 | The smoothed state over time | `state_history` (per day), `states` (latest) |
 | The trader's account | `equity` (account value and flows per day, with the raw margin summary), `ledger_updates` (every deposit, withdrawal and transfer), `positions` (end-of-day positions per coin with size, entry, unrealized PnL, leverage), `activity` (round trips, fills, notional per day), `fee_rates` (the exchange's fee schedule for the address) |

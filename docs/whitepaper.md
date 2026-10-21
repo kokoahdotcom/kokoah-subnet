@@ -172,7 +172,8 @@ everything and the factor is 1; sell everything and it is 0.
 7 active days and a mean account value of $500 over the last 30 days. A trader failing a gate is paid at the floor
 rate of 0.85, not excluded.
 
-**What never counts.** Fills against the trader's own cluster (sub-accounts, addresses on the same coldkey,
+**What never counts.** Spot fills: the subnet scores perpetuals only in this version, and spot fills that carry the
+builder code are recorded but not counted. Fills against the trader's own cluster (sub-accounts, addresses on the same coldkey,
 addresses funded by or transferring with each other); fills against another bound address, since the subnet does
 not pay for volume between its own miners (the exchange's file names every counterparty, so this is exact); and
 fills priced more than 0.5% from the mark, which are valued at the mark. Persistent hedging through the market is
@@ -461,7 +462,7 @@ leaderboard page).
 
 ### Appendix F. Changelog
 
-- **1.1 (2026-10-20).** Emission split set to owner 18%, validators 41%, miners 41% (the chain's default; the
+- **1.1 (2026-10-21).** Perpetuals only: spot fills are recorded but not counted. Emission split set to owner 18%, validators 41%, miners 41% (the chain's default; the
   miner pool is 2,952 alpha a day). Restructured for readers who are not engineers: summary and key facts, two figures, a
   section per role, the pay rule in prose with the formulas moved here, what the operator cannot do, growth
   stages. Mechanism unchanged (v5.8).

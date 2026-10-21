@@ -102,7 +102,7 @@ fills = Table(
     Column("closed_pnl", Float),
     Column("twap_id", BigInteger),
     Column("mark_px", Float),
-    Column("excluded", String(32)),  # unbound | cluster | bound_counterparty | mark_clip, or NULL when counted
+    Column("excluded", String(32)),  # spot | unbound | cluster | bound_counterparty | mark_clip, NULL when counted
     Index("ix_fills_day_address", "day", "address"),
 )  # no uniqueness: the file can hold identical rows (partial fills of one order in the same second)
 

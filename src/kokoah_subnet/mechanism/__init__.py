@@ -10,7 +10,7 @@ from .exclusions import (
     mirror_action,
     mirror_position_share,
 )
-from .fills import Fill, by_user, match_total_fees, parse_builder_csv, parse_user_fills
+from .fills import Fill, by_user, is_perp, match_total_fees, parse_builder_csv, parse_user_fills
 from .gates import active_days, passes_gates, round_trips
 from .holding import holding_factor
 from .params import DEFAULT, SPEC_VERSION, Params
@@ -42,6 +42,7 @@ __all__ = [
     "drop_cluster_matches",
     "ema",
     "holding_factor",
+    "is_perp",
     "match_total_fees",
     "mirror_action",
     "mirror_position_share",

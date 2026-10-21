@@ -131,3 +131,10 @@ def test_parse_real_builder_file_conventions() -> None:
     assert a.time_ms == 1792368424000 and a.day == "2026-10-19"
     assert not a.crossed and b.crossed
     assert a.twap_id is None and b.closed_pnl == 0.04 and b.builder_fee == 0.015
+
+
+def test_is_perp() -> None:
+    from kokoah_subnet.mechanism import is_perp
+
+    assert is_perp("BTC") and is_perp("kPEPE") and is_perp("HYPE")
+    assert not is_perp("PURR/USDC") and not is_perp("@107")

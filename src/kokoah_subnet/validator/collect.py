@@ -255,7 +255,8 @@ async def collect_and_score(
             rates = (float(fee_raw["userCrossRate"]) * 1e4, float(fee_raw["userAddRate"]) * 1e4)
             rates_of[address] = rates
             store.put_fee_rates(address, day, rates[0], rates[1], raw=fee_raw)
-            store.put_activity(address, day, round_trips(own), len(own), sum(f.notional for f in own))
+            perps_own = [f for f in own if is_perp(f.coin)]
+            store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
             rt_window, active_window, _ = store.activity_window(address, params.gate_days)
             window_start = start_ms - params.gate_days * 86_400_000
             subs = set(await sub_accounts(hl, address))
@@ -311,7 +312,9 @@ async def collect_and_score(
     for f in all_fills:
         fill_hk = hotkey_of_address.get(f.user)
         excluded: str | None
-        if fill_hk is None:
+        if not is_perp(f.coin):
+            excluded = "spot"
+        elif fill_hk is None:
             excluded = "unbound"
         elif f.counterparty and cluster_of.get(f.user, f.user) == cluster_of.get(f.counterparty, f.counterparty):
             excluded = "cluster"

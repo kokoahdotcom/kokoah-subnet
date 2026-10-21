@@ -132,3 +132,13 @@ def test_cluster_self_matches_count_for_nothing() -> None:
     )
     res = score_day(inputs, DEFAULT)
     assert res.records[0].fees.fills == 0 and res.records[0].pay_alpha == 0.0
+
+
+def test_spot_fills_count_for_nothing() -> None:
+    spot = [
+        Fill(DAY0 + i * 60_000, A, "PURR/USDC", "A", 0.5, 20_000.0, True, 2.5, counterparty="0x1") for i in range(10)
+    ] + [Fill(DAY0 + 1, A, "@107", "A", 1.0, 1_000.0, True, 0.25, counterparty="0x1")]
+    perp = taker_fills(A, 2, 10_000.0)
+    inputs = DayInputs(day_index=0, price_usd=1.0, fills=spot + perp, states={}, miners=[MinerInputs("hk", A)])
+    res = score_day(inputs, DEFAULT)
+    assert res.records[0].fees.fills == 2 and res.records[0].fees.builder_fee == pytest.approx(5.0)

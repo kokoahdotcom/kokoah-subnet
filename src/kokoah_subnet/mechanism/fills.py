@@ -54,6 +54,13 @@ class Fill:
         return (self.user, self.coin, self.time_ms, self.px, self.sz, self.side)
 
 
+def is_perp(coin: str) -> bool:
+    """Perpetual markets are plain tickers ("BTC", "kPEPE"); spot pairs are "PURR/USDC" or index names like "@107".
+    The subnet scores perpetuals only (v5.8): the app's builder code also rides on spot orders, where the exchange
+    charges it on sells, and those fills are recorded but never counted."""
+    return "/" not in coin and not coin.startswith("@")
+
+
 def _parse_time_ms(text: str) -> int:
     t = text.strip()
     if t.isdigit():

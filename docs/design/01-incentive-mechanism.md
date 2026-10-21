@@ -12,8 +12,8 @@ uses the fees to buy back and burn the subnet's token. Miners run nothing: regis
 
 ## How a miner's daily pay is decided
 
-1. **Count the fees the miner paid through Kokoah today.** Every fill counts the same, maker or taker, because the
-   fee is the same on every order. Mix today with the past: 30% today, 70% the running figure. Every dollar of fees
+1. **Count the fees the miner paid through Kokoah today, on perpetuals.** Every perp fill counts the same, maker or
+   taker, because the fee is the same on every order; spot fills are kept on the record but not counted for now. Mix today with the past: 30% today, 70% the running figure. Every dollar of fees
    is counted exactly once over time.
 2. **Multiply by a small quality factor between 0.85 and 1.** Skill adds up to 0.05 and holding (not selling the
    tokens you were paid) up to 0.10. Two miners with the same volume are always within 15% of each other.

@@ -19,7 +19,7 @@ from .exclusions import (
     mirror_action,
     mirror_position_share,
 )
-from .fills import Fill, by_user
+from .fills import Fill, by_user, is_perp
 from .gates import active_days, passes_gates, round_trips
 from .holding import holding_factor
 from .params import Params
@@ -103,7 +103,8 @@ class DayResult:
 
 def score_day(inputs: DayInputs, params: Params) -> DayResult:
     # exclusions on the day's fills
-    fills = clip_to_mark(drop_cluster_matches(inputs.fills, inputs.cluster_of), params)
+    perps = [f for f in inputs.fills if is_perp(f.coin)]  # perpetuals only; spot fills count for nothing
+    fills = clip_to_mark(drop_cluster_matches(perps, inputs.cluster_of), params)
     bound = {m.address for m in inputs.miners}
     bound_fills = {a: f for a, f in by_user(fills).items() if a in bound}
     against_bound = bound_counterparty_notional(bound_fills)  # measured before the fills are dropped
