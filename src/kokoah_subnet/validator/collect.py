@@ -22,6 +22,7 @@ from kokoah_subnet.mechanism import (
     Fill,
     Params,
     by_user,
+    is_perp,
     match_total_fees,
     parse_builder_csv,
     round_trips,
