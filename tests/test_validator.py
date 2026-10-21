@@ -130,7 +130,17 @@ def test_sample_blocks_and_weights_by_uid() -> None:
 
 
 def test_states_round_trip(tmp_path: Path) -> None:
-    states = {"hk": MinerState(phi_hat=1.5, fee_hat=2.0, g=0.1, paid=(1.0, 2.0), zero_until_day=9)}
+    states = {
+        "hk": MinerState(
+            phi_hat=1.5,
+            fee_hat=2.0,
+            g=0.1,
+            paid=(1.0, 2.0),
+            zero_until_day=9,
+            paid_days=((8, 1.0), (9, 2.0)),
+            last_day=9,
+        )
+    }
     path = tmp_path / "state.json"
     path.write_text(dump_states(states))
     assert load_states(path) == states
@@ -207,3 +217,24 @@ def test_migrations_record_their_version(tmp_path: Path) -> None:
         assert current_version(c) == STEPS[-1][0]
     again = Store(tmp_path / "m.sqlite")
     assert again.migrations_applied == []
+
+
+def test_daily_equity_from_portfolio() -> None:
+    from kokoah_subnet.validator.hyperliquid import daily_equity_from_portfolio
+
+    day0 = 1792454400000
+    windows = [
+        ["day", {"accountValueHistory": [[day0, "1"]], "pnlHistory": [[day0, "0"]]}],
+        [
+            "perpMonth",
+            {
+                "accountValueHistory": [[day0, "1000"], [day0 + 86_400_000, "1100"], [day0 + 2 * 86_400_000, "1600"]],
+                "pnlHistory": [[day0, "0"], [day0 + 86_400_000, "100"], [day0 + 2 * 86_400_000, "100"]],
+            },
+        ],
+    ]
+    rows = daily_equity_from_portfolio(windows)
+    assert [r[0] for r in rows] == ["2026-10-20", "2026-10-21", "2026-10-22"]
+    assert rows[1] == ("2026-10-21", 1100.0, pytest.approx(0.0))  # +100 value, +100 pnl: no flow
+    assert rows[2] == ("2026-10-22", 1600.0, pytest.approx(500.0))  # +500 value, no pnl: a deposit
+    assert daily_equity_from_portfolio([["week", {}]]) == []

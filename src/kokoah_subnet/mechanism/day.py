@@ -37,7 +37,8 @@ class MinerInputs:
     returns: Sequence[float] = ()  # daily returns, newest last, flows removed, uncapped
     mean_equity_usd: float = 0.0  # over the gate window
     staked_min_alpha: float = 0.0  # the day's minimum own stake on the hotkey
-    collateral_min_alpha: float = 0.0
+    collateral_min_alpha: float = 0.0  # recorded; not used by the holding factor since v5.8
+    collateral_locked_alpha: float = 0.0  # registration collateral locked on the hotkey (does not count as holding)
     window_fills: Sequence[Fill] = ()  # the gate window's builder-code fills (for round trips and active days)
     start_positions: Mapping[str, float] = field(default_factory=dict)
     exchange_rates_bps: tuple[float, float] | None = None  # (taker, maker) fallback for unknown total fees
@@ -55,6 +56,9 @@ class DayInputs:
     cluster_of: Mapping[str, str] = field(default_factory=dict)
     positions: Mapping[str, Mapping[str, Sequence[float]]] = field(default_factory=dict)  # mirror rule inputs
     pool_alpha: float | None = None
+    penalized_until: Mapping[str, int] = field(
+        default_factory=dict
+    )  # address -> day index: a report follows the address
 
 
 @dataclass(frozen=True)
@@ -121,7 +125,11 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         counterparty_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0
         mirrored = max(counterparty_share, position_share.get(m.address, 0.0))
         action = mirror_action(mirrored, params)
-        zeroed = action.zero_multiplier or state.is_zeroed(inputs.day_index)
+        zeroed = (
+            action.zero_multiplier
+            or state.is_zeroed(inputs.day_index)
+            or inputs.penalized_until.get(m.address, -1) > inputs.day_index
+        )
         parts = skill_raw(m.returns, params)
         g_smoothed = (1 - params.smoothing) * state.g + params.smoothing * parts.raw
         rt = (
@@ -131,7 +139,15 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         gates = passes_gates(rt, ad, m.mean_equity_usd, params)
 
         skill = 0.0 if zeroed else skill_factor(g_smoothed, params)
-        hold = 0.0 if zeroed else holding_factor(m.staked_min_alpha, state.paid_window(), m.collateral_min_alpha)
+        hold = (
+            0.0
+            if zeroed
+            else holding_factor(
+                m.staked_min_alpha,
+                state.paid_window(inputs.day_index, params.holding_days),
+                m.collateral_locked_alpha,
+            )
+        )
         mult = multiplier(skill, hold, gates, params)
         phi_hat = (1 - params.smoothing) * state.phi_hat + params.smoothing * fees.credit * action.credit_factor
         fee_hat = (1 - params.smoothing) * state.fee_hat + params.smoothing * fees.total_fee
@@ -226,5 +242,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             params,
             credit_factor=credit_factor,
             zero_from_day=inputs.day_index if reported else None,
+            day_index=inputs.day_index,
         )
+
     return DayResult(inputs.day_index, allocation, records, states)

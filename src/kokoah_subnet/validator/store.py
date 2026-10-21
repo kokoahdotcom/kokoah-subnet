@@ -286,6 +286,48 @@ class Store:
             for a, b, source in edges:
                 c.execute(insert(S.cluster_edges).values(day=day, a=a.lower(), b=b.lower(), source=source))
 
+    # ----- penalties, hotkey swaps -----------------------------------------------------------------------------
+
+    def put_penalty(self, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
+        a = address.lower()
+        with self._engine.begin() as c:
+            row = c.execute(select(S.penalties.c.until_day).where(S.penalties.c.address == a)).first()
+            if row is not None and int(row[0]) >= until_day:
+                return
+            c.execute(delete(S.penalties).where(S.penalties.c.address == a))
+            c.execute(
+                insert(S.penalties).values(address=a, until_day=int(until_day), day=day, hotkey=hotkey, reason=reason)
+            )
+
+    def penalties(self, day_index: int) -> dict[str, int]:
+        """Addresses still penalized at `day_index` -> the day index the penalty ends."""
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(S.penalties.c.address, S.penalties.c.until_day).where(S.penalties.c.until_day > day_index)
+            ).all()
+        return {str(a): int(u) for a, u in rows}
+
+    def latest_neurons(self) -> list[dict[str, Any]]:
+        """The most recent metagraph snapshot recorded by a scoring run (uid, hotkey, coldkey)."""
+        with self._engine.connect() as c:
+            day = c.execute(select(func.max(S.neurons.c.day))).scalar()
+            if day is None:
+                return []
+            rows = c.execute(
+                select(S.neurons.c.uid, S.neurons.c.hotkey, S.neurons.c.coldkey).where(S.neurons.c.day == day)
+            ).all()
+        return [{"uid": int(u), "hotkey": str(h), "coldkey": str(k)} for u, h, k in rows]
+
+    def carry_state(self, old_hotkey: str, new_hotkey: str) -> bool:
+        """After a hotkey swap (same UID and coldkey), the smoothed state follows the new hotkey."""
+        with self._engine.begin() as c:
+            row = c.execute(select(S.states.c.json).where(S.states.c.hotkey == old_hotkey)).first()
+            if row is None:
+                return False
+            c.execute(delete(S.states).where(S.states.c.hotkey.in_([old_hotkey, new_hotkey])))
+            c.execute(insert(S.states).values(hotkey=new_hotkey, json=row[0]))
+        return True
+
     # ----- chain samples ----------------------------------------------------------------------------------
 
     def put_price_samples(self, day: str, samples: Iterable[tuple[int, float]]) -> None:
@@ -542,6 +584,7 @@ class Store:
 def _state_from_json(s: str) -> MinerState:
     raw = json.loads(s)
     raw["paid"] = tuple(raw.get("paid", ()))
+    raw["paid_days"] = tuple((int(d), float(a)) for d, a in raw.get("paid_days", ()))
     return MinerState(**raw)
 
 

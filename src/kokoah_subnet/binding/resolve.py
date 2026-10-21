@@ -38,8 +38,14 @@ def resolve_bindings(
     published: Iterable[PublishedBinding],
     block: int,
     migration_days: int = 60,
+    registered: Iterable[str] | None = None,
 ) -> Resolution:
+    """`registered`, when given, is the set of hotkeys on the subnet today: a hotkey that left releases its address
+    (its records stay in the store and resume if the same hotkey comes back)."""
     accepted: dict[str, AcceptedBinding] = dict(previous)
+    if registered is not None:
+        live = set(registered)
+        accepted = {hk: b for hk, b in accepted.items() if hk in live}
     refused: dict[str, str] = {}
     taken = {a.address: hk for hk, a in accepted.items()}
     min_gap = migration_days * BLOCKS_PER_DAY

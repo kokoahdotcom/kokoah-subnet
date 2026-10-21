@@ -41,7 +41,17 @@ def test_activity_window(tmp_path: Path) -> None:
 
 def test_states_bindings_days_meta(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
-    states = {"hk": MinerState(phi_hat=1.0, fee_hat=2.0, g=0.3, paid=(1.0, 2.0), zero_until_day=5)}
+    states = {
+        "hk": MinerState(
+            phi_hat=1.0,
+            fee_hat=2.0,
+            g=0.3,
+            paid=(1.0, 2.0),
+            zero_until_day=5,
+            paid_days=((4, 1.0), (5, 2.0)),
+            last_day=5,
+        )
+    }
     s.put_states(states)
     assert s.states() == states
     b = {"hk": AcceptedBinding("hk", "0xa", 10, 5)}
@@ -61,3 +71,15 @@ def test_states_bindings_days_meta(tmp_path: Path) -> None:
     s.set_meta("k", "v")
     assert s.get_meta("k") == "v"
     s.close()
+
+
+def test_penalties_swaps_and_latest_neurons(tmp_path: Path) -> None:
+    s = Store(tmp_path / "v.sqlite")
+    s.put_penalty("0xA", 40, "2026-10-21", "hk", "mirrored")
+    s.put_penalty("0xA", 30, "2026-10-21", "hk", "shorter one is ignored")
+    assert s.penalties(10) == {"0xa": 40} and s.penalties(40) == {}
+    s.put_neurons("2026-10-21", 100, [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}])
+    assert s.latest_neurons() == [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}]
+    s.put_states({"hkOld": MinerState(phi_hat=7.0)})
+    assert s.carry_state("hkOld", "hkNew") and set(s.states()) == {"hkNew"} and s.states()["hkNew"].phi_hat == 7.0
+    assert not s.carry_state("nobody", "hkX")

@@ -64,13 +64,22 @@ def allocate(
     return Allocation(pool, price_usd, shares, caps, pays, max(0.0, burn))
 
 
-def weights(allocation: Allocation, burn_hotkey: str) -> dict[str, float]:
+MIN_BURN_WEIGHT = 0.001  # the burn hotkey always receives this slice, so a full subnet never prunes it
+
+
+def weights(allocation: Allocation, burn_hotkey: str, min_burn_weight: float = MIN_BURN_WEIGHT) -> dict[str, float]:
     """Weight fractions summing to one: miners by pay, the unawarded remainder to the burn hotkey (a dedicated
-    hotkey on its own coldkey whose alpha the operator burns with `burn_alpha`; spec section 6)."""
+    hotkey on its own coldkey whose alpha the operator burns with `burn_alpha`; spec section 6). The burn hotkey
+    keeps at least `min_burn_weight` even when the pool is scarce, taken proportionally from the miners."""
     if allocation.pool_alpha <= 0:
         return {burn_hotkey: 1.0}
     out = {k: v / allocation.pool_alpha for k, v in allocation.pays.items() if v > 0}
-    out[burn_hotkey] = out.get(burn_hotkey, 0.0) + allocation.burn_alpha / allocation.pool_alpha
+    burn = allocation.burn_alpha / allocation.pool_alpha
+    if burn < min_burn_weight and out:
+        scale = (1.0 - min_burn_weight) / max(1e-12, sum(out.values()))
+        out = {k: v * scale for k, v in out.items()}
+        burn = min_burn_weight
+    out[burn_hotkey] = out.get(burn_hotkey, 0.0) + burn
     return out
 
 

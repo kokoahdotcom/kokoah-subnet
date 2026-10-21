@@ -141,3 +141,18 @@ def test_file_commitment_text_round_trip() -> None:
     assert parse_file_commitment(text) == ("2026-10-21", "ab" * 32)
     assert parse_file_commitment("kokoah-file-1 2026-10-21 short") is None
     assert parse_file_commitment("something else") is None
+
+
+def test_departed_hotkeys_release_their_address() -> None:
+    a = Account.create()
+    sig = sign_binding(a.key, 2, HK, a.address)
+    first = resolve_bindings({}, [_pub(HK, 100, Binding(a.address, sig))], block=200, registered=[HK])
+    assert HK in first.accepted
+    # HK leaves the subnet; a new hotkey binds the same address and is accepted
+    again = resolve_bindings(
+        first.accepted,
+        [_pub(HK2, 300, Binding(a.address, sign_binding(a.key, 2, HK2, a.address)))],
+        block=400,
+        registered=[HK2],
+    )
+    assert HK not in again.accepted and again.accepted[HK2].address == a.address.lower()

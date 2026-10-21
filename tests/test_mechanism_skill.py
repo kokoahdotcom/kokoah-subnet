@@ -66,11 +66,13 @@ def test_skill_factor_scale() -> None:
 
 
 def test_holding_factor() -> None:
-    assert holding_factor(100.0, 100.0, 10.0) == 1.0
-    assert holding_factor(0.0, 100.0, 10.0) == 0.0
-    assert holding_factor(50.0, 100.0, 10.0) == 0.5
-    assert holding_factor(10.0, 0.0, 10.0) == 1.0  # the collateral floor
-    assert holding_factor(10.0, 0.0, 0.0) == 0.0  # no target at all
+    assert holding_factor(100.0, 100.0) == 1.0
+    assert holding_factor(0.0, 100.0) == 0.0
+    assert holding_factor(50.0, 100.0) == 0.5
+    assert holding_factor(110.0, 100.0, collateral_locked_alpha=10.0) == 1.0  # collateral does not count
+    assert holding_factor(10.0, 0.0, collateral_locked_alpha=10.0) == 0.0  # a fresh hotkey starts at zero
+    assert holding_factor(10.0, 0.0) == 1.0  # bought alpha counts even before any pay
+    assert holding_factor(0.5, 0.0) == 0.5  # judged against one alpha when nothing was paid
 
 
 def _fill(t: int, coin: str, side: str, sz: float) -> Fill:

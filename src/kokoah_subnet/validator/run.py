@@ -16,7 +16,16 @@ def load_states(path: Path | None) -> dict[str, MinerState]:
     if path is None or not path.exists():
         return {}
     raw = json.loads(path.read_text())
-    return {hk: MinerState(**{**v, "paid": tuple(v.get("paid", ()))}) for hk, v in raw.items()}
+    return {
+        hk: MinerState(
+            **{
+                **v,
+                "paid": tuple(v.get("paid", ())),
+                "paid_days": tuple((int(d), float(a)) for d, a in v.get("paid_days", ())),
+            }
+        )
+        for hk, v in raw.items()
+    }
 
 
 def dump_states(states: dict[str, MinerState]) -> str:

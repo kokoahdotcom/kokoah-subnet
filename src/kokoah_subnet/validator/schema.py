@@ -390,6 +390,16 @@ binding_events = Table(  # accepted, migrated, refused (with the reason), per da
     Column("reason", Text),
 )
 
+penalties = Table(  # a mirror report follows the address (and its cluster), whatever hotkey it binds to
+    "penalties",
+    metadata,
+    Column("address", String(42), primary_key=True),
+    Column("until_day", Integer, nullable=False),
+    Column("day", String(10)),
+    Column("hotkey", String(64)),
+    Column("reason", Text),
+)
+
 clusters = Table(
     "clusters",
     metadata,

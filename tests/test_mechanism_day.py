@@ -63,8 +63,12 @@ def test_worked_example_through_score_day() -> None:
     fills = taker_fills(A, 40, 100_000.0) + taker_fills(B, 40, 100_000.0, coin="ETH")
     # states carry a smoothed credit of $1,000 (as in the spec) and B has been paid 100 alpha it no longer holds
     states = {
-        "hkA": MinerState(phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0, fee_hat=2800.0, g=0.65, paid=(100.0,)),
-        "hkB": MinerState(phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0, fee_hat=2800.0, g=0.0, paid=(100.0,)),
+        "hkA": MinerState(
+            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0, fee_hat=2800.0, g=0.65, paid=(100.0,), paid_days=((99, 100.0),)
+        ),
+        "hkB": MinerState(
+            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0, fee_hat=2800.0, g=0.0, paid=(100.0,), paid_days=((99, 100.0),)
+        ),
     }
     inputs = DayInputs(
         day_index=100,
@@ -88,6 +92,8 @@ def test_worked_example_through_score_day() -> None:
     assert sum(w.values()) == pytest.approx(1.0)
     assert sum(to_u16(w).values()) == 65535
     assert res.states["hkA"].paid[-1] == pytest.approx(ra.pay_alpha)
+    last_day, last_pay = res.states["hkA"].paid_days[-1]
+    assert last_day == 100 and last_pay == pytest.approx(ra.pay_alpha)
 
 
 def test_fresh_miner_starts_at_the_floor_and_smooths_in() -> None:
@@ -142,3 +148,25 @@ def test_spot_fills_count_for_nothing() -> None:
     inputs = DayInputs(day_index=0, price_usd=1.0, fills=spot + perp, states={}, miners=[MinerInputs("hk", A)])
     res = score_day(inputs, DEFAULT)
     assert res.records[0].fees.fills == 2 and res.records[0].fees.builder_fee == pytest.approx(5.0)
+
+
+def test_a_fresh_hotkey_cannot_shed_a_selling_record() -> None:
+    # a seller re-registers: the new hotkey holds only its collateral and has been paid nothing -> holding stays 0
+    fills = taker_fills(A, 40, 100_000.0)
+    fresh = MinerInputs(
+        hotkey="hkNew",
+        address=A,
+        returns=[0.0] * 60,
+        mean_equity_usd=50_000.0,
+        staked_min_alpha=25.0,
+        collateral_min_alpha=25.0,
+        collateral_locked_alpha=25.0,
+        window_fills=window_fills(A),
+    )
+    res = score_day(DayInputs(day_index=10, price_usd=1.0, fills=fills, states={}, miners=[fresh]), DEFAULT)
+    assert res.records[0].holding == 0.0 and res.records[0].multiplier == pytest.approx(0.85)
+    # and a penalty that follows the address zeroes the new hotkey too
+    res2 = score_day(
+        DayInputs(day_index=10, price_usd=1.0, fills=fills, states={}, miners=[fresh], penalized_until={A: 20}), DEFAULT
+    )
+    assert res2.records[0].zeroed and res2.records[0].skill == 0.0

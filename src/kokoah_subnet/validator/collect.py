@@ -36,6 +36,7 @@ from .clusters import clusters, coldkey_edges
 from .hyperliquid import (
     MAINNET_INFO,
     HyperliquidInfo,
+    daily_equity_from_portfolio,
     day_bounds_ms,
     flows_from_updates,
     positions_from_state,
@@ -113,8 +114,8 @@ async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, boo
     return data, True
 
 
-def _paid_window(state: Any) -> float:
-    return float(state.paid_window()) if state is not None else 0.0
+def _paid_window(state: Any, day_index: int) -> float:
+    return float(state.paid_window(day_index)) if state is not None else 0.0
 
 
 def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, Any]:
@@ -185,8 +186,21 @@ async def collect_and_score(
             for hk, c in all_commitments.items()
         ],
     )
+    # hotkey swaps: the same UID on the same coldkey with a new hotkey keeps its smoothed state (re-binding required)
+    swaps: list[tuple[str, str]] = []
+    previous = {n["uid"]: n for n in store.latest_neurons()}
+    for n in snap.neurons:
+        old = previous.get(n.uid)
+        if (
+            old
+            and old["hotkey"] != n.hotkey
+            and old["coldkey"] == n.coldkey
+            and store.carry_state(old["hotkey"], n.hotkey)
+        ):
+            swaps.append((old["hotkey"], n.hotkey))
+            log.info("hotkey swap on uid %d: state carried from %s to %s", n.uid, old["hotkey"], n.hotkey)
     before = store.bindings()
-    resolution = resolve_bindings(before, published, snap.block)
+    resolution = resolve_bindings(before, published, snap.block, registered=uid_of.keys())
     store.put_bindings(resolution.accepted, day=day)
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
@@ -195,6 +209,13 @@ async def collect_and_score(
             events.append({"hotkey": hk, "event": "accepted", "address": acc.address, "reason": None})
         elif old.address != acc.address:
             events.append({"hotkey": hk, "event": "migrated", "address": acc.address, "reason": f"from {old.address}"})
+    for hk in before:
+        if hk not in uid_of:
+            events.append(
+                {"hotkey": hk, "event": "left", "address": before[hk].address, "reason": "hotkey no longer registered"}
+            )
+    for old_hk, new_hk in swaps:
+        events.append({"hotkey": new_hk, "event": "swapped", "address": None, "reason": f"state carried from {old_hk}"})
     for hk, reason in resolution.refused.items():
         events.append(
             {
@@ -208,6 +229,7 @@ async def collect_and_score(
 
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
+    collateral_locked = {n.hotkey: n.collateral_locked_alpha for n in snap.neurons}
     blocks = sample_blocks(snap.block, snap.tempo, params.price_samples)
     samples = await price_samples(client, cfg.netuid, blocks)
     store.put_price_samples(day, samples)
@@ -230,6 +252,16 @@ async def collect_and_score(
 
     async def one(hk: str, address: str) -> None:
         try:
+            if not store.equity_series(address, 1):
+                # first time this address is scored: the exchange's own history gives the returns from day one
+                try:
+                    history = daily_equity_from_portfolio(await hl.portfolio(address))
+                    for h_day, value, flows in history:
+                        if h_day < day:
+                            store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
+                    log.info("backfilled %d days of account value for %s", len(history), address)
+                except Exception as exc:  # noqa: BLE001 - a missing history only delays the skill factor
+                    log.warning("no portfolio backfill for %s: %s", address, exc)
             public = await hl.fills_by_time(address, start_ms, end_ms)
             own = match_total_fees(fills_by_address.get(address, []), public)
             fills_by_address[address] = own
@@ -281,6 +313,7 @@ async def collect_and_score(
                 mean_equity_usd=store.mean_equity(address, params.gate_days),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),
+                collateral_locked_alpha=collateral_locked.get(hk, 0.0),
                 exchange_rates_bps=rates,
                 round_trips_window=rt_window,
                 active_days_window=active_window,
@@ -303,8 +336,16 @@ async def collect_and_score(
         states=store.states(),
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
+        penalized_until=store.penalties(day_index(cfg, day)),
     )
     result = score_day(inputs, params)
+    for r in result.records:
+        if r.reported:
+            until = inputs.day_index + params.mirror_zero_days
+            store.put_penalty(r.address, until, day, r.hotkey, f"mirrored {r.mirrored_share:.0%}")
+            for other, cid in cluster_of.items():
+                if cid == cluster_of.get(r.address) and other != r.address:
+                    store.put_penalty(other, until, day, r.hotkey, f"cluster of {r.address}")
 
     # every fill, with why it did or did not count
     bound = set(addresses)
@@ -353,7 +394,7 @@ async def collect_and_score(
                 "skill": r.skill,
                 "holding": r.holding,
                 "staked_min_alpha": next((m.staked_min_alpha for m in miners if m.hotkey == r.hotkey), 0.0),
-                "paid_window_alpha": _paid_window(inputs.states.get(r.hotkey)),
+                "paid_window_alpha": _paid_window(inputs.states.get(r.hotkey), inputs.day_index),
                 "collateral_min_alpha": collateral_min.get(r.hotkey, 0.0),
                 "gates_pass": r.gates_pass,
                 "round_trips_window": r.round_trips_window,

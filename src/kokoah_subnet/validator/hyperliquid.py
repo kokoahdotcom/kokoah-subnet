@@ -140,6 +140,10 @@ class HyperliquidInfo:
         fees = await self.post({"type": "userFees", "user": user})
         return float(fees["userCrossRate"]) * 1e4, float(fees["userAddRate"]) * 1e4
 
+    async def portfolio(self, user: str) -> list[Any]:
+        """The exchange's account-value and PnL history windows for an address (`portfolio`)."""
+        return list(await self.post({"type": "portfolio", "user": user}))
+
     async def mark_prices(self) -> dict[str, float]:
         """Mark price per perp coin, from `metaAndAssetCtxs`."""
         meta, ctxs = await self.post({"type": "metaAndAssetCtxs"})
@@ -229,4 +233,43 @@ def positions_from_state(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "leverage": float(lev.get("value", 0.0)) if isinstance(lev, dict) and lev.get("value") else None,
             "raw": dict(pos),
         }
+    return out
+
+
+def daily_equity_from_portfolio(
+    windows: list[Any], prefer: tuple[str, ...] = ("perpMonth", "month")
+) -> list[tuple[str, float, float]]:
+    """(day, end-of-day account value, net flows) per UTC day from the portfolio history: the last point of each day
+    gives the value; flows are the change in value not explained by the day's PnL. Perps-only windows are preferred."""
+    chosen: Mapping[str, Any] | None = None
+    for name in prefer:
+        for w in windows:
+            if isinstance(w, list | tuple) and len(w) == 2 and w[0] == name:
+                chosen = w[1]
+                break
+        if chosen is not None:
+            break
+    if not chosen:
+        return []
+    values = {}
+    for ts, v in chosen.get("accountValueHistory", []):
+        day = datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d")
+        values[day] = float(v)
+    pnls = {}
+    for ts, v in chosen.get("pnlHistory", []):
+        day = datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d")
+        pnls[day] = float(v)
+    out: list[tuple[str, float, float]] = []
+    prev_value: float | None = None
+    prev_pnl: float | None = None
+    for day in sorted(values):
+        value = values[day]
+        pnl = pnls.get(day)
+        flows = 0.0
+        if prev_value is not None and pnl is not None and prev_pnl is not None:
+            flows = (value - prev_value) - (pnl - prev_pnl)
+        out.append((day, value, flows))
+        prev_value = value
+        if pnl is not None:
+            prev_pnl = pnl
     return out
