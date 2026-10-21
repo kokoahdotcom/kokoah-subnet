@@ -54,6 +54,8 @@ class Params:
     mirror_exclude_share: float = 0.25
     mirror_zero_share: float = 0.50
     mirror_zero_days: int = 30
+    # calendar: day index 0 (penalty and holding windows count from here; the same for every validator)
+    day_zero: str = "2026-10-19"
     # chain (section 1)
     daily_emission_alpha: float = 7200.0
     miner_slot: float = 0.41  # owner 0.18, validators 0.41, miners 0.41 (owner, 2026-10-20; the chain's default)
@@ -88,6 +90,12 @@ class Params:
         if c_min <= 0:
             return 0.0
         return 1 - 2 * BEST_REBATE_BPS / c_min
+
+    @property
+    def min_safe_fee_bps(self) -> float:
+        """The smallest builder fee (bps a side) at which the one law still holds for this `c_tot`: solving
+        `(1 − c_tot) × 2 × (fee − rebate) > 2 × rebate` gives `fee > rebate + rebate / (1 − c_tot)`."""
+        return BEST_REBATE_BPS + BEST_REBATE_BPS / (1 - self.c_tot)
 
     @property
     def miner_pool_alpha(self) -> float:

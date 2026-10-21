@@ -38,3 +38,9 @@ def test_check_reports_missing_and_stale_things(tmp_path: Path) -> None:
         dry_run=False,
     )
     assert any("burn failed" in p for p in check(s, now=now)["problems"])
+
+
+def test_deeper_rebate_than_assumed_is_flagged(tmp_path: Path) -> None:
+    s = Store(tmp_path / "h.sqlite")
+    s.put_fee_rates("0xa", "2026-10-21", 2.4, -0.5)
+    assert any("deeper" in p for p in check(s)["problems"])

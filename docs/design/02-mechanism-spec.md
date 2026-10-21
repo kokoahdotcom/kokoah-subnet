@@ -334,6 +334,20 @@ after 60 days.
   recorded and flagged, the scored file stands.
 - External incentives on the exchange (referral rewards, points) are not the subnet's and do not change the bound:
   the subnet alone never makes a zero-edge round trip profitable.
+- **Late or missing files.** The exchange publishes a day's file hours after the day ends; the validator scores
+  every unscored day in order, oldest first, and waits for a missing file rather than skipping ahead (the smoothing
+  carries from day to day). A day the exchange never publishes is closed by announcement with
+  `kokoah-subnet validator skip-day`: scored as a day with no fills, the same on every validator.
+- **Day zero** is a parameter of the mechanism (`Params.day_zero`), so every validator counts penalty and holding
+  windows from the same date.
+- **Fee floor.** The one law needs the builder fee above `rebate + rebate / (1 − c_tot)` = 1.5 bps a side at
+  `c_tot = 0.75`. The validator measures the effective fee in each day's file and records an error (raised by the
+  health check) if it falls into the unsafe band; the parameters refuse a `c_tot` that the configured fee cannot
+  support.
+- **Rebate guard.** The bound assumes the exchange's deepest maker rebate is 0.3 bps a side; the health check reads
+  the fee schedules of bound addresses and alarms on a deeper one, so the caps are re-checked before it matters.
+- **Limits accepted.** Addresses controlled by smart-contract wallets cannot sign the binding line (EIP-191 only).
+  The subnet's UID capacity is the chain's; a full subnet admits new traders only as the lowest-paid are pruned.
 
 ## 15. Verification
 

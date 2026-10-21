@@ -29,6 +29,21 @@ def previous_utc_day(now: float | None = None) -> str:
     return (t - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def pending_days(store: Store, start_day: str, last_day: str) -> list[str]:
+    """Days from `start_day` to `last_day` not scored yet, oldest first. Scoring must stay in order (the smoothing
+    carries from day to day), so the loop takes the first one and waits for its file rather than skipping ahead."""
+    scored = set(store.days_list())
+    d = datetime.strptime(start_day, "%Y-%m-%d").replace(tzinfo=UTC)
+    end = datetime.strptime(last_day, "%Y-%m-%d").replace(tzinfo=UTC)
+    out = []
+    while d <= end:
+        s = d.strftime("%Y-%m-%d")
+        if s not in scored:
+            out.append(s)
+        d += timedelta(days=1)
+    return out
+
+
 async def step(
     cfg: ValidatorConfig,
     store: Store,
@@ -42,8 +57,14 @@ async def step(
     """One pass: score the previous day if it is not scored yet (retrying missing files hourly), then submit the
     latest weights when a tempo has passed since the last submission. Returns what happened, for logs and tests."""
     report: dict[str, Any] = {"scored": None, "weights": None}
-    target = day or previous_utc_day(now)
     clock = now if now is not None else time.time()
+    if day is not None:
+        target = day
+    else:
+        pending = pending_days(store, cfg.start_day, previous_utc_day(now))
+        target = pending[0] if pending else previous_utc_day(now)
+        if len(pending) > 1:
+            report["pending_days"] = pending
     if store.day(target) is None:
         last_try = float(store.get_meta(f"attempt:{target}", "0") or 0)
         if clock - last_try >= cfg.retry_missing_s:

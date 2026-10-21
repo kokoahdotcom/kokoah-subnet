@@ -109,6 +109,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--webhook", default=None, help="post the report to this JSON webhook (default $KOKOAH_SUBNET_ALERT_WEBHOOK)"
     )
     vcheck.add_argument("--only-problems", action="store_true", help="post only when there is a problem")
+    vskip = vsub.add_parser(
+        "skip-day", help="close a day the exchange never published (announced; every validator must do the same)"
+    )
+    vskip.add_argument("--day", required=True)
+    vskip.add_argument("--data-dir", type=Path, default=None)
+    vskip.add_argument("--db-url", default=None)
+    vskip.add_argument("--burn-hotkey", required=True)
+    vskip.add_argument("--reason", default="builder file never published")
     vserve = vsub.add_parser("serve", help="serve the store over HTTP (read-only)")
     vserve.add_argument("--data-dir", required=True, type=Path)
     vserve.add_argument(
@@ -189,6 +197,22 @@ def _validator(args: argparse.Namespace) -> int:
             db_url=args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", ""),
         )
         asyncio.run(run(cfg, once=args.once, day=args.day))
+        return 0
+    if args.validator_command == "skip-day":
+        from kokoah_subnet.mechanism import DEFAULT
+        from kokoah_subnet.validator.collect import day_index
+        from kokoah_subnet.validator.skip import skip_day
+        from kokoah_subnet.validator.store import Store
+
+        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
+        if not url and args.data_dir is None:
+            print("give --db-url or --data-dir")
+            return 2
+        store = Store(url or (args.data_dir / "validator.sqlite"))
+        cfg = ValidatorConfig(
+            network="", netuid=0, builder="", data_dir=args.data_dir or Path("."), burn_hotkey=args.burn_hotkey
+        )
+        print(skip_day(store, args.day, day_index(cfg, args.day, DEFAULT), args.burn_hotkey, args.reason, DEFAULT))
         return 0
     if args.validator_command == "check":
         from kokoah_subnet.validator.health import main_report

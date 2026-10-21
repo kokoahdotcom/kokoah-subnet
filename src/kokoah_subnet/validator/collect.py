@@ -79,8 +79,11 @@ class ValidatorConfig:
         return self.db_url or (self.data_dir / "validator.sqlite")
 
 
-def day_index(cfg: ValidatorConfig, day: str) -> int:
-    d0 = datetime.strptime(cfg.start_day, "%Y-%m-%d").replace(tzinfo=UTC)
+def day_index(cfg: ValidatorConfig, day: str, params: Params | None = None) -> int:
+    """Days since day zero. Day zero is the mechanism's (`Params.day_zero`), the same for every validator; a
+    validator's `start_day` only says which days it scores."""
+    zero = params.day_zero if params is not None else cfg.start_day
+    d0 = datetime.strptime(zero, "%Y-%m-%d").replace(tzinfo=UTC)
     d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
     return (d - d0).days
 
@@ -166,6 +169,22 @@ async def collect_and_score(
         users=len({f.user for f in fills}),
         url=file_url(cfg.builder, day, cfg.builder_base_url) if downloaded else None,
     )
+
+    # the one law needs the builder fee above a floor set by the caps: measure what the file actually charged
+    taker_notional = sum(f.notional for f in fills if f.crossed and is_perp(f.coin))
+    taker_fees = sum(f.builder_fee for f in fills if f.crossed and is_perp(f.coin))
+    effective_bps = taker_fees / taker_notional * 1e4 if taker_notional > 0 else None
+    if effective_bps is not None and 0 < effective_bps < params.min_safe_fee_bps:
+        log.error(
+            "effective builder fee %.3f bps is below the safe floor %.3f bps", effective_bps, params.min_safe_fee_bps
+        )
+        store.put_error(
+            day,
+            None,
+            None,
+            "fee floor",
+            f"effective builder fee {effective_bps:.3f} bps < {params.min_safe_fee_bps:.3f}",
+        )
 
     snap = await snapshot(client, cfg.netuid)
     now = datetime.now(tz=UTC)
@@ -395,14 +414,14 @@ async def collect_and_score(
     store.put_clusters(day, cluster_of, edges)
     all_fills = [f for lst in fills_by_address.values() for f in lst]
     inputs = DayInputs(
-        day_index=day_index(cfg, day),
+        day_index=day_index(cfg, day, params),
         price_usd=price_usd,
         fills=all_fills,
         miners=miners,
         states=store.states_before(day),
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
-        penalized_until=store.penalties(day_index(cfg, day)),
+        penalized_until=store.penalties(day_index(cfg, day, params)),
     )
     result = score_day(inputs, params)
     for r in result.records:
@@ -532,6 +551,7 @@ async def collect_and_score(
             "builder_file_sha256": digest,
             "builder_file_hash_matches_operator": hash_matches,
             "builder_fills": len(fills),
+            "effective_builder_fee_bps": effective_bps,
             "price_tao": price_tao,
             "tao_usd": tao_usd,
             "tao_usd_source": mark_source,

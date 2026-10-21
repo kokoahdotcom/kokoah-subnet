@@ -162,7 +162,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         netuid=2,
         builder="0xbuilder",
         data_dir=tmp_path,
-        start_day="2026-10-20",
+        start_day="2026-10-21",  # the cached file is for 2026-10-21; day zero (params) is 2026-10-19
         burn_hotkey=BURN,
         weights_every_blocks=360,
         retry_missing_s=3600,
@@ -184,7 +184,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
-    assert day_index(cfg, DAY) == 1 and result.day_index == 1
+    assert day_index(cfg, DAY, DEFAULT) == 2 and result.day_index == 2
     records = {r.hotkey: r for r in result.records}
     assert records[HK_A].fees.builder_fee == pytest.approx(250.0) and records[HK_B].fees.builder_fee == pytest.approx(
         50.0
@@ -292,4 +292,48 @@ async def test_step_survives_a_refused_submission(tmp_path: Path) -> None:
 
         rows = c.execute(S.weights_submitted.select()).all()
     assert len(rows) == 1 and rows[0].ok is False
+    await hl.close()
+
+
+async def test_pending_days_are_scored_in_order_and_a_missing_file_blocks(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.loop import pending_days
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-20", "builder_base_url": "http://127.0.0.1:9/none"})
+    # two days are due (10-20 and 10-21); 10-20 has no file, so the loop waits on it and never jumps to 10-21
+    now = DAY_MS / 1000 + 86_400 + 600
+    assert pending_days(store, "2026-10-20", "2026-10-21") == ["2026-10-20", "2026-10-21"]
+    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    assert report["scored"]["day"] == "2026-10-20" and report["pending_days"] == ["2026-10-20", "2026-10-21"]
+    assert store.day("2026-10-21") is None
+    await hl.close()
+
+
+def test_skip_day_advances_states_with_zero_credit(tmp_path: Path) -> None:
+    from kokoah_subnet.mechanism import MinerState
+    from kokoah_subnet.validator.skip import skip_day
+
+    store = Store(tmp_path / "s.sqlite")
+    store.put_states({"hk": MinerState(phi_hat=100.0, g=0.5, paid_days=((0, 10.0),))}, day="2026-10-20")
+    msg = skip_day(store, "2026-10-21", 2, BURN, "never published", DEFAULT)
+    assert "closed as skipped" in msg
+    after = store.states()["hk"]
+    assert after.phi_hat == pytest.approx(70.0) and after.g == pytest.approx(0.35)
+    artifact = json.loads(store.day("2026-10-21") or "{}")
+    assert artifact["skipped"] == "never published" and artifact["weights"] == {BURN: 1.0}
+    assert "already scored" in skip_day(store, "2026-10-21", 2, BURN, "x", DEFAULT)
+
+
+async def test_effective_fee_floor_is_checked(tmp_path: Path) -> None:
+    cfg, store, hl, chain, a, b = _setup(tmp_path)
+    # rewrite the cached file with a 0.005% builder fee (below the 0.015% floor the caps need)
+    text = _csv(a, b).replace(",12.5\n", ",2.5\n").replace(",5\n", ",1\n")
+    (tmp_path / "fills" / "20261021.csv.lz4").write_bytes(lz4.frame.compress(text.encode()))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        stages = [r.stage for r in c.execute(S.errors.select()).all()]
+    assert "fee floor" in stages
+    assert DEFAULT.min_safe_fee_bps == pytest.approx(1.5)
     await hl.close()
