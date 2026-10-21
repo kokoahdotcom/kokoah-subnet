@@ -190,13 +190,15 @@ real edge 0.35, strong edge 0.56, real edge with one −20% day 0.20 (recovers t
 
 ```
 staked_i,d   = the day's minimum (over the 20 tempo samples) of alpha staked on i's own hotkey by its own coldkey
-target_i,d   = alpha paid to i in the last 60 days
-h'_i,d       = min( 1 , staked_i,d / max(target_i,d, collateral_min) )
+kept_i,d     = staked_i,d − collateral locked on the hotkey
+target_i,d   = alpha paid to i in the last 60 calendar days
+h'_i,d       = min( 1 , kept_i,d / max(target_i,d, 1 alpha) )
 ```
 
 Keep what you were paid and the factor is 1; sell it all and it is 0; buying alpha counts; staking for one block
-does not. Its effect on pay is at most `w_h` = 10% by design; whether it reduces selling is measured (§15), not
-assumed.
+does not; the registration collateral does not count (v5.8: a fresh hotkey starts at 0, so re-registering to shed a
+selling record gains nothing). Its effect on pay is at most `w_h` = 10% by design; whether it reduces selling is
+measured (§15), not assumed.
 
 ## 9. Activity gates (for the multiplier's skill and holding parts, and the leaderboard)
 
@@ -263,7 +265,7 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | skill windows | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days |
 | `g'` full score | g = 0.65 |
 | return cap | ±10% a day |
-| holding target | alpha paid in the last 60 days (floor: the collateral minimum); stake read as the day's minimum |
+| holding target | alpha paid in the last 60 calendar days (floor 1 alpha); stake read as the day's minimum, collateral excluded |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days) |
 | mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
 | mark clip | 0.5% |
@@ -290,6 +292,28 @@ A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cove
 only a hotkey's latest commitment, so a validator enforces the 60-day limit from the bindings it has accepted; a
 validator that starts fresh accepts the current commitment on its signatures alone and converges with the others
 after 60 days.
+
+### 14a. Leaving, returning, switching (v5.8)
+
+- **Deregistered or pruned, same hotkey comes back.** Records are kept by hotkey and pause while the hotkey is
+  off the subnet (nothing can be paid to it); they resume when it is registered again. The holding target counts
+  calendar days, so pay from before a long gap no longer weighs on it.
+- **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
+  new hotkey starts fresh (no credit tail, no skill history, gates to pass again). The unpaid credit tail of the old
+  hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of that
+  day's credit, 49% of the day before, and so on. A new identity never gains on skill (the floor is 0.85; skill only
+  adds) and never gains on holding (collateral does not count).
+- **A mirror report follows the address and its cluster**, not the hotkey: binding a penalized address to a new
+  hotkey keeps the penalty; a new address plus a new hotkey costs registration, collateral, the week of gates and
+  the credit tail, for a penalty worth at most 15% of pay for 30 days.
+- **Hotkey swap on chain** (same UID and coldkey, new hotkey): the smoothed state follows the new hotkey; the
+  binding must be published again because the signed line names the hotkey.
+- **Trading before joining.** Fills before the binding are recorded as unbound and never pay. The account's own
+  history does count for skill: on the first day an address is scored, the exchange's portfolio history (perps
+  window) backfills daily account values, so a trader with a real record is recognized within days instead of
+  starting from nothing.
+- **The burn hotkey always receives at least 0.1% of the pool**, so a full subnet never prunes it in the scarce
+  regime; the slice is burned like the rest.
 
 ## 15. Verification
 

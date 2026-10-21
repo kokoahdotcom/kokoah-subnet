@@ -125,6 +125,9 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"userCrossRate": "0.00045", "userAddRate": "0.00015"})
     if t == "metaAndAssetCtxs":
         return httpx.Response(200, json=[{"universe": [{"name": "TAO"}]}, [{"markPx": "400"}]])
+    if t == "portfolio":
+        hist = {"accountValueHistory": [[DAY_MS - 86_400_000, "24000"]], "pnlHistory": [[DAY_MS - 86_400_000, "0"]]}
+        return httpx.Response(200, json=[["perpMonth", hist]])
     if t == "subAccounts":
         return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
     return httpx.Response(400, json={"error": t})
@@ -169,7 +172,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert not records[HK_A].gates_pass  # one day of history cannot pass the gates
     assert records[HK_A].multiplier == 0.85
     # stored: equity, positions, activity, bindings, states, the day's artifact with its file hash
-    assert store.equity_series(addr_a, 5) == [(DAY, 25000.0, 0.0)]
+    assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, 0.0)]  # backfilled + today
     assert store.position_series([addr_a], [DAY])[addr_a] == {"BTC": [50000.0]}
     assert store.activity_window(addr_a, 30) == (10, 1, 1_000_000.0)
     assert set(store.bindings()) == {HK_A, HK_B}

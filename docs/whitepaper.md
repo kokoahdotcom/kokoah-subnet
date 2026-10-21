@@ -113,8 +113,11 @@ leave over is destroyed.
 **Traders.** Register a hotkey on the subnet, sign one line with the Hyperliquid wallet (appendix D) and publish
 it as the hotkey's commitment, then trade perpetuals through the Kokoah application. That is all. No software to
 run, no keys to share, no reporting. Pay arrives as alpha on the hotkey every tempo; keeping it earns the holding
-part of the rate; a consistent track record earns the skill part. A trader can move to a new address once per 60
-days and keep their records.
+part of the rate; a consistent track record earns the skill part, and the exchange's own account history counts from the first day, so a
+trader with a real record is recognized within days. A trader can move to a new address once per 60 days and keep
+their records. Leaving and coming back with the same hotkey resumes the records; coming back with a new identity
+starts from zero and forfeits the unpaid part of the old credit, and a mirror report follows the address, not the
+hotkey.
 
 **Validators.** Run the open-source validator with a hotkey and a database. It fetches public data, scores the
 day, sets weights every tempo, keeps the record and serves the daily artifacts and the leaderboard over a
@@ -165,8 +168,9 @@ trader scores 1. In simulation, accounts with no edge score 0.05 to 0.10, a stea
 one above 0.5. A single bad day is one capped loss that fades; a repeated pattern of blow-ups keeps counting.
 
 **Holding.** The holding factor is the share of the last 60 days' pay that is still staked on the trader's own
-hotkey, read as the day's minimum so staking for a block earns nothing; alpha bought on the market counts. Keep
-everything and the factor is 1; sell everything and it is 0.
+hotkey, read as the day's minimum so staking for a block earns nothing; alpha bought on the market counts, the
+registration collateral does not. Keep everything and the factor is 1; sell everything and it is 0; a fresh hotkey
+starts at 0, so leaving and re-registering sheds nothing.
 
 **Gates.** The skill and holding parts, and a place in the public ranking, need at least 10 completed round trips,
 7 active days and a mean account value of $500 over the last 30 days. A trader failing a gate is paid at the floor
@@ -400,8 +404,9 @@ g_i,d      = 0.7 × g_i,d−1 + 0.3 × g_raw
 g'_i,d     = min(1, g_i,d / 0.65)
 ```
 
-Holding: `h'_i,d = min(1, staked_i,d / max(target_i,d, collateral_min))`, with `staked` the day's minimum alpha
-staked on the hotkey by its own coldkey and `target` the alpha paid in the last 60 days.
+Holding: `h'_i,d = min(1, (staked_i,d − collateral) / max(target_i,d, 1))`, with `staked` the day's minimum alpha
+staked on the hotkey by its own coldkey, `collateral` the registration collateral locked on it, and `target` the
+alpha paid in the last 60 calendar days.
 
 Gates, over 30 days: at least 10 round trips, 7 active days, $500 mean account value; otherwise `M = 0.85`.
 
@@ -462,7 +467,9 @@ leaderboard page).
 
 ### Appendix F. Changelog
 
-- **1.1 (2026-10-21).** Perpetuals only: spot fills are recorded but not counted. Emission split set to owner 18%, validators 41%, miners 41% (the chain's default; the
+- **1.1 (2026-10-21).** Leaving, returning and switching handled: departed hotkeys release their address, a mirror
+  report follows the address, hotkey swaps carry the records, the exchange's account history counts from the first
+  day, collateral no longer counts as holding, the burn hotkey always keeps a minimal slice. Perpetuals only: spot fills are recorded but not counted. Emission split set to owner 18%, validators 41%, miners 41% (the chain's default; the
   miner pool is 2,952 alpha a day). Restructured for readers who are not engineers: summary and key facts, two figures, a
   section per role, the pay rule in prose with the formulas moved here, what the operator cannot do, growth
   stages. Mechanism unchanged (v5.8).

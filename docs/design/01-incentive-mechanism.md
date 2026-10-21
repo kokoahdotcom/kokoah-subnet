@@ -50,6 +50,13 @@ larger than its losses (recency-weighted gain-to-pain over 30 days)? Luck scores
 trader 0.30 to 0.35, a strong one 0.55. No drawdown anywhere; one bad day costs about half the score for a month.
 It moves pay by at most 5%.
 
+## Leaving and coming back
+
+Come back with the same hotkey and your records resume. Come back as a new identity and you start from zero, lose
+the unpaid part of your old credit, and a mirror report still follows your address. Collateral never counts as
+holding, so a seller gains nothing by re-registering. Your Hyperliquid account history counts for skill from the
+first day you are bound; trades before binding never pay.
+
 ## Still open
 
 A month of burn figures on testnet (directed vs destroyed); the holding effect measured on testnet; legal review.

@@ -235,6 +235,6 @@ def test_daily_equity_from_portfolio() -> None:
     ]
     rows = daily_equity_from_portfolio(windows)
     assert [r[0] for r in rows] == ["2026-10-20", "2026-10-21", "2026-10-22"]
-    assert rows[1] == ("2026-10-21", 1100.0, pytest.approx(0.0))  # +100 value, +100 pnl: no flow
-    assert rows[2] == ("2026-10-22", 1600.0, pytest.approx(500.0))  # +500 value, no pnl: a deposit
+    assert rows[1][:2] == ("2026-10-21", 1100.0) and rows[1][2] == pytest.approx(0.0)  # +100 value, +100 pnl
+    assert rows[2][:2] == ("2026-10-22", 1600.0) and rows[2][2] == pytest.approx(500.0)  # +500 value, no pnl
     assert daily_equity_from_portfolio([["week", {}]]) == []

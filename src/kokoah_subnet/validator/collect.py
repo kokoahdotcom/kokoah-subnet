@@ -190,15 +190,15 @@ async def collect_and_score(
     swaps: list[tuple[str, str]] = []
     previous = {n["uid"]: n for n in store.latest_neurons()}
     for n in snap.neurons:
-        old = previous.get(n.uid)
+        prev_n = previous.get(n.uid)
         if (
-            old
-            and old["hotkey"] != n.hotkey
-            and old["coldkey"] == n.coldkey
-            and store.carry_state(old["hotkey"], n.hotkey)
+            prev_n
+            and prev_n["hotkey"] != n.hotkey
+            and prev_n["coldkey"] == n.coldkey
+            and store.carry_state(prev_n["hotkey"], n.hotkey)
         ):
-            swaps.append((old["hotkey"], n.hotkey))
-            log.info("hotkey swap on uid %d: state carried from %s to %s", n.uid, old["hotkey"], n.hotkey)
+            swaps.append((prev_n["hotkey"], n.hotkey))
+            log.info("hotkey swap on uid %d: state carried from %s to %s", n.uid, prev_n["hotkey"], n.hotkey)
     before = store.bindings()
     resolution = resolve_bindings(before, published, snap.block, registered=uid_of.keys())
     store.put_bindings(resolution.accepted, day=day)
