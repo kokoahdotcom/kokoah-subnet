@@ -79,6 +79,8 @@ builder_files = Table(
     Column("users", Integer),
     Column("downloaded_at", DateTime(timezone=True)),
     Column("url", Text),
+    Column("sha256_recheck", String(64)),  # the file fetched again later in the day
+    Column("rechecked_at", DateTime(timezone=True)),
 )
 
 # every fill in the builder file, bound or not, with why it was excluded when it was
@@ -180,6 +182,7 @@ equity = Table(
     Column("day", String(10), primary_key=True),
     Column("value", Float, nullable=False),
     Column("flows", Float, nullable=False),
+    Column("offmarket_pnl", Float),  # money moved in through off-market fills that day (removed from the return)
     Column("fetched_at", DateTime(timezone=True)),
     Column("raw", JSON),  # the clearinghouse margin summary
 )

@@ -119,6 +119,19 @@ async def snapshot(client: Any, netuid: int, block: int | None = None) -> Subnet
     return SubnetSnapshot(netuid, int(mg.block), int(mg.tempo), mg.owner_hotkey, neurons, mg.price)
 
 
+BLOCK_SECONDS = 12
+
+
+def day_sample_blocks(now_block: int, now_ts: float, day_start_ts: float, tempo: int, samples: int) -> list[int]:
+    """The same `samples` blocks for every validator scoring the same day: the day's start block estimated at 12 s a
+    block, snapped to a tempo boundary (so estimates up to half a tempo apart agree), then one block per 1/samples of
+    the day. All in the past, so every validator reads identical chain state."""
+    day_start_block = now_block - int((now_ts - day_start_ts) / BLOCK_SECONDS)
+    anchor = max(tempo, (day_start_block // tempo) * tempo)
+    step = max(1, (86_400 // BLOCK_SECONDS) // samples)
+    return [max(1, anchor + k * step) for k in range(1, samples + 1)]
+
+
 def sample_blocks(end_block: int, tempo: int, samples: int) -> list[int]:
     """`samples` block heights, one per tempo, ending at `end_block` (the day's tempo boundaries)."""
     return [max(1, end_block - i * tempo) for i in range(samples)][::-1]

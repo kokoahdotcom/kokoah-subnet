@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,7 +31,7 @@ from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 
 from .builder_feed import BASE_URL, decompress, download, file_url, sha256
-from .chain import mean_price_tao, price_samples, sample_blocks, snapshot, stake_samples
+from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
 from .clusters import clusters, coldkey_edges
 from .hyperliquid import (
     MAINNET_INFO,
@@ -39,6 +39,9 @@ from .hyperliquid import (
     daily_equity_from_portfolio,
     day_bounds_ms,
     flows_from_updates,
+    mark_by_minute,
+    mean_close,
+    off_market_transfer,
     positions_from_state,
     sub_accounts,
     transfer_partners,
@@ -93,10 +96,19 @@ def block_time(now_block: int, block: int, now: datetime | None = None) -> datet
     return base - timedelta(seconds=(now_block - block) * BLOCK_SECONDS)
 
 
-async def tao_usd_mark(hl: HyperliquidInfo, coin: str, fallback: float) -> tuple[float, str]:
+async def tao_usd_mark(
+    hl: HyperliquidInfo, coin: str, fallback: float, start_ms: int | None = None, end_ms: int | None = None
+) -> tuple[float, str]:
+    """The day's mean TAO/USD from hourly candles of the exchange's TAO perpetual (one instant could be moved; a
+    day's mean cannot be moved cheaply); the current mark, then the configured value, as fallbacks."""
+    if start_ms is not None and end_ms is not None:
+        try:
+            return mean_close(await hl.candles(coin, "1h", start_ms, end_ms)), f"hyperliquid:{coin}:1h-mean"
+        except Exception as exc:  # noqa: BLE001 - fall through to the spot mark
+            log.warning("no TAO candles for the day: %s", exc)
     marks = await hl.mark_prices()
     if coin in marks and marks[coin] > 0:
-        return marks[coin], f"hyperliquid:{coin}"
+        return marks[coin], f"hyperliquid:{coin}:mark"
     if fallback > 0:
         return fallback, "fallback"
     raise RuntimeError(f"no TAO/USD mark: {coin} is not listed and no fallback is configured")
@@ -230,17 +242,17 @@ async def collect_and_score(
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
     collateral_locked = {n.hotkey: n.collateral_locked_alpha for n in snap.neurons}
-    blocks = sample_blocks(snap.block, snap.tempo, params.price_samples)
+    start_ms, end_ms = day_bounds_ms(day)
+    blocks = day_sample_blocks(snap.block, now.timestamp(), start_ms / 1000, snap.tempo, params.price_samples)
     samples = await price_samples(client, cfg.netuid, blocks)
     store.put_price_samples(day, samples)
     price_tao = (
         sum(p for _, p in samples) / len(samples) if samples else await mean_price_tao(client, cfg.netuid, blocks)
     )
-    tao_usd, mark_source = await tao_usd_mark(hl, cfg.tao_coin, cfg.tao_usd_fallback)
+    tao_usd, mark_source = await tao_usd_mark(hl, cfg.tao_coin, cfg.tao_usd_fallback, start_ms, end_ms)
     store.put_tao_mark(day, mark_source, tao_usd)
     price_usd = price_tao * tao_usd
 
-    start_ms, end_ms = day_bounds_ms(day)
     fills_by_address = by_user(fills)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
     hotkey_of_address = {a: hk for hk, a in address_of_hotkey.items()}
@@ -250,26 +262,71 @@ async def collect_and_score(
     rates_of: dict[str, tuple[float, float]] = {}
     edge_lists: dict[str, list[tuple[str, str, str]]] = {}
 
+    marks_cache: dict[str, dict[int, float]] = {}
+    marks_lock = asyncio.Lock()
+
+    async def marks_for(coin: str) -> dict[int, float]:
+        """Minute marks for a perp coin over the day (one candle request per coin, shared by every address)."""
+        async with marks_lock:
+            if coin in marks_cache:
+                return marks_cache[coin]
+        try:
+            marks = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
+        except Exception as exc:  # noqa: BLE001 - without marks the clip and the transfer check skip this coin
+            log.warning("no minute candles for %s: %s", coin, exc)
+            marks = {}
+        async with marks_lock:
+            marks_cache[coin] = marks
+        return marks
+
     async def one(hk: str, address: str) -> None:
+        """Everything for one bound address. Every exchange read has a fallback: an API failure never costs the
+        trader the day's fee credit, it only delays the figures that depend on the failed read."""
+        own = fills_by_address.get(address, [])
+        public: list[Fill] = []
         try:
             if not store.equity_series(address, 1):
                 # first time this address is scored: the exchange's own history gives the returns from day one
-                try:
-                    history = daily_equity_from_portfolio(await hl.portfolio(address))
-                    for h_day, value, flows in history:
-                        if h_day < day:
-                            store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
-                    log.info("backfilled %d days of account value for %s", len(history), address)
-                except Exception as exc:  # noqa: BLE001 - a missing history only delays the skill factor
-                    log.warning("no portfolio backfill for %s: %s", address, exc)
+                history = daily_equity_from_portfolio(await hl.portfolio(address))
+                for h_day, value, flows in history:
+                    if h_day < day:
+                        store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
+                log.info("backfilled %d days of account value for %s", len(history), address)
+        except Exception as exc:  # noqa: BLE001 - a missing history only delays the skill factor
+            log.warning("no portfolio backfill for %s: %s", address, exc)
+        try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
-            own = match_total_fees(fills_by_address.get(address, []), public)
-            fills_by_address[address] = own
+            own = match_total_fees(own, public)
+        except Exception as exc:  # noqa: BLE001 - total fees fall back to the builder fee (a lower cap)
+            errors[hk] = f"public fills: {str(exc)[:160]}"
+            store.put_error(day, hk, address, "public fills", str(exc))
+        # marks: the 0.5% clip for credit, and money moved in through off-market fills (removed from the return)
+        offmarket = 0.0
+        marked: list[Fill] = []
+        coins = {f.coin for f in own if is_perp(f.coin)} | {f.coin for f in public if is_perp(f.coin)}
+        marks_by_coin = {coin: await marks_for(coin) for coin in coins}
+        for f in own:
+            mark = marks_by_coin.get(f.coin, {}).get(f.time_ms // 60_000 * 60_000)
+            marked.append(replace(f, mark_px=mark) if mark else f)
+        for f in public:
+            if not is_perp(f.coin):
+                continue
+            mark = marks_by_coin.get(f.coin, {}).get(f.time_ms // 60_000 * 60_000)
+            if mark:
+                offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
+        fills_by_address[address] = marked
+        rates: tuple[float, float] | None = None
+        try:
             state = await hl.account_state(address)
             equity = float(state["marginSummary"]["accountValue"])
-            updates = await hl.ledger_updates(address, start_ms, end_ms)
+            try:
+                updates = await hl.ledger_updates(address, start_ms, end_ms)
+            except Exception as exc:  # noqa: BLE001
+                updates = []
+                errors[hk] = f"ledger: {str(exc)[:160]}"
+                store.put_error(day, hk, address, "ledger", str(exc))
             flows = flows_from_updates(address, updates)
-            store.put_equity(address, day, equity, flows, raw=state.get("marginSummary"))
+            store.put_equity(address, day, equity, flows, raw=state.get("marginSummary"), offmarket_pnl=offmarket)
             store.put_ledger_updates(
                 address,
                 [
@@ -284,27 +341,36 @@ async def collect_and_score(
                 ],
             )
             store.put_positions(address, day, positions_from_state(state))
+        except Exception as exc:  # noqa: BLE001 - no account value today: the return series has a gap, nothing else
+            errors[hk] = f"account state: {str(exc)[:160]}"
+            store.put_error(day, hk, address, "account state", str(exc))
+        try:
             fee_raw = await hl.fee_rates_raw(address)
             rates = (float(fee_raw["userCrossRate"]) * 1e4, float(fee_raw["userAddRate"]) * 1e4)
             rates_of[address] = rates
             store.put_fee_rates(address, day, rates[0], rates[1], raw=fee_raw)
-            perps_own = [f for f in own if is_perp(f.coin)]
-            store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
-            rt_window, active_window, _ = store.activity_window(address, params.gate_days)
+        except Exception as exc:  # noqa: BLE001
+            store.put_error(day, hk, address, "fee rates", str(exc))
+        perps_own = [f for f in marked if is_perp(f.coin)]
+        store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
+        rt_window, active_window, _ = store.activity_window(address, params.gate_days)
+        try:
             window_start = start_ms - params.gate_days * 86_400_000
             subs = set(await sub_accounts(hl, address))
             partners = await transfer_partners(hl, address, window_start, end_ms)
             edge_lists[address] = [(address, o, "subaccount") for o in subs] + [
                 (address, o, "transfer") for o in partners - subs
             ]
+        except Exception as exc:  # noqa: BLE001
+            store.put_error(day, hk, address, "clusters", str(exc))
+        staked = 0.0
+        try:
             stakes = await stake_samples(client, cfg.netuid, coldkey_of[hk], hk, blocks)
             store.put_stake_samples(day, hk, stakes)
             staked = min((v for _, v in stakes), default=0.0)
-        except Exception as exc:  # noqa: BLE001 - one address must not sink the day
-            log.warning("skipping %s (%s) for %s: %s", hk, address, day, exc)
-            errors[hk] = str(exc)[:200]
-            store.put_error(day, hk, address, "collect", str(exc))
-            return
+        except Exception as exc:  # noqa: BLE001 - no stake read: holding is 0 today
+            errors[hk] = f"stake: {str(exc)[:160]}"
+            store.put_error(day, hk, address, "stake", str(exc))
         miners.append(
             MinerInputs(
                 hotkey=hk,
@@ -333,7 +399,7 @@ async def collect_and_score(
         price_usd=price_usd,
         fills=all_fills,
         miners=miners,
-        states=store.states(),
+        states=store.states_before(day),
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         penalized_until=store.penalties(day_index(cfg, day)),

@@ -15,7 +15,7 @@ from typing import Any
 from kokoah_subnet import __version__
 from kokoah_subnet.mechanism import DEFAULT, SPEC_VERSION, Params
 
-from .builder_feed import NotPublished
+from .builder_feed import NotPublished, download, sha256
 from .chain import set_weights, snapshot, subnet_counters, weights_by_uid
 from .collect import ValidatorConfig, collect_and_score
 from .hyperliquid import HyperliquidInfo
@@ -89,6 +89,19 @@ async def step(
                     for n in snap.neurons
                 ]
             )
+    # later in the day, fetch the builder file again: a file the exchange replaced would be visible as a changed hash
+    hour = datetime.fromtimestamp(clock, tz=UTC).hour
+    if hour >= 6 and store.day(target) is not None and store.file_recheck(target) is None:
+        try:
+            digest = sha256(await download(cfg.builder, target, cfg.builder_base_url))
+            store.put_file_recheck(target, digest)
+            first = store.file(target)
+            if first and first[0] != digest:
+                log.warning("builder file for %s changed after scoring (%s -> %s)", target, first[0][:12], digest[:12])
+                store.put_error(target, None, None, "file recheck", f"hash changed {first[0]} -> {digest}")
+            report["file_recheck"] = {"day": target, "changed": bool(first and first[0] != digest)}
+        except Exception as exc:  # noqa: BLE001 - the recheck is a record, not an input
+            log.info("file recheck for %s: %s", target, exc)
     latest = store.latest_day()
     if latest is not None:
         last_block = int(store.get_meta("weights:block", "0") or 0)

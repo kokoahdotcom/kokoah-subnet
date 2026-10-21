@@ -238,3 +238,55 @@ def test_daily_equity_from_portfolio() -> None:
     assert rows[1][:2] == ("2026-10-21", 1100.0) and rows[1][2] == pytest.approx(0.0)  # +100 value, +100 pnl
     assert rows[2][:2] == ("2026-10-22", 1600.0) and rows[2][2] == pytest.approx(500.0)  # +500 value, no pnl
     assert daily_equity_from_portfolio([["week", {}]]) == []
+
+
+def test_marks_and_off_market_transfers() -> None:
+    from kokoah_subnet.validator.hyperliquid import flows_from_updates, mark_by_minute, mean_close, off_market_transfer
+
+    candles = [{"t": 1792454400000, "c": "100"}, {"t": 1792454460000, "c": "102"}, {"t": 1792454520000, "c": "bad"}]
+    marks = mark_by_minute(candles)
+    assert marks == {1792454400000: 100.0, 1792454460000: 102.0}
+    assert mean_close(candles[:2]) == 101.0
+    # buying 2 coins at 90 when the mark is 100: a 20-dollar gift; within the 0.5% band nothing counts
+    assert off_market_transfer(90.0, 100.0, 2.0, "B", 0.005) == pytest.approx(20.0)
+    assert off_market_transfer(110.0, 100.0, 2.0, "A", 0.005) == pytest.approx(20.0)
+    assert off_market_transfer(110.0, 100.0, 2.0, "B", 0.005) == pytest.approx(-20.0)
+    assert off_market_transfer(100.4, 100.0, 2.0, "B", 0.005) == 0.0
+    # vault moves are flows, not profit or loss
+    updates = [
+        {"delta": {"type": "vaultDeposit", "usdc": "500"}},
+        {"delta": {"type": "vaultWithdraw", "usdc": "200"}},
+        {"delta": {"type": "deposit", "usdc": "1000"}},
+    ]
+    assert flows_from_updates("0xa", updates) == pytest.approx(700.0)
+
+
+def test_day_sample_blocks_agree_between_validators() -> None:
+    from kokoah_subnet.validator.chain import day_sample_blocks
+
+    day_start = 1792454400.0
+    a = day_sample_blocks(
+        now_block=1_000_000, now_ts=day_start + 86_400 + 600, day_start_ts=day_start, tempo=360, samples=20
+    )
+    # a second validator scoring 20 minutes later, 100 blocks on (consistent with 12 s blocks)
+    b = day_sample_blocks(
+        now_block=1_000_100, now_ts=day_start + 86_400 + 1800, day_start_ts=day_start, tempo=360, samples=20
+    )
+    assert a == b and len(a) == 20 and a[-1] < 1_000_000 and a[0] % 360 == 0
+    assert all(y - x == 360 for x, y in zip(a, a[1:], strict=False))
+
+
+def test_states_before_a_rescore(tmp_path: Path) -> None:
+    from kokoah_subnet.mechanism import MinerState
+    from kokoah_subnet.validator.store import Store
+
+    s = Store(tmp_path / "r.sqlite")
+    assert s.states_before("2026-10-21") == {}
+    s.put_states({"hk": MinerState(phi_hat=10.0, paid_days=((19, 1.0),))}, day="2026-10-20")
+    s.put_states({"hk": MinerState(phi_hat=13.0, paid_days=((19, 1.0), (20, 2.0)))}, day="2026-10-21")
+    # scoring 10-22 starts from the 10-21 state; re-scoring 10-21 starts from the 10-20 state; 10-20 from nothing
+    assert s.states_before("2026-10-22")["hk"].phi_hat == 13.0
+    assert s.states_before("2026-10-21")["hk"].phi_hat == 10.0 and s.states_before("2026-10-21")["hk"].paid_days == (
+        (19, 1.0),
+    )
+    assert s.states_before("2026-10-20") == {}

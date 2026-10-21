@@ -110,7 +110,23 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     t = body["type"]
     if t == "userFillsByTime":
-        return httpx.Response(200, json=[])  # no total-fee matches: builder fee only (conservative)
+        if body["user"].lower().endswith(body["user"].lower()[-4:]) and body.get("startTime") == DAY_MS:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "coin": "BTC",
+                        "px": "98000",
+                        "sz": "1",
+                        "side": "B",
+                        "time": DAY_MS + 5_000_000,
+                        "crossed": True,
+                        "fee": "44.1",
+                        "closedPnl": "0",
+                    },
+                ],
+            )
+        return httpx.Response(200, json=[])
     if t == "clearinghouseState":
         return httpx.Response(
             200,
@@ -125,6 +141,12 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"userCrossRate": "0.00045", "userAddRate": "0.00015"})
     if t == "metaAndAssetCtxs":
         return httpx.Response(200, json=[{"universe": [{"name": "TAO"}]}, [{"markPx": "400"}]])
+    if t == "candleSnapshot":
+        req = body["req"]
+        if req["interval"] == "1h":
+            return httpx.Response(200, json=[{"t": req["startTime"] + h * 3_600_000, "c": "400"} for h in range(24)])
+        px = "100000" if req["coin"] == "BTC" else "4000"
+        return httpx.Response(200, json=[{"t": req["startTime"] + m * 60_000, "c": px} for m in range(0, 1440, 1)])
     if t == "portfolio":
         hist = {"accountValueHistory": [[DAY_MS - 86_400_000, "24000"]], "pnlHistory": [[DAY_MS - 86_400_000, "0"]]}
         return httpx.Response(200, json=[["perpMonth", hist]])
@@ -172,7 +194,9 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert not records[HK_A].gates_pass  # one day of history cannot pass the gates
     assert records[HK_A].multiplier == 0.85
     # stored: equity, positions, activity, bindings, states, the day's artifact with its file hash
-    assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, 0.0)]  # backfilled + today
+    # the backfilled day, then today; the 2,000-dollar off-market gift (1 BTC bought 2% under the mark) is a flow
+    assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, pytest.approx(2000.0))]
+    assert store.returns(addr_a, 5) == [pytest.approx((25000 - 24000 - 2000) / 24000)]
     assert store.position_series([addr_a], [DAY])[addr_a] == {"BTC": [50000.0]}
     assert store.activity_window(addr_a, 30) == (10, 1, 1_000_000.0)
     assert set(store.bindings()) == {HK_A, HK_B}

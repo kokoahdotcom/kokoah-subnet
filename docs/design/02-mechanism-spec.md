@@ -67,7 +67,7 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
 | `c_m` | maker fee credit (taker is 1.0); kept as a parameter, set to 1 since the builder fee is charged on maker fills too | 1.0 |
 | `α` | daily smoothing weight of today's value, for credit, fees and skill | 0.3 |
 | `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
-| `p_d` | alpha price in USD for day `d`: the mean of the pool price sampled at every tempo boundary of the day (20 samples) times the day's mean TAO/USD mark from the node | |
+| `p_d` | conversion rate for day `d`: the mean pool rate (TAO per alpha) at 20 blocks anchored to the scored day (the day's start block snapped to a tempo boundary, then one block per 1/20 of the day; identical for every validator) times the day's mean TAO/USD, the mean close of the exchange's hourly TAO-perpetual candles | |
 | `g'_i`, `h'_i` | skill and holding factors, both in [0, 1] | |
 | `c_max` | pay cap as a multiple of the multiplier-scaled Kokoah fee credit | 2.0 |
 | `c_tot` | second cap: share of the account's total fees on the Kokoah leg (`fee_f` summed) | 0.75 |
@@ -92,7 +92,10 @@ Removed before anything is computed:
 
 1. fills whose counterparty is the same address or another address of the same cluster (same coldkey, sub-accounts
    of the master, addresses funded by the same bridge depositor or transferring between each other);
-2. fills priced more than 0.5% from the mark: valued at the mark for notional and profit;
+2. fills priced more than 0.5% from the mark (the close of the exchange's minute candle for the coin): valued at the
+   mark for credit; and for skill, the money an off-market fill moves into the account (buying below the mark or
+   selling above it) is removed from the day's return like a deposit, over all of the address's perpetual fills,
+   builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices;
 3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill), measured as a share of the address's notional, then removed from credit: the subnet
    does not pay for volume between its own miners. Exact, so an honest trader is never flagged by coincidence;
@@ -167,8 +170,11 @@ What this does:
 Daily returns of the bound address, deposits and withdrawals removed, capped at ±10%:
 
 ```
-r_d = (E_d − E_{d−1} − flows_d) / E_{d−1}       r̃_d = max(−0.10, min(0.10, r_d))
+r_d = (E_d − E_{d−1} − flows_d − offmarket_d) / E_{d−1}       r̃_d = max(−0.10, min(0.10, r_d))
 ```
+
+`flows_d` are deposits, withdrawals, account and vault transfers; `offmarket_d` is the money moved in through
+off-market fills that day (§3, item 2).
 
 Confidence, last 60 days: `PSR` = probabilistic Sharpe ratio of `r̃` (Bailey and López de Prado 2012; skew- and
 kurtosis-adjusted) against a benchmark daily Sharpe ratio of 0.03 (about 0.5 annualized); 0.5 if fewer than 10
@@ -245,6 +251,8 @@ Searched over 105 combinations of fee tier, staking discount and maker or taker 
 | Volume timed to alpha price moves | its fees | its fees | | the caps are in USD at the day's average price | nothing to extract |
 | Whale staking a lot, trading little | its fees | its fees | | pay ∝ its own volume; holding adds ≤ 10% | nothing to extract |
 | Sybil splitting or merging | same | same | | shares and caps linear in credit (verified for k = 1, 2, 5) | 0 gain, burn and gates lost |
+| Self-referral (10% of the exchange fee back) | its fees | its fees | −0.1 × exchange fee | at most 0.75 × C | −0.25 C + 0.1 HL < 0 at every tier (tier 0 taker: −2.6; tier 6: −1.7) |
+| Two accounts trading at off-market prices to fake profit | its fees | its fees | | skill only (≤ 5%) | the transfer is removed from the return; the credit is valued at the mark |
 
 Without the second cap, `c_max = 2` would pay the Diamond taker 10 against a cost of 7.28, a clear profit; the
 second cap is what makes any `c_max` above about 1.4 safe. Lowering `c_tot` to 0.6 would move the tightest case
@@ -314,6 +322,18 @@ after 60 days.
   starting from nothing.
 - **The burn hotkey always receives at least 0.1% of the pool**, so a full subnet never prunes it in the scarce
   regime; the slice is burned like the rest.
+
+### 14b. Robustness rules (v5.8)
+
+- An exchange API failure never costs a trader the day's fee credit: credit always advances from the builder file;
+  only the figures that depend on the failed read (account value, flows, positions, fee rates, stake) fall back,
+  and the failure is recorded.
+- A re-score of a day starts from the state as it was before that day (state history), never from the already
+  advanced state.
+- The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
+  recorded and flagged, the scored file stands.
+- External incentives on the exchange (referral rewards, points) are not the subnet's and do not change the bound:
+  the subnet alone never makes a zero-edge round trip profitable.
 
 ## 15. Verification
 

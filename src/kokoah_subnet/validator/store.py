@@ -76,13 +76,21 @@ class Store:
 
     # ----- equity, ledger, returns ------------------------------------------------------------------------
 
-    def put_equity(self, address: str, day: str, value: float, flows: float, raw: Any = None) -> None:
+    def put_equity(
+        self, address: str, day: str, value: float, flows: float, raw: Any = None, offmarket_pnl: float = 0.0
+    ) -> None:
         a = address.lower()
         with self._engine.begin() as c:
             c.execute(delete(S.equity).where(S.equity.c.address == a, S.equity.c.day == day))
             c.execute(
                 insert(S.equity).values(
-                    address=a, day=day, value=float(value), flows=float(flows), fetched_at=_now(), raw=raw
+                    address=a,
+                    day=day,
+                    value=float(value),
+                    flows=float(flows),
+                    offmarket_pnl=float(offmarket_pnl),
+                    fetched_at=_now(),
+                    raw=raw,
                 )
             )
 
@@ -114,18 +122,19 @@ class Store:
                 )
 
     def equity_series(self, address: str, days: int) -> list[tuple[str, float, float]]:
-        """Up to `days` most recent (day, value, flows), oldest first."""
+        """Up to `days` most recent (day, value, flows + off-market transfers), oldest first."""
         with self._engine.connect() as c:
             rows = c.execute(
-                select(S.equity.c.day, S.equity.c.value, S.equity.c.flows)
+                select(S.equity.c.day, S.equity.c.value, S.equity.c.flows, S.equity.c.offmarket_pnl)
                 .where(S.equity.c.address == address.lower())
                 .order_by(S.equity.c.day.desc())
                 .limit(days)
             ).all()
-        return [(str(d), float(v), float(f)) for d, v, f in reversed(rows)]
+        return [(str(d), float(v), float(f) + float(o or 0.0)) for d, v, f, o in reversed(rows)]
 
     def returns(self, address: str, days: int) -> list[float]:
-        """Daily returns (flows removed) over consecutive stored days, oldest first."""
+        """Daily returns over consecutive stored days, oldest first, with deposits, withdrawals and money moved in
+        through off-market fills removed."""
         series = self.equity_series(address, days + 1)
         out: list[float] = []
         for (d0, v0, _), (d1, v1, f1) in zip(series, series[1:], strict=False):
@@ -216,6 +225,28 @@ class Store:
 
     # ----- mechanism state --------------------------------------------------------------------------------
 
+    def states_before(self, day: str) -> dict[str, MinerState]:
+        """The states a scoring run of `day` must start from: the history as of the latest scored day before `day`
+        (so a re-score never smooths twice); the current states when no history exists yet."""
+        with self._engine.connect() as c:
+            prev = c.execute(select(func.max(S.state_history.c.day)).where(S.state_history.c.day < day)).scalar()
+            any_history = c.execute(select(func.count()).select_from(S.state_history)).scalar()
+            if prev is None:
+                return {} if any_history else self.states()
+            rows = c.execute(select(S.state_history).where(S.state_history.c.day == prev)).mappings().all()
+        out: dict[str, MinerState] = {}
+        for r in rows:
+            paid_days = tuple((int(d), float(a)) for d, a in (r["paid"] or []) if isinstance(d, int | float))
+            out[str(r["hotkey"])] = MinerState(
+                phi_hat=float(r["phi_hat"] or 0.0),
+                fee_hat=float(r["fee_hat"] or 0.0),
+                g=float(r["g"] or 0.0),
+                paid=(),
+                zero_until_day=r["zero_until_day"],
+                paid_days=paid_days,
+            )
+        return out
+
     def states(self) -> dict[str, MinerState]:
         with self._engine.connect() as c:
             rows = c.execute(select(S.states.c.hotkey, S.states.c.json)).all()
@@ -237,7 +268,7 @@ class Store:
                             phi_hat=s.phi_hat,
                             fee_hat=s.fee_hat,
                             g=s.g,
-                            paid=list(s.paid),
+                            paid=[[d, a] for d, a in s.paid_days],
                             zero_until_day=s.zero_until_day,
                         )
                     )
@@ -421,6 +452,19 @@ class Store:
             c.execute(
                 insert(S.builder_files).values(day=day, sha256=sha256, fills=int(fills), downloaded_at=_now(), **fields)
             )
+
+    def put_file_recheck(self, day: str, sha256: str) -> None:
+        with self._engine.begin() as c:
+            c.execute(
+                S.builder_files.update()
+                .where(S.builder_files.c.day == day)
+                .values(sha256_recheck=sha256, rechecked_at=_now())
+            )
+
+    def file_recheck(self, day: str) -> str | None:
+        with self._engine.connect() as c:
+            row = c.execute(select(S.builder_files.c.sha256_recheck).where(S.builder_files.c.day == day)).first()
+        return str(row[0]) if row and row[0] else None
 
     def file(self, day: str) -> tuple[str, int] | None:
         with self._engine.connect() as c:

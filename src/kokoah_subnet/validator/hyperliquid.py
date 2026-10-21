@@ -27,6 +27,8 @@ WEIGHTS: dict[str, int] = {
     "userFillsByTime": 20,
     "userNonFundingLedgerUpdates": 20,
     "subAccounts": 2,
+    "candleSnapshot": 20,
+    "portfolio": 20,
 }
 
 
@@ -140,6 +142,14 @@ class HyperliquidInfo:
         fees = await self.post({"type": "userFees", "user": user})
         return float(fees["userCrossRate"]) * 1e4, float(fees["userAddRate"]) * 1e4
 
+    async def candles(self, coin: str, interval: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """Candles for a perp coin (`candleSnapshot`): fields t (open time), T, o, h, l, c, v, n."""
+        body = {
+            "type": "candleSnapshot",
+            "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
+        }
+        return [dict(c) for c in await self.post(body)]
+
     async def portfolio(self, user: str) -> list[Any]:
         """The exchange's account-value and PnL history windows for an address (`portfolio`)."""
         return list(await self.post({"type": "portfolio", "user": user}))
@@ -212,6 +222,10 @@ def flows_from_updates(user: str, updates: list[dict[str, Any]]) -> float:
                 if delta.get("toPerp", True) and delta.get("destination", user).lower() == user.lower()
                 else -amount
             )
+        elif kind == "vaultDeposit":  # money moved into a vault is not a loss
+            total -= float(delta.get("usdc", 0.0) or 0.0)
+        elif kind == "vaultWithdraw":  # and money coming back is not a gain
+            total += float(delta.get("usdc", 0.0) or 0.0)
     return total
 
 
@@ -273,3 +287,29 @@ def daily_equity_from_portfolio(
         if pnl is not None:
             prev_pnl = pnl
     return out
+
+
+def mark_by_minute(candles: list[dict[str, Any]]) -> dict[int, float]:
+    """Minute (ms, floored) -> a mark proxy: the candle's close."""
+    out: dict[int, float] = {}
+    for c in candles:
+        try:
+            out[int(c["t"]) // 60_000 * 60_000] = float(c["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def mean_close(candles: list[dict[str, Any]]) -> float:
+    closes = [float(c["c"]) for c in candles if "c" in c]
+    if not closes:
+        raise ValueError("no candles")
+    return sum(closes) / len(closes)
+
+
+def off_market_transfer(px: float, mark: float, sz: float, side: str, clip: float) -> float:
+    """Money moved into the account through an off-market price (positive = gain), zero within the clip band.
+    Buying below the mark or selling above it is a gift from the counterparty."""
+    if mark <= 0 or abs(px / mark - 1) <= clip:
+        return 0.0
+    return (mark - px) * sz if side == "B" else (px - mark) * sz

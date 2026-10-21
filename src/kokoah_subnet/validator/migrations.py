@@ -35,6 +35,15 @@ STEPS: list[tuple[int, str, Step]] = [
             "CREATE INDEX IF NOT EXISTS ix_fills_day_address ON fills (day, address)"
         ),
     ),
+    (4, "equity.offmarket_pnl", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS offmarket_pnl double precision")),
+    (
+        5,
+        "builder_files: recheck columns",
+        _pg(
+            "ALTER TABLE builder_files ADD COLUMN IF NOT EXISTS sha256_recheck varchar(64); "
+            "ALTER TABLE builder_files ADD COLUMN IF NOT EXISTS rechecked_at timestamptz"
+        ),
+    ),
 ]
 
 
