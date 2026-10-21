@@ -18,7 +18,11 @@ from .store import Store
 
 
 def check(
-    store: Store, now: datetime | None = None, max_day_age_h: float = 30.0, max_weights_age_h: float = 3.0
+    store: Store,
+    now: datetime | None = None,
+    max_day_age_h: float = 30.0,
+    max_weights_age_h: float = 3.0,
+    expected_by_hour: int = 16,  # the exchange publishes the daily file with a delay of several hours
 ) -> dict[str, Any]:
     """A report with `ok` and a list of `problems` (strings)."""
     now = now or datetime.now(tz=UTC)
@@ -44,8 +48,10 @@ def check(
         problems.append("no day scored yet")
     else:
         scored_at = latest[1] if latest[1] is None or latest[1].tzinfo else latest[1].replace(tzinfo=UTC)
-        if latest[0] < expected_day and now.hour >= 6:
-            problems.append(f"latest scored day is {latest[0]}, expected {expected_day} by 06:00 UTC")
+        if latest[0] < expected_day and now.hour >= expected_by_hour:
+            problems.append(
+                f"latest scored day is {latest[0]}, expected {expected_day} by {expected_by_hour:02d}:00 UTC"
+            )
         if scored_at is not None and now - scored_at > timedelta(hours=max_day_age_h):
             problems.append(f"last scoring run was {(now - scored_at).total_seconds() / 3600:.0f} h ago")
     if last_weights is None:

@@ -1,8 +1,8 @@
 [Unit]
-Description=Daily Kokoah subnet operator step (00:20 UTC, retried hourly until noon if the file is late)
+Description=Kokoah subnet operator step (hourly at :20 UTC until yesterday's file hash is committed)
 
 [Timer]
-OnCalendar=*-*-* 00,01,02,03,04,05,06,07,08,09,10,11:20:00 UTC
+OnCalendar=*-*-* *:20:00 UTC
 Persistent=true
 
 [Install]
