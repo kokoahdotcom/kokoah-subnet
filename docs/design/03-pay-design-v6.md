@@ -30,6 +30,7 @@ Agreed; to be built as specification v6. Replaces the caps, the burn and the hol
 - **Keep:** eligibility (v5.9), the data plane (v5.10), mirror and cluster rules, the counterparty rule.
 - **To redo with it:** the one-law section and attack table (fake volume no longer loses by design; the volume
   pool becomes a fee rebate competed for), whitepaper, simulator, verify script, replay.
-- **Under discussion (2026-10-22): agent trading bonus** (+10% score for trades made by agents); how agent
-  trades are verified is open.
+- **Agent trading bonus:** +10% on the skill-pool weight only (`w_i = 1.1 × s_i × v_i` for a verified agent
+  account); nothing in the volume pool. Agents are submitted by miners and run on the operator's servers; how they
+  are hosted and verified is being designed.
 
