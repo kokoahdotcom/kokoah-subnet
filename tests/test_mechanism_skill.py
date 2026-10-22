@@ -1,4 +1,4 @@
-"""Skill, holding and gates."""
+"""Skill and gates."""
 
 import random
 
@@ -9,7 +9,6 @@ from kokoah_subnet.mechanism import (
     Fill,
     active_days,
     daily_return,
-    holding_factor,
     passes_gates,
     round_trips,
     skill_factor,
@@ -63,16 +62,6 @@ def test_skill_factor_scale() -> None:
     assert skill_factor(0.325, DEFAULT) == pytest.approx(0.5)
     assert skill_factor(0.65, DEFAULT) == 1.0
     assert skill_factor(2.0, DEFAULT) == 1.0
-
-
-def test_holding_factor() -> None:
-    assert holding_factor(100.0, 100.0) == 1.0
-    assert holding_factor(0.0, 100.0) == 0.0
-    assert holding_factor(50.0, 100.0) == 0.5
-    assert holding_factor(110.0, 100.0, collateral_locked_alpha=10.0) == 1.0  # collateral does not count
-    assert holding_factor(10.0, 0.0, collateral_locked_alpha=10.0) == 0.0  # a fresh hotkey starts at zero
-    assert holding_factor(10.0, 0.0) == 1.0  # bought alpha counts even before any pay
-    assert holding_factor(0.5, 0.0) == 0.5  # judged against one alpha when nothing was paid
 
 
 def _fill(t: int, coin: str, side: str, sz: float) -> Fill:

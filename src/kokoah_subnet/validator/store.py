@@ -206,6 +206,26 @@ class Store:
             ).all()
         return [(str(d), str(o), str(n)) for d, o, n in rows]
 
+    def credited_notional(self, hotkey: str, day: str, days: int) -> float:
+        """Credited Kokoah notional of the hotkey over the `days` scored days before `day` (calendar window)."""
+        start = (datetime.strptime(day, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
+        with self._engine.connect() as c:
+            total = c.execute(
+                select(func.coalesce(func.sum(S.miner_days.c.credited_notional), 0.0)).where(
+                    S.miner_days.c.hotkey == hotkey, S.miner_days.c.day >= start, S.miner_days.c.day < day
+                )
+            ).scalar()
+        return float(total or 0.0)
+
+    def dated_returns(self, address: str, days: int) -> dict[str, float]:
+        """Daily returns by day over consecutive stored days (the same series as `returns`)."""
+        series = self.equity_series(address, days + 1)
+        out: dict[str, float] = {}
+        for (d0, e0, _), (d1, e1, f1) in zip(series, series[1:], strict=False):
+            if e0 > 0 and _next_day(d0) == d1:
+                out[d1] = (e1 - e0 - f1) / e0
+        return out
+
     def equity_series(self, address: str, days: int) -> list[tuple[str, float, float]]:
         """Up to `days` most recent (day, value, flows + off-market transfers), oldest first."""
         with self._engine.connect() as c:

@@ -43,7 +43,7 @@ class Actor:
     hidden_bps: float = 0.0  # cost of the other leg per round trip (negative = rebate)
     drift: float = 0.0  # daily return drift (edge)
     vol: float = 0.0  # daily return volatility
-    holds: float = 0.0  # share of pay kept as stake
+    holds: float = 0.0  # share of pay kept as stake (recorded; no holding factor since v6)
     mirror_of: str | None = None  # address this actor mirrors (opposite side, seconds later)
     coin: str = "BTC"
     equity: float = 50_000.0
@@ -52,7 +52,9 @@ class Actor:
     paid_builder: float = 0.0
     paid_hidden: float = 0.0
     received_usd: float = 0.0
-    staked: float = 0.0
+    volume_pay_usd: float = 0.0
+    skill_pay_usd: float = 0.0
+    credited: list[float] = field(default_factory=list)
     paid_alpha: list[float] = field(default_factory=list)
     returns: list[float] = field(default_factory=list)
 
@@ -119,7 +121,7 @@ def gen_fills(actor: Actor, day: int, rng: random.Random) -> list[Fill]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days", type=int, default=60)
+    ap.add_argument("--days", type=int, default=150)
     ap.add_argument("--pool-usd", type=float, default=12_667.0, help="USD value of the daily miner pool")
     ap.add_argument("--real", type=Path, default=None, help="directory of public fills JSON files to replay")
     args = ap.parse_args()
@@ -173,17 +175,18 @@ def main() -> int:
         miners = []
         for a in acts:
             window = activity[a.address][-30:]
+            dated = {f"d{i:04d}": r for i, r in enumerate(a.returns)}
             miners.append(
                 MinerInputs(
                     hotkey=a.hotkey,
                     address=a.address,
-                    returns=a.returns[-60:],
+                    returns=a.returns[-90:],
                     mean_equity_usd=a.equity,
-                    avg_equity_usd=a.equity,
-                    staked_min_alpha=a.staked,
-                    collateral_min_alpha=10.0,
+                    avg_equity_usd=max(a.equity, 10_000.0),
                     round_trips_window=sum(r for r, _ in window),
                     active_days_window=sum(d for _, d in window),
+                    credited_notional_prior_usd=sum(a.credited[-29:]),
+                    dated_returns=dict(list(dated.items())[-90:]),
                 )
             )
         inputs = DayInputs(day_index=day, price_usd=price_usd, fills=fills, miners=miners, states=states)
@@ -192,25 +195,34 @@ def main() -> int:
         for rec in result.records:
             a = next(x for x in acts if x.hotkey == rec.hotkey)
             a.received_usd += rec.pay_alpha * price_usd
+            a.volume_pay_usd += rec.volume_pay_alpha * price_usd
+            a.skill_pay_usd += rec.skill_pay_alpha * price_usd
             a.paid_alpha.append(rec.pay_alpha)
-            a.staked += rec.pay_alpha * a.holds
+            a.credited.append(rec.credited.notional)
+        assert abs(result.allocation.paid_alpha + result.allocation.burn_alpha - result.allocation.pool_alpha) < 1e-6
     print(f"{args.days} days, pool ${args.pool_usd:,.0f}/day, alpha ${price_usd:.3f}")
-    print(f"{'actor':44} {'HL fees':>10} {'builder':>10} {'other leg':>10} {'received':>10} {'net':>10} {'M':>5}")
-    worst_cheat = -1e9
+    print(
+        f"{'actor':44} {'HL fees':>10} {'builder':>10} {'other leg':>10} "
+        f"{'volume pay':>11} {'skill pay':>10} {'net':>10}"
+    )
+    skill_total = sum(a.skill_pay_usd for a in acts)
+    zero_edge_skill = sum(a.skill_pay_usd for a in acts if a.hotkey.startswith("c") or a.drift <= 0)
     for a in acts:
         net = a.received_usd - a.paid_hl - a.paid_builder - a.paid_hidden
-        last_m = next(r.multiplier for r in result.records if r.hotkey == a.hotkey)
         print(
             f"{a.name:44} {a.paid_hl:10,.0f} {a.paid_builder:10,.0f} {a.paid_hidden:10,.0f} "
-            f"{a.received_usd:10,.0f} {net:10,.0f} {last_m:5.3f}"
+            f"{a.volume_pay_usd:11,.0f} {a.skill_pay_usd:10,.0f} {net:10,.0f}"
         )
-        if a.hotkey.startswith("c"):
-            worst_cheat = max(worst_cheat, net)
     print()
+    print("the whole pool is paid every day: PASS")
+    share = zero_edge_skill / skill_total if skill_total > 0 else 0.0
+    ok = share <= 0.05
     print(
-        "every zero-edge strategy nets negative:", "PASS" if worst_cheat < 0 else "FAIL", f"(worst {worst_cheat:,.0f})"
+        f"share of the skill pool taken by strategies without an edge: {share:.1%}",
+        "PASS" if ok else "FAIL",
+        "(volume farming is a competition by design in v6: farmers are paid by fees, not refused)",
     )
-    return 0 if worst_cheat < 0 else 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

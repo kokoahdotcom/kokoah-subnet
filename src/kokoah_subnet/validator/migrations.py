@@ -73,6 +73,23 @@ STEPS: list[tuple[int, str, Step]] = [
             "ALTER TABLE fills ADD COLUMN IF NOT EXISTS cloid varchar(34)"
         ),
     ),
+    (
+        8,
+        "miner_days: the two pools (v6)",
+        _pg(
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS volume_pay_alpha double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS skill_pay_alpha double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS skill_weight double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS skill_adjusted double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS volume_window_usd double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS volume_factor double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS entry_psr double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS entry_pass boolean; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS agent_verified boolean; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS copy_group text; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS skill_pool_reason varchar(64)"
+        ),
+    ),
 ]
 
 

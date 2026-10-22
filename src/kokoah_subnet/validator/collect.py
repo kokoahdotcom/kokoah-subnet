@@ -62,7 +62,7 @@ class ValidatorConfig:
     netuid: int
     builder: str  # the builder address whose daily file is scored
     data_dir: Path
-    burn_hotkey: str = ""  # registered hotkey (own coldkey, not the owner's) that receives the unawarded remainder
+    burn_hotkey: str = ""  # registered hotkey (own coldkey) that takes a day on which no miner has any weight
     wallet_name: str = "validator"
     wallet_hotkey: str = "default"
     wallet_path: str | None = None
@@ -132,10 +132,6 @@ async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, boo
     return data, True
 
 
-def _paid_window(state: Any, day_index: int) -> float:
-    return float(state.paid_window(day_index)) if state is not None else 0.0
-
-
 def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, Any]:
     return {
         "address": f.user,
@@ -180,9 +176,11 @@ async def collect_and_score(
     client: Any,
     params: Params,
     now_ts: float | None = None,
+    agent_status: dict[str, bool] | None = None,
 ) -> DayResult:
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
+    agent_status = agent_status or {}
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
@@ -209,8 +207,11 @@ async def collect_and_score(
     snap = await snapshot(client, cfg.netuid)
     now = datetime.now(tz=UTC)
     uid_of = snap.uid_of()
-    if not cfg.burn_hotkey or cfg.burn_hotkey not in uid_of:
-        raise RuntimeError("burn_hotkey is not set or not registered on the subnet; register it and configure it")
+    # the whole pool goes to miners (v6); only a day with no weight at all goes to the burn hotkey, or to the owner
+    # hotkey when no burn hotkey is registered
+    fallback_hotkey = cfg.burn_hotkey if cfg.burn_hotkey and cfg.burn_hotkey in uid_of else snap.owner_hotkey
+    if fallback_hotkey != cfg.burn_hotkey:
+        log.warning("burn hotkey not registered: a day with no miner weight goes to the owner hotkey")
     store.put_neurons(day, snap.block, [n.as_row() for n in snap.neurons])
     committed = await read_file_commitment(client, cfg.netuid, snap.owner_hotkey)
     hash_matches: bool | None = None if committed is None or committed[0] != day else committed[1] == digest
@@ -460,7 +461,7 @@ async def collect_and_score(
             MinerInputs(
                 hotkey=hk,
                 address=address,
-                returns=store.returns(address, params.confidence_days),
+                returns=store.returns(address, max(params.confidence_days, params.entry_days)),
                 mean_equity_usd=store.mean_equity(address, params.gate_days),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),
@@ -470,6 +471,9 @@ async def collect_and_score(
                 active_days_window=active_window,
                 avg_equity_usd=avg.value,
                 registered_block=registered_block.get(hk),
+                credited_notional_prior_usd=store.credited_notional(hk, day, params.skill_volume_days - 1),
+                dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days)),
+                agent_verified=bool(agent_status.get(hk, False)),
             )
         )
 
@@ -477,22 +481,10 @@ async def collect_and_score(
     miners.sort(key=lambda m: m.hotkey)
     for a in address_of_hotkey.values():
         fills_by_address[a] = assign_counterparties(fills_by_address.get(a, []), tid_owners)
-    # the one law needs the builder fee above a floor set by the caps: measure what the day's builder fills
-    # actually charged (the file's and the bound addresses' histories)
+    # what the day's builder fills actually charged (recorded)
     taker_notional = sum(f.notional for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
     taker_fees = sum(f.builder_fee for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
     effective_bps = taker_fees / taker_notional * 1e4 if taker_notional > 0 else None
-    if effective_bps is not None and 0 < effective_bps < params.min_safe_fee_bps:
-        log.error(
-            "effective builder fee %.3f bps is below the safe floor %.3f bps", effective_bps, params.min_safe_fee_bps
-        )
-        store.put_error(
-            day,
-            None,
-            None,
-            "fee floor",
-            f"effective builder fee {effective_bps:.3f} bps < {params.min_safe_fee_bps:.3f}",
-        )
 
     # what the exchange says the builder has earned: the fees credited to traders can never exceed it
     try:
@@ -574,9 +566,7 @@ async def collect_and_score(
                 "skill_raw": r.skill_raw,
                 "g": r.g,
                 "skill": r.skill,
-                "holding": r.holding,
                 "staked_min_alpha": next((m.staked_min_alpha for m in miners if m.hotkey == r.hotkey), 0.0),
-                "paid_window_alpha": _paid_window(inputs.states.get(r.hotkey), inputs.day_index),
                 "collateral_min_alpha": collateral_min.get(r.hotkey, 0.0),
                 "gates_pass": r.gates_pass,
                 "round_trips_window": r.round_trips_window,
@@ -589,11 +579,18 @@ async def collect_and_score(
                 "credit_factor": r.credit_factor,
                 "reported": r.reported,
                 "zeroed": r.zeroed,
-                "multiplier": r.multiplier,
-                "share_alpha": r.share_alpha,
-                "cap_usd": r.cap_usd,
-                "cap_alpha": r.cap_alpha,
                 "pay_alpha": r.pay_alpha,
+                "volume_pay_alpha": r.volume_pay_alpha,
+                "skill_pay_alpha": r.skill_pay_alpha,
+                "skill_weight": r.skill_weight,
+                "skill_adjusted": r.skill_adjusted,
+                "volume_window_usd": r.volume_window_usd,
+                "volume_factor": r.volume_factor,
+                "entry_psr": r.entry_psr,
+                "entry_pass": r.entry_pass,
+                "agent_verified": r.agent_verified,
+                "copy_group": ",".join(r.copy_group) or None,
+                "skill_pool_reason": r.skill_pool_reason,
                 "pay_usd": r.pay_alpha * price_usd,
                 "exchange_taker_bps": rates_of.get(r.address, (None, None))[0],
                 "exchange_maker_bps": rates_of.get(r.address, (None, None))[1],
@@ -653,7 +650,7 @@ async def collect_and_score(
         )
     store.upsert_miners(miner_rows)
 
-    published_json = json.loads(result_json(result, cfg.burn_hotkey))
+    published_json = json.loads(result_json(result, fallback_hotkey))
     published_json.update(
         {
             "day": day,
@@ -683,7 +680,7 @@ async def collect_and_score(
         pool_alpha=result.allocation.pool_alpha,
         paid_alpha=result.allocation.paid_alpha,
         burn_alpha=result.allocation.burn_alpha,
-        burn_hotkey=cfg.burn_hotkey,
+        burn_hotkey=fallback_hotkey,
         miners=len(result.records),
         miners_with_fills=sum(1 for r in result.records if r.fees.fills > 0),
         volume_usd=sum(r.fees.notional for r in result.records),

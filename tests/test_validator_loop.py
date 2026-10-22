@@ -220,7 +220,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert records[HK_B].fees.credit == pytest.approx(50.0)  # maker fills count in full
     assert result.allocation.price_usd == pytest.approx(0.5 * 400)
     assert not records[HK_A].gates_pass  # one day of history cannot pass the gates
-    assert records[HK_A].multiplier == 0.85
+    assert records[HK_A].skill_pool_reason is not None and records[HK_A].skill_pay_alpha == 0.0
     # stored: equity, positions, activity, bindings, states, the day's artifact with its file hash
     # the backfilled day, then today; the 2,000-dollar off-market gift (1 BTC bought 2% under the mark) is a flow
     assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, pytest.approx(2000.0))]
@@ -232,7 +232,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     published = json.loads(store.day(DAY) or "{}")
     assert published["builder_fills"] == 30 and len(published["builder_file_sha256"]) == 64
     assert published["bindings_refused"] == {} and published["errors"] == {}
-    assert published["weights"][BURN] > 0.9 and published["burn_hotkey"] == BURN  # a young subnet burns most
+    assert BURN not in published["weights"] and published["burn_alpha"] == 0.0  # the whole pool goes to miners
     await hl.close()
 
 
@@ -241,7 +241,7 @@ async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> N
     now = DAY_MS / 1000 + 86_400 + 600  # ten minutes into the next UTC day
     report = await step(cfg, store, hl, chain, wallet=None, now=now)
     assert report["scored"]["day"] == DAY and report["weights"]["ok"]
-    assert sorted(report["weights"]["uids"]) == [1, 2, 3]
+    assert sorted(report["weights"]["uids"]) == [1, 2]
     assert len(chain.executed) == 1
     # a second pass in the same tempo: nothing scored again, no second submission
     report = await step(cfg, store, hl, chain, wallet=None, now=now + 60)
@@ -282,7 +282,7 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         board = (await c.get("/leaderboard")).json()
         assert len(board) == 2 and board[0]["volume_usd"] >= board[1]["volume_usd"]
         assert board[0]["days"] == 1 and board[0]["total_volume_usd"] == board[0]["volume_usd"]
-        assert board[0]["cap_binds"] is True  # a young subnet: the cap, not the share, sets the pay
+        assert board[0]["volume_pay_alpha"] > 0 and board[0]["skill_pay_alpha"] == 0.0
         assert all(r["eligible"] and r["qualified"] and r["avg_equity_usd"] == 25_000.0 for r in board)
         page = await c.get("/")
         assert page.status_code == 200 and "Leaderboard" in page.text and 'fetch("leaderboard")' in page.text
@@ -296,11 +296,12 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
     await hl.close()
 
 
-async def test_unregistered_burn_hotkey_is_refused(tmp_path: Path) -> None:
+async def test_without_a_registered_burn_hotkey_the_owner_hotkey_is_the_fallback(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     cfg = ValidatorConfig(**{**cfg.__dict__, "burn_hotkey": "hkNowhere"})
-    with pytest.raises(RuntimeError, match="burn_hotkey"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    published = json.loads(store.day(DAY) or "{}")
+    assert published["burn_hotkey"] == OWNER and result.allocation.burn_alpha == 0.0
     await hl.close()
 
 
@@ -353,21 +354,6 @@ def test_skip_day_advances_states_with_zero_credit(tmp_path: Path) -> None:
     assert "already scored" in skip_day(store, "2026-10-21", 2, BURN, "x", DEFAULT)
 
 
-async def test_effective_fee_floor_is_checked(tmp_path: Path) -> None:
-    cfg, store, hl, chain, a, b = _setup(tmp_path)
-    # rewrite the cached file with a 0.005% builder fee (below the 0.015% floor the caps need)
-    text = _csv(a, b).replace(",12.5\n", ",2.5\n").replace(",5\n", ",1\n")
-    (tmp_path / "fills" / "20261021.csv.lz4").write_bytes(lz4.frame.compress(text.encode()))
-    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
-    with store._engine.connect() as c:
-        from kokoah_subnet.validator import schema as S
-
-        stages = [r.stage for r in c.execute(S.errors.select()).all()]
-    assert "fee floor" in stages
-    assert DEFAULT.min_safe_fee_bps == pytest.approx(1.5)
-    await hl.close()
-
-
 async def test_eligibility_through_the_whole_pass(tmp_path: Path) -> None:
     """A new miner qualifies on its third trade (the first two earn nothing); one below $10,000 of average equity
     is recorded but paid nothing and takes no share; the averages and their points are on the record."""
@@ -381,7 +367,7 @@ async def test_eligibility_through_the_whole_pass(tmp_path: Path) -> None:
     assert not rb.eligible and rb.ineligible_reason == "average equity below the minimum"
     assert rb.qualified  # trades still count toward qualification
     assert rb.fees.fills == 10 and rb.credited.fills == 0  # recorded, not credited
-    assert rb.pay_alpha == 0.0 and rb.share_alpha == 0.0
+    assert rb.pay_alpha == 0.0 and rb.volume_pay_alpha == 0.0
     assert store.states()[HK_B].phi_hat == 0.0
     with store._engine.connect() as c:
         from kokoah_subnet.validator import schema as S

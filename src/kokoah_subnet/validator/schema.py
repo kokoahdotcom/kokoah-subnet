@@ -181,6 +181,18 @@ miner_days = Table(
     Column("credited_fills", Integer),
     Column("identity_reset", String(32)),  # why credit and qualification were dropped today, if they were
     Column("registered_block", BigInteger),
+    # the two pools (v6)
+    Column("volume_pay_alpha", Float),
+    Column("skill_pay_alpha", Float),
+    Column("skill_weight", Float),
+    Column("skill_adjusted", Float),
+    Column("volume_window_usd", Float),
+    Column("volume_factor", Float),
+    Column("entry_psr", Float),
+    Column("entry_pass", Boolean),
+    Column("agent_verified", Boolean),
+    Column("copy_group", Text),
+    Column("skill_pool_reason", String(64)),
 )
 
 # the smoothed state after each day (history, not only the latest)

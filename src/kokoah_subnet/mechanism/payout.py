@@ -1,8 +1,13 @@
-"""Multiplier, share, caps, pay, burn and weights (specification sections 5 and 6)."""
+"""The two pools, the pay and the weights (specification v6, sections 5 and 6).
+
+The day's miner emission `A` is split into a volume pool (`volume_share`, shared by eligible smoothed builder fees)
+and a skill pool (`skill_share`, shared by skill weight). Nothing is capped and nothing is burned: when nobody has a
+skill weight the skill pool joins the volume pool, and only a day with no weight at all goes to the fallback hotkey.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .params import Params
@@ -10,77 +15,59 @@ from .params import Params
 U16_MAX = 65535
 
 
-def multiplier(skill: float, holding: float, gates_pass: bool, params: Params) -> float:
-    """`M = m_min + w_s × g' + w_h × h'`, or the floor when a gate fails."""
-    if not gates_pass:
-        return params.m_min
-    g = max(0.0, min(1.0, skill))
-    h = max(0.0, min(1.0, holding))
-    return params.m_min + params.w_skill * g + params.w_hold * h
-
-
-@dataclass(frozen=True)
-class MinerDay:
-    """What the payout needs about one miner on one day."""
-
-    hotkey: str
-    phi_hat: float  # smoothed fee credit, USD
-    fee_hat: float  # smoothed total fees on the builder leg, USD
-    multiplier: float
-
-
 @dataclass(frozen=True)
 class Allocation:
     pool_alpha: float
     price_usd: float
-    shares: dict[str, float]  # alpha
-    caps: dict[str, float]  # alpha
-    pays: dict[str, float]  # alpha
-    burn_alpha: float
+    volume_pool: float
+    skill_pool: float
+    volume_pays: dict[str, float]  # alpha
+    skill_pays: dict[str, float]  # alpha
+    burn_alpha: float  # only when no miner has any weight
+
+    @property
+    def pays(self) -> dict[str, float]:
+        keys = set(self.volume_pays) | set(self.skill_pays)
+        return {k: self.volume_pays.get(k, 0.0) + self.skill_pays.get(k, 0.0) for k in sorted(keys)}
 
     @property
     def paid_alpha(self) -> float:
         return sum(self.pays.values())
 
 
-def cap_usd(miner: MinerDay, params: Params) -> float:
-    """`M × min(c_max × Φ̂, c_tot × F̂)` in USD."""
-    return miner.multiplier * min(params.c_max * miner.phi_hat, params.c_tot * max(0.0, miner.fee_hat))
+def _share(pool: float, weights: Mapping[str, float]) -> dict[str, float]:
+    positive = {k: v for k, v in weights.items() if v > 0}
+    total = sum(positive.values())
+    return {k: pool * v / total for k, v in positive.items()} if total > 0 else {}
 
 
 def allocate(
-    miners: Sequence[MinerDay], price_usd: float, params: Params, pool_alpha: float | None = None
+    volume_weights: Mapping[str, float],
+    skill_weights: Mapping[str, float],
+    price_usd: float,
+    params: Params,
+    pool_alpha: float | None = None,
 ) -> Allocation:
-    """Share the day's pool by `Φ̂ × M`, cap each miner in alpha at the day's average price, burn the rest."""
-    if price_usd <= 0:
-        raise ValueError("price must be positive")
+    """`volume_weights`: eligible smoothed builder fees by hotkey; `skill_weights`: skill weights by hotkey."""
     pool = params.miner_pool_alpha if pool_alpha is None else pool_alpha
-    scores = {m.hotkey: max(0.0, m.phi_hat) * m.multiplier for m in miners}
-    total = sum(scores.values())
-    shares = {k: (pool * s / total if total > 0 else 0.0) for k, s in scores.items()}
-    caps = {m.hotkey: cap_usd(m, params) / price_usd for m in miners}
-    pays = {k: min(shares[k], caps[k]) for k in scores}
-    burn = pool - sum(pays.values())
-    return Allocation(pool, price_usd, shares, caps, pays, max(0.0, burn))
+    has_volume = any(v > 0 for v in volume_weights.values())
+    has_skill = any(v > 0 for v in skill_weights.values())
+    skill_pool = pool * params.skill_share if has_skill else 0.0
+    volume_pool = pool - skill_pool
+    if not has_volume and has_skill:  # nobody to share the volume pool: the skill pool takes everything
+        skill_pool, volume_pool = pool, 0.0
+    volume_pays = _share(volume_pool, volume_weights)
+    skill_pays = _share(skill_pool, skill_weights)
+    burn = pool if not volume_pays and not skill_pays else 0.0
+    return Allocation(pool, price_usd, volume_pool, skill_pool, volume_pays, skill_pays, burn)
 
 
-MIN_BURN_WEIGHT = 0.001  # the burn hotkey always receives this slice, so a full subnet never prunes it
-
-
-def weights(allocation: Allocation, burn_hotkey: str, min_burn_weight: float = MIN_BURN_WEIGHT) -> dict[str, float]:
-    """Weight fractions summing to one: miners by pay, the unawarded remainder to the burn hotkey (a dedicated
-    hotkey on its own coldkey whose alpha the operator burns with `burn_alpha`; spec section 6). The burn hotkey
-    keeps at least `min_burn_weight` even when the pool is scarce, taken proportionally from the miners."""
-    if allocation.pool_alpha <= 0:
-        return {burn_hotkey: 1.0}
-    out = {k: v / allocation.pool_alpha for k, v in allocation.pays.items() if v > 0}
-    burn = allocation.burn_alpha / allocation.pool_alpha
-    if burn < min_burn_weight and out:
-        scale = (1.0 - min_burn_weight) / max(1e-12, sum(out.values()))
-        out = {k: v * scale for k, v in out.items()}
-        burn = min_burn_weight
-    out[burn_hotkey] = out.get(burn_hotkey, 0.0) + burn
-    return out
+def weights(allocation: Allocation, fallback_hotkey: str) -> dict[str, float]:
+    """Weight fractions summing to one: miners by pay; only when no miner has any weight, everything to the
+    fallback hotkey (the burn hotkey, or the owner hotkey when no burn hotkey is configured)."""
+    if allocation.pool_alpha <= 0 or allocation.burn_alpha > 0:
+        return {fallback_hotkey: 1.0}
+    return {k: v / allocation.pool_alpha for k, v in allocation.pays.items() if v > 0}
 
 
 def to_u16(fractions: Mapping[str, float]) -> dict[str, int]:

@@ -7,11 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "5.10"
-
-# The best maker rebate anywhere on Hyperliquid, bps a side (fee schedule read 2026-10-19). It bounds the smallest
-# total fee a round trip through the builder can carry, and with it the safe range of `c_tot` (spec section 11).
-BEST_REBATE_BPS = 0.3
+SPEC_VERSION = "6.0"
 
 
 @dataclass(frozen=True)
@@ -21,12 +17,10 @@ class Params:
     builder_fee_rate: float = 0.00025  # 0.025% of notional per fill
     maker_credit: float = 1.0  # maker fills earn their builder fee in full (the fee is charged on both; v5.7)
     smoothing: float = 0.3  # today's weight in the daily smoothing (70/30)
-    c_max: float = 2.0  # first cap: multiple of the smoothed fee credit
-    c_tot: float = 0.75  # second cap: share of the smoothed total fees on the builder leg
-    m_min: float = 0.85  # multiplier floor
-    w_skill: float = 0.05
-    w_hold: float = 0.10
-    # skill factor (section 7)
+    # the two pools (v6): the whole miner emission is paid out, nothing is capped or burned
+    volume_share: float = 0.80  # shared by eligible smoothed builder fees
+    skill_share: float = 0.20  # shared by skill weight; empty: joins the volume pool
+    # skill score (section 7, unchanged since v3)
     return_cap: float = 0.10
     confidence_days: int = 60
     quality_days: int = 30
@@ -38,9 +32,16 @@ class Params:
     blowup_count: int = 2
     blowup_days: int = 60
     g_full: float = 0.65
-    # holding factor (section 8)
-    holding_days: int = 60
-    # activity gates (section 9)
+    # skill pool (v6)
+    skill_floor: float = 0.25  # s = max(0, (g' - floor) / (1 - floor))
+    skill_volume_cap_usd: float = 1_000_000.0  # v = min(1, eligible Kokoah notional over the window / cap)
+    skill_volume_days: int = 30
+    entry_days: int = 90  # entry test: PSR of the capped daily returns over this many days
+    entry_psr: float = 0.95  # must reach this (benchmark `psr_benchmark`)
+    copy_correlation: float = 0.9  # bound accounts whose daily returns correlate above this
+    copy_min_days: int = 30  # over at least this many common days share one skill weight
+    agent_bonus: float = 0.10  # skill weight x (1 + bonus) for a verified sealed-machine agent account
+    # activity gates (section 9): for the skill pool
     gate_days: int = 30
     gate_round_trips: int = 10
     gate_active_days: int = 7
@@ -64,52 +65,36 @@ class Params:
     mirror_exclude_share: float = 0.25
     mirror_zero_share: float = 0.50
     mirror_zero_days: int = 30
-    # calendar: day index 0 (penalty and holding windows count from here; the same for every validator)
+    # calendar: day index 0 (penalty windows count from here; the same for every validator)
     day_zero: str = "2026-10-19"
     # chain (section 1)
     daily_emission_alpha: float = 7200.0
-    miner_slot: float = 0.41  # owner 0.18, validators 0.41, miners 0.41 (owner, 2026-10-20; the chain's default)
+    miner_slot: float = 0.41  # owner 0.18, validators 0.41, miners 0.41 (the chain's default)
     price_samples: int = 20
 
     def __post_init__(self) -> None:
         if not 0 < self.smoothing <= 1:
             raise ValueError("smoothing must be in (0, 1]")
-        if abs(self.m_min + self.w_skill + self.w_hold - 1.0) > 1e-9:
-            raise ValueError("m_min + w_skill + w_hold must be 1")
+        if abs(self.volume_share + self.skill_share - 1.0) > 1e-9 or min(self.volume_share, self.skill_share) < 0:
+            raise ValueError("volume_share + skill_share must be 1, both non-negative")
         if self.builder_fee_rate <= 0:
             raise ValueError("builder_fee_rate must be positive")
         if not 0 < self.maker_credit <= 1:
             raise ValueError("maker_credit must be in (0, 1]")
-        if self.c_max <= 0 or self.c_tot <= 0:
-            raise ValueError("caps must be positive")
+        if not 0 <= self.skill_floor < 1:
+            raise ValueError("skill_floor must be in [0, 1)")
+        if self.skill_volume_cap_usd <= 0 or self.agent_bonus < 0:
+            raise ValueError("skill_volume_cap_usd must be positive and agent_bonus non-negative")
+        if not 0.5 < self.entry_psr < 1 or self.entry_days < self.psr_min_days:
+            raise ValueError("entry_psr must be in (0.5, 1) and entry_days at least psr_min_days")
         if self.min_equity_usd < 0 or self.qualify_trades < 1 or self.qualify_notional_usd < 0:
             raise ValueError("eligibility thresholds must be non-negative and at least one trade")
         if self.equity_min_points < 2:
             raise ValueError("equity_min_points must be at least 2")
-        if self.c_tot >= self.c_tot_limit:
-            raise ValueError(f"c_tot {self.c_tot} is not farm-proof; it must stay below {self.c_tot_limit:.3f}")
 
     @property
     def builder_fee_bps(self) -> float:
         return self.builder_fee_rate * 1e4
-
-    @property
-    def c_tot_limit(self) -> float:
-        """Largest second-cap ratio at which every zero-edge strategy still loses (spec section 11).
-
-        The cheapest round trip through the builder costs `C = 2 × (builder fee − best rebate)` bps and the other
-        leg can earn at most `2 × best rebate`; `net ≤ −(1 − c_tot) × C + 2 × rebate < 0` gives the bound.
-        """
-        c_min = 2 * (self.builder_fee_bps - BEST_REBATE_BPS)
-        if c_min <= 0:
-            return 0.0
-        return 1 - 2 * BEST_REBATE_BPS / c_min
-
-    @property
-    def min_safe_fee_bps(self) -> float:
-        """The smallest builder fee (bps a side) at which the one law still holds for this `c_tot`: solving
-        `(1 − c_tot) × 2 × (fee − rebate) > 2 × rebate` gives `fee > rebate + rebate / (1 − c_tot)`."""
-        return BEST_REBATE_BPS + BEST_REBATE_BPS / (1 - self.c_tot)
 
     @property
     def miner_pool_alpha(self) -> float:

@@ -19,7 +19,7 @@ def skip_day(store: Store, day: str, day_index: int, burn_hotkey: str, reason: s
     advanced = {hk: advance(s, DayFees.zero(), 0.0, 0.0, params, day_index=day_index) for hk, s in states.items()}
     store.put_states(advanced, day=day)
     pool = params.miner_pool_alpha
-    allocation = Allocation(pool, 0.0, {}, {}, {}, pool)
+    allocation = Allocation(pool, 0.0, 0.0, 0.0, {}, {}, pool)
     artifact = {
         "day": day,
         "day_index": day_index,

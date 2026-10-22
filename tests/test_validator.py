@@ -8,7 +8,7 @@ import lz4.frame
 import pytest
 
 from kokoah_subnet.cli import build_parser, main
-from kokoah_subnet.mechanism import DEFAULT, MinerState
+from kokoah_subnet.mechanism import MinerState
 from kokoah_subnet.validator.builder_feed import NotPublished, decompress, file_url, load_file, sha256
 from kokoah_subnet.validator.chain import sample_blocks, weights_by_uid
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo, day_bounds_ms
@@ -189,7 +189,7 @@ def test_score_day_command(tmp_path: Path) -> None:
     result = json.loads(out.read_text())
     assert result["day_index"] == 3
     assert result["miners"][0]["fees"]["credit"] == pytest.approx(5.0)
-    assert result["weights"]["own"] == pytest.approx(result["burn_alpha"] / DEFAULT.miner_pool_alpha)
+    assert result["weights"] == {"hkA": pytest.approx(1.0)} and result["burn_alpha"] == 0.0  # the whole pool
     saved = load_states(state)
     assert saved["hkA"].phi_hat == pytest.approx(1.5)
 

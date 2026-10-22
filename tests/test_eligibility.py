@@ -155,10 +155,10 @@ def test_equity_below_the_floor_pays_nothing_and_credit_only_decays() -> None:
     low = run(5, fills, [miner(9_999.99), other], states)
     r, r2 = low.records
     assert not r.eligible and r.ineligible_reason == "average equity below the minimum"
-    assert r.pay_alpha == 0.0 and r.share_alpha == 0.0 and r.credited.fills == 0
+    assert r.pay_alpha == 0.0 and r.volume_pay_alpha == 0.0 and r.credited.fills == 0
     assert r.fees.fills == 10 and r.fees.notional == pytest.approx(100_000.0)  # volume still recorded
     assert low.states["hk"].phi_hat == pytest.approx(70.0) and low.states["hk"].fee_hat == pytest.approx(196.0)
-    assert r2.share_alpha == pytest.approx(DEFAULT.miner_pool_alpha)  # the ineligible miner dilutes nobody
+    assert r2.pay_alpha == pytest.approx(DEFAULT.miner_pool_alpha)  # the ineligible miner dilutes nobody
     # exactly at the floor counts
     assert run(5, fills, [miner(10_000.0), other], states).records[0].eligible
 

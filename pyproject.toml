@@ -6,11 +6,14 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "bittensor==11.3.0",
+  "cryptography==44.0.0",
   "eth-account==0.13.7",
   "fastapi==0.148.0",
   "httpx==0.28.1",
   "lz4==4.4.4",
+  "msgpack==1.1.0",
   "psycopg[binary]==3.2.9",
+  "pyjwt==2.10.1",
   "sqlalchemy==2.0.41",
   "uvicorn==0.54.0",
 ]

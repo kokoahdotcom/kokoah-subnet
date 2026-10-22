@@ -15,6 +15,7 @@ from kokoah_subnet.mechanism import (
     parse_builder_csv,
     parse_user_fills,
 )
+from kokoah_subnet.mechanism.state import PAY_HISTORY_DAYS
 
 CSV = """time,user,coin,side,px,sz,crossed,special_trade_type,tif,is_trigger,counterparty,closed_pnl,twap_id,builder_fee
 1792454400000,0xAAAA000000000000000000000000000000000001,BTC,B,100000,0.1,True,,Ioc,False,0xbbbb000000000000000000000000000000000002,0,,2.5
@@ -93,12 +94,12 @@ def test_ema_counts_every_dollar_once() -> None:
     assert ema(0.0, 100.0, DEFAULT) == pytest.approx(30.0)
 
 
-def test_state_advance_and_holding_window() -> None:
+def test_state_advance_and_pay_history_window() -> None:
     s = MinerState()
     fees = day_fees(parse_builder_csv(CSV), DEFAULT)
     for d in range(70):
         s = advance(s, fees, g_raw=0.5, paid_alpha=float(d), params=DEFAULT)
-    assert len(s.paid) == DEFAULT.holding_days
+    assert len(s.paid) == PAY_HISTORY_DAYS
     assert s.paid[-1] == 69.0 and s.paid[0] == 10.0
     assert s.phi_hat == pytest.approx(fees.credit, rel=1e-6)
     assert s.g == pytest.approx(0.5, rel=1e-6)

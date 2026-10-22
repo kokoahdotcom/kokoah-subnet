@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from .credit import DayFees, ema
 from .params import Params
 
+PAY_HISTORY_DAYS = 60  # the pay history kept per hotkey (a record since v6; the holding factor is gone)
+
 
 @dataclass(frozen=True)
 class MinerState:
@@ -51,14 +53,14 @@ def advance(
 ) -> MinerState:
     """Roll the state one day forward: smooth credit, total fees and skill, append today's pay, apply a mirror
     report (`zero_from_day` is today's index when the address is reported)."""
-    paid = (*state.paid, paid_alpha)[-params.holding_days :]
+    paid = (*state.paid, paid_alpha)[-PAY_HISTORY_DAYS:]
     zero_until = state.zero_until_day
     if zero_from_day is not None:
         zero_until = max(zero_until or 0, zero_from_day + params.mirror_zero_days)
     paid_days = state.paid_days
     if day_index is not None:
         paid_days = tuple(
-            (d, a) for d, a in (*paid_days, (day_index, paid_alpha)) if day_index - params.holding_days < d <= day_index
+            (d, a) for d, a in (*paid_days, (day_index, paid_alpha)) if day_index - PAY_HISTORY_DAYS < d <= day_index
         )
     return replace(
         state,

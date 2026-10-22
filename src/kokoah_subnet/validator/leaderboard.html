@@ -65,7 +65,7 @@ tbody tr:last-child td { border-bottom: 0; }
   <label>Sort by <select id="sort">
     <option value="skill">skill</option><option value="volume_usd">volume (day)</option><option value="pay_alpha">pay (day)</option>
     <option value="total_pay_alpha">pay (all days)</option><option value="total_volume_usd">volume (all days)</option>
-    <option value="profit_usd">profit (all days)</option><option value="holding">holding</option><option value="mean_equity_usd">capital</option>
+    <option value="profit_usd">profit (all days)</option><option value="skill_pay_alpha">skill pay (day)</option><option value="mean_equity_usd">capital</option>
   </select></label>
   <label><input type="checkbox" id="hideInactive" checked> hide miners without fills today</label>
   <button id="refresh">Refresh</button>
@@ -73,14 +73,14 @@ tbody tr:last-child td { border-bottom: 0; }
 </div>
 <div class="tbl"><table id="table" aria-describedby="note">
   <thead><tr>
-    <th class="l">#</th><th class="l">Miner</th><th>Skill</th><th>Holding</th><th>Rate</th><th>Volume (day)</th>
-    <th>Builder fee (day)</th><th>Pay (day)</th><th>Cap (day)</th><th>Capital</th><th>Volume (all)</th><th>Pay (all)</th><th>Profit (all)</th><th>Days</th><th class="l">Flags</th>
+    <th class="l">#</th><th class="l">Miner</th><th>Skill</th><th>Skill weight</th><th>Volume (day)</th>
+    <th>Builder fee (day)</th><th>Volume pay (day)</th><th>Skill pay (day)</th><th>Pay (day)</th><th>Capital</th><th>Volume (all)</th><th>Pay (all)</th><th>Profit (all)</th><th>Days</th><th class="l">Flags</th>
   </tr></thead>
   <tbody id="rows"><tr><td colspan="15" class="empty">Loading…</td></tr></tbody>
 </table></div>
-<p class="note" id="note">Skill is the subnet's statistical score of the trader's own daily returns (0 to 1); holding is the share of
-the last 60 days' pay still staked; the rate is the multiplier between 0.85 and 1.0 that both move. Pay is capped at
-twice the builder fee and at three quarters of the trade's total cost; what the pool holds above the caps is burned.
+<p class="note" id="note">Skill is the subnet's statistical score of the trader's own daily returns (0 to 1). Each day's miner
+emission is split in two: 80% shared by the builder fees each trader paid, and 20% shared by skill weight among traders
+who pass the skill pool's entry test (a proven record over 90 days); verified agents get 10% more skill weight.
 Profit is the exchange's closed PnL on builder-code fills and never affects pay. Every number comes from the
 validator's published daily artifact (<code>/days/latest</code>).</p>
 </div>
@@ -137,11 +137,12 @@ validator's published daily artifact (<code>/days/latest</code>).</p>
         else flags.push('<span class="pill warn">equity ' + fmt.usd(r.avg_equity_usd) + ' &lt; $10k</span>');
       }
       if (!r.gates_pass) flags.push('<span class="pill warn">gates</span>');
-      if (r.cap_binds) flags.push('<span class="pill good">capped</span>');
+      if (r.agent_verified) flags.push('<span class="pill good">agent</span>');
+      else if (r.entry_pass) flags.push('<span class="pill good">skill pool</span>');
       return `<tr><td class="l">${i + 1}</td><td class="l"><span class="addr" title="${r.hotkey}">${fmt.short(r.address)}</span></td>
-        <td>${fmt.num(r.skill, 2)}</td><td>${fmt.pct(r.holding)}</td><td>${fmt.num(r.multiplier, 3)}</td>
+        <td>${fmt.num(r.skill, 2)}</td><td>${fmt.num(r.skill_weight, 3)}</td>
         <td><span class="bar" style="width:${Math.round(60 * (r.volume_usd || 0) / maxVol)}px"></span>${fmt.usd(r.volume_usd)}</td>
-        <td>${fmt.usd(r.builder_fee_usd)}</td><td>${fmt.alpha(r.pay_alpha)}</td><td>${fmt.alpha(r.cap_alpha)}</td>
+        <td>${fmt.usd(r.builder_fee_usd)}</td><td>${fmt.alpha(r.volume_pay_alpha)}</td><td>${fmt.alpha(r.skill_pay_alpha)}</td><td>${fmt.alpha(r.pay_alpha)}</td>
         <td>${fmt.usd(r.mean_equity_usd)}</td><td>${fmt.usd(r.total_volume_usd)}</td><td>${fmt.alpha(r.total_pay_alpha)}</td>
         <td>${fmt.usd(r.profit_usd)}</td><td>${r.days || 0}</td><td class="l">${flags.join(" ")}</td></tr>`;
     }).join("") : `<tr><td colspan="15" class="empty">No miners to show for this day.</td></tr>`;

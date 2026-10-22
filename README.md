@@ -14,7 +14,7 @@ holds the whitepaper, the mechanism specification, the research behind it, and t
 - `docs/design/02-mechanism-spec.md`: the complete formal specification (every formula and parameter);
   `01-incentive-mechanism.md` says the same in plain words.
 - `scripts/verify_mechanism.py`: numerical verification of the specification's claims (`uv run python
-  scripts/verify_mechanism.py`); `scripts/sim_skill.py` and `scripts/sim_incentives.py` are the simulations behind
+  scripts/verify_mechanism.py`); `scripts/sim_skill.py` is the simulation behind
   the calibration.
 
 - The maintainer's status notes and working rules are kept locally, outside this repository.

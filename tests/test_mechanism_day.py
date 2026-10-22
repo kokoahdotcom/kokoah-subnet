@@ -1,4 +1,6 @@
-"""A whole scoring day through `score_day`: the worked example, smoothing across days, a mirrored pair."""
+"""A whole scoring day through `score_day` (spec v6): the two pools, the skill pool rules, a mirrored pair."""
+
+import random
 
 import pytest
 
@@ -43,84 +45,93 @@ def window_fills(user: str) -> list[Fill]:
     return fills
 
 
-def miner(hotkey: str, address: str, returns: list[float], staked: float) -> MinerInputs:
+def miner(hotkey: str, address: str, returns: list[float], agent: bool = False, volume: float = 2e6) -> MinerInputs:
+    days = [f"d{i:03d}" for i in range(len(returns))]
     return MinerInputs(
         hotkey=hotkey,
         address=address,
         returns=returns,
         mean_equity_usd=50_000.0,
         avg_equity_usd=50_000.0,
-        staked_min_alpha=staked,
-        collateral_min_alpha=10.0,
         window_fills=window_fills(address),
+        credited_notional_prior_usd=volume,
+        dated_returns=dict(zip(days, returns, strict=True)),
+        agent_verified=agent,
     )
 
 
-def test_worked_example_through_score_day() -> None:
-    # two miners, $4M of taker volume each today; A strong and holding, B unskilled and sold out
-    strong = [0.015, -0.005, 0.01, 0.02, -0.01] * 12
-    flat = [0.01, -0.01] * 30
-    # B trades another coin: equal volume, no mirror pattern between the two
+def strong_record(seed: int) -> list[float]:
+    rnd = random.Random(seed)
+    return [rnd.gauss(0.004, 0.01) for _ in range(90)]
+
+
+def established(address: str, g: float) -> MinerState:
+    return MinerState(phi_hat=1000.0, fee_hat=2800.0, g=g, qualified=True, address=address)
+
+
+def test_worked_example_two_pools() -> None:
+    # equal volume today; A has a proven record, B none: the volume pool splits evenly, the skill pool goes to A
     fills = taker_fills(A, 40, 100_000.0) + taker_fills(B, 40, 100_000.0, coin="ETH")
-    # states carry a smoothed credit of $1,000 (as in the spec) and B has been paid 100 alpha it no longer holds
-    states = {
-        "hkA": MinerState(
-            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0,
-            fee_hat=2800.0,
-            g=0.65,
-            paid=(100.0,),
-            paid_days=((99, 100.0),),
-            qualified=True,
-            address=A,
-        ),
-        "hkB": MinerState(
-            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0,
-            fee_hat=2800.0,
-            g=0.0,
-            paid=(100.0,),
-            paid_days=((99, 100.0),),
-            qualified=True,
-            address=B,
-        ),
-    }
+    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.0)}
+    flat = [0.01, -0.01] * 45
     inputs = DayInputs(
-        day_index=100,
-        price_usd=5.33,
-        fills=fills,
-        states=states,
-        miners=[miner("hkA", A, strong, staked=100.0), miner("hkB", B, flat, staked=0.0)],
-    )
+        day_index=100, price_usd=5.0, fills=fills, states=states,
+        miners=[miner("hkA", A, strong_record(1)), miner("hkB", B, flat)],
+    )  # fmt: skip
     res = score_day(inputs, DEFAULT)
     ra, rb = res.records
-    assert ra.fees.credit == pytest.approx(1000.0) and rb.fees.credit == pytest.approx(1000.0)
-    assert ra.gates_pass and rb.gates_pass
-    assert ra.holding == 1.0 and rb.holding == 0.0
-    assert ra.skill > 0.9 and rb.skill == 0.0
-    assert ra.multiplier == pytest.approx(0.85 + 0.05 * ra.skill + 0.10)
-    assert rb.multiplier == pytest.approx(0.85)
-    assert rb.pay_alpha / ra.pay_alpha >= 0.85
-    assert rb.pay_alpha == pytest.approx(319.0, abs=1.0)
-    assert res.allocation.burn_alpha > 1600
+    pool = DEFAULT.miner_pool_alpha
+    assert ra.entry_pass and ra.skill_pool_reason is None and ra.skill_weight > 0
+    assert not rb.entry_pass and rb.skill_pool_reason == "entry test"
+    assert ra.volume_pay_alpha == pytest.approx(0.4 * pool) and rb.volume_pay_alpha == pytest.approx(0.4 * pool)
+    assert ra.skill_pay_alpha == pytest.approx(0.2 * pool) and rb.skill_pay_alpha == 0.0
+    assert res.allocation.paid_alpha == pytest.approx(pool) and res.allocation.burn_alpha == 0.0
     w = res.weights("burn")
-    assert sum(w.values()) == pytest.approx(1.0)
+    assert sum(w.values()) == pytest.approx(1.0) and "burn" not in w
     assert sum(to_u16(w).values()) == 65535
-    assert res.states["hkA"].paid[-1] == pytest.approx(ra.pay_alpha)
     last_day, last_pay = res.states["hkA"].paid_days[-1]
     assert last_day == 100 and last_pay == pytest.approx(ra.pay_alpha)
 
 
-def test_fresh_miner_starts_at_the_floor_and_smooths_in() -> None:
+def test_agent_bonus_is_ten_percent_more_skill_weight() -> None:
+    fills = taker_fills(A, 10, 100_000.0) + taker_fills(B, 10, 100_000.0, coin="ETH")
+    rec = strong_record(4)
+    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
+    other = strong_record(6)  # an independent record, not a copy
+    inputs = DayInputs(
+        day_index=5, price_usd=1.0, fills=fills, states=states,
+        miners=[miner("hkA", A, rec, agent=True), miner("hkB", B, other)],
+    )  # fmt: skip
+    ra, rb = score_day(inputs, DEFAULT).records
+    assert ra.agent_verified and ra.entry_pass and rb.entry_pass
+    assert ra.skill_weight / (1.1 * ra.skill_adjusted * ra.volume_factor) == pytest.approx(1.0)
+    assert ra.skill_weight == pytest.approx(1.1 * rb.skill_weight * ra.skill_adjusted / rb.skill_adjusted)
+
+
+def test_copies_share_one_skill_weight_through_the_day() -> None:
+    rec = strong_record(1)
+    fills = taker_fills(A, 10, 100_000.0) + taker_fills(B, 10, 100_000.0, coin="ETH")
+    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
+    inputs = DayInputs(
+        day_index=5, price_usd=1.0, fills=fills, states=states,
+        miners=[miner("hkA", A, rec), miner("hkB", B, list(rec))],
+    )  # fmt: skip
+    ra, rb = score_day(inputs, DEFAULT).records
+    assert ra.copy_group == ("hkA", "hkB") == rb.copy_group
+    assert ra.skill_weight + rb.skill_weight == pytest.approx(ra.skill_adjusted * ra.volume_factor)
+
+
+def test_fresh_miner_earns_volume_pay_but_not_yet_skill_pay() -> None:
     fills = taker_fills(A, 10, 10_000.0)
     inputs = DayInputs(
         day_index=0, price_usd=1.0, fills=fills, states={}, miners=[MinerInputs("hk", A, avg_equity_usd=20_000.0)]
     )
     res = score_day(inputs, DEFAULT)
     r = res.records[0]
-    assert not r.gates_pass and r.multiplier == 0.85
-    assert r.eligible and r.qualified
-    assert r.credited.fills == 8  # the first two trades qualify but earn nothing
+    assert r.eligible and r.qualified and r.credited.fills == 8  # the first two trades qualify but earn nothing
     assert res.states["hk"].phi_hat == pytest.approx(0.3 * r.credited.credit)
-    assert r.pay_alpha <= r.cap_alpha
+    assert r.skill_pool_reason == "activity gates" and r.skill_pay_alpha == 0.0
+    assert r.volume_pay_alpha == pytest.approx(DEFAULT.miner_pool_alpha)
 
 
 def test_mirrored_pair_loses_credit_and_is_reported() -> None:
@@ -132,29 +143,21 @@ def test_mirrored_pair_loses_credit_and_is_reported() -> None:
         price_usd=1.0,
         fills=fa + fb,
         states={"hkA": MinerState(qualified=True), "hkB": MinerState(qualified=True)},
-        miners=[
-            MinerInputs("hkA", A, staked_min_alpha=1.0, avg_equity_usd=1e6),
-            MinerInputs("hkB", B, avg_equity_usd=1e6),
-        ],
+        miners=[MinerInputs("hkA", A, avg_equity_usd=1e6), MinerInputs("hkB", B, avg_equity_usd=1e6)],
     )
     res = score_day(inputs, DEFAULT)
     for r in res.records:
         assert r.mirrored_share == pytest.approx(1.0)
-        assert r.credit_factor == pytest.approx(0.0) and r.reported
-        assert r.multiplier == 0.85 and r.pay_alpha == 0.0
+        assert r.credit_factor == pytest.approx(0.0) and r.reported and r.zeroed
+        assert r.pay_alpha == 0.0
     assert res.states["hkA"].is_zeroed(34) and not res.states["hkA"].is_zeroed(35)
-    assert res.allocation.burn_alpha == pytest.approx(DEFAULT.miner_pool_alpha)
+    assert res.allocation.burn_alpha == pytest.approx(DEFAULT.miner_pool_alpha)  # nobody has weight
 
 
 def test_cluster_self_matches_count_for_nothing() -> None:
     fills = taker_fills(A, 10, 10_000.0, cp=B)
     inputs = DayInputs(
-        day_index=0,
-        price_usd=1.0,
-        fills=fills,
-        states={},
-        miners=[MinerInputs("hk", A)],
-        cluster_of={A: "c", B: "c"},
+        day_index=0, price_usd=1.0, fills=fills, states={}, miners=[MinerInputs("hk", A)], cluster_of={A: "c", B: "c"}
     )
     res = score_day(inputs, DEFAULT)
     assert res.records[0].fees.fills == 0 and res.records[0].pay_alpha == 0.0
@@ -170,23 +173,14 @@ def test_spot_fills_count_for_nothing() -> None:
     assert res.records[0].fees.fills == 2 and res.records[0].fees.builder_fee == pytest.approx(5.0)
 
 
-def test_a_fresh_hotkey_cannot_shed_a_selling_record() -> None:
-    # a seller re-registers: the new hotkey holds only its collateral and has been paid nothing -> holding stays 0
+def test_a_penalty_that_follows_the_address_keeps_it_out_of_the_skill_pool() -> None:
     fills = taker_fills(A, 40, 100_000.0)
-    fresh = MinerInputs(
-        hotkey="hkNew",
-        address=A,
-        returns=[0.0] * 60,
-        mean_equity_usd=50_000.0,
-        staked_min_alpha=25.0,
-        collateral_min_alpha=25.0,
-        collateral_locked_alpha=25.0,
-        window_fills=window_fills(A),
+    m = miner("hkNew", A, strong_record(6))
+    states = {"hkNew": established(A, 0.65)}
+    res = score_day(
+        DayInputs(day_index=10, price_usd=1.0, fills=fills, states=states, miners=[m], penalized_until={A: 20}),
+        DEFAULT,
     )
-    res = score_day(DayInputs(day_index=10, price_usd=1.0, fills=fills, states={}, miners=[fresh]), DEFAULT)
-    assert res.records[0].holding == 0.0 and res.records[0].multiplier == pytest.approx(0.85)
-    # and a penalty that follows the address zeroes the new hotkey too
-    res2 = score_day(
-        DayInputs(day_index=10, price_usd=1.0, fills=fills, states={}, miners=[fresh], penalized_until={A: 20}), DEFAULT
-    )
-    assert res2.records[0].zeroed and res2.records[0].skill == 0.0
+    r = res.records[0]
+    assert r.zeroed and r.skill_pool_reason == "mirror penalty" and r.skill_pay_alpha == 0.0
+    assert r.volume_pay_alpha > 0  # the volume pool still pays its builder fees

@@ -13,8 +13,6 @@ from typing import Any
 import httpx
 from sqlalchemy import desc, func, select
 
-from kokoah_subnet.mechanism.params import BEST_REBATE_BPS
-
 from . import schema as S
 from .store import Store
 
@@ -72,13 +70,6 @@ def check(
         problems.append(f"{errors_24h} errors recorded in the last 24 h")
     if last_burn is not None and not last_burn[4] and not last_burn[1]:
         problems.append(f"last burn failed: {last_burn[3]}")
-    with store._engine.connect() as c:
-        deepest = c.execute(select(func.min(S.fee_rates.c.maker_bps))).scalar()
-    if deepest is not None and float(deepest) < -BEST_REBATE_BPS - 1e-9:
-        problems.append(
-            f"an address shows a maker rebate of {float(deepest):.2f} bps, deeper than the {BEST_REBATE_BPS} bps the "
-            "one law assumes: re-check the caps"
-        )
     # the fees credited to traders must all have reached the builder: never more than the exchange says it earned
     credited, earned = store.credited_builder_fees(), store.latest_builder_rewards()
     if earned is not None and credited > earned + 0.01:
