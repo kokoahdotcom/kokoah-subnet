@@ -75,6 +75,7 @@ key_events = Table(  # every store, restore and release, for the record
     Column("detail", Text),
 )
 CHALLENGE_TTL_S = 300
+MAX_KEY_COPY_CHARS = 512  # base64 of a key copy (a 64-byte ciphertext); anything bigger is not from a harness
 WRAP_MAGIC = b"KSW1"
 
 
@@ -257,6 +258,8 @@ def create_app(
     @app.put("/key-store/{address}")
     def store_key(address: str, body: StoredKey) -> dict[str, Any]:
         a = check_address(address)
+        if len(body.blob) > MAX_KEY_COPY_CHARS:
+            raise HTTPException(status_code=413, detail="not a key copy")
         try:
             blob = base64.b64decode(body.blob, validate=True)
         except ValueError as exc:
@@ -290,9 +293,17 @@ def create_app(
 
     @app.get("/key-store/{address}/challenge")
     def challenge(address: str) -> dict[str, str]:
+        """Only for an account whose copy is kept (and not released), so requests for made-up accounts leave
+        nothing behind; expired challenges are dropped on the way."""
         a = check_address(address)
+        with engine.connect() as c:
+            if kept(c, a)["released_at"] is not None:
+                raise HTTPException(status_code=410, detail="this key was released to the miner")
+        now = clock()
+        for stale in [k for k, (_, until) in challenges.items() if until < now]:
+            del challenges[stale]
         value = secrets.token_hex(32)
-        challenges[a] = (value, clock() + CHALLENGE_TTL_S)
+        challenges[a] = (value, now + CHALLENGE_TTL_S)
         return {"challenge": value}
 
     @app.post("/key-store/{address}/restore")

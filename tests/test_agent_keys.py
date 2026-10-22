@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import package, sha256_hex
-from kokoah_subnet.agent.keystore import KeyService, decrypt_key, encrypt_key, release_message
+from kokoah_subnet.agent.keystore import KeyService, decrypt_key, encrypt_key, release_message, store_digest
 from kokoah_subnet.agent.service import create_app, submit_message
 from kokoah_subnet.agent.supervisor import account_key
 from kokoah_subnet.binding import AgentRef, Binding
@@ -208,3 +208,21 @@ def test_the_service_adds_its_own_layer_and_a_stolen_database_alone_opens_nothin
     assert service(wrap).released() == []
     blob = service(wrap).release(address, t, "0x" + bytes(signed.signature).hex())
     assert decrypt_key(blob, address, SECRET) == key
+
+
+def test_made_up_requests_leave_nothing_behind_and_touch_no_real_copy(world: dict[str, Any]) -> None:
+    svc: TestClient = world["svc"]
+    keys: KeyService = world["keys"]
+    master = Account.create()
+    key = account_key(keys, world["machine"], SECRET, master.address, "5Hk", None)
+    address = Account.from_key(key).address.lower()
+    stranger = "0x" + "12" * 20
+    assert svc.get(f"/key-store/{stranger}/challenge").status_code == 404  # no copy kept: no challenge
+    fake = {"blob": base64.b64encode(b"KAK1" + bytes(60)).decode(), "master": master.address, "hotkey": "5Hk"}
+    assert svc.put(f"/key-store/{stranger}", json={**fake, "token": "made-up"}).status_code == 403
+    assert svc.put(f"/key-store/{stranger}", json={**fake, "blob": "A" * 4096, "token": "x"}).status_code == 413
+    # even a genuine machine cannot replace a kept copy
+    other = base64.b64decode(fake["blob"])
+    token = world["machine"].token([store_digest(address, master.address, other)])
+    assert svc.put(f"/key-store/{address}", json={**fake, "token": token}).status_code == 409
+    assert account_key(keys, world["machine"], SECRET, master.address, "5Hk", address) == key
