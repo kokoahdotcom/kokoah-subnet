@@ -22,6 +22,7 @@ validator/schema.py`; the tables, by what they answer:
 | What the validator submitted | `weights_submitted` (uids, values, block, result) |
 | What the operator burned | `burns` (per run of `owner burn`: staked, locked, burned, result) |
 | Agent accounts | `agent_checks` (each day's check of every agent account: endpoint, code fingerprint, result and reason, image digest, hardware, instance) |
+| The operator's agent service (its own database, not a validator's) | `agent_submissions` (every submitted bundle: hotkey, encrypted or not, code fingerprint, size, time), `agent_keys` (each agent account's key copy, encrypted with the miner's secret and wrapped with the service's key; hotkey, master, when stored and released), `agent_permits` (every start permission used, once each), `agent_key_events` (every store, restore and release) |
 | What went wrong | `errors` (day, hotkey, address, stage, message) |
 
 Conventions: `day` is the scored UTC day (YYYY-MM-DD); money is USD; alpha is in alpha, not rao; addresses are

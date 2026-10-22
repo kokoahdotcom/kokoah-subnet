@@ -2,7 +2,7 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, version 2.0, October 2026. Mechanism specification v6.0.
+Whitepaper, version 2.1, October 2026. Mechanism specification v6.0.
 
 ### Summary
 
@@ -116,10 +116,11 @@ trader can move to a new address once per 60 days and keep their track record, p
 credit and the qualification start again with the new address, as they do after a hotkey swap or a new registration.
 
 **Agent builders.** Write a trading agent (a small program with an `entry.py`), package it, optionally encrypted,
-and submit it to the operator's agent service, signed by the hotkey. Start Kokoah's published harness image in a
-sealed machine on their own cloud account; the machine fetches exactly that submission, creates the account's key
-inside itself, and signs the binding line with it. Fund the account, publish the binding with the machine's
-address, and the agent trades. The agent's code never leaves the machine in readable form if it was encrypted, and
+and submit it to the operator's agent service (`https://api.kokoah.com/miners`), signed by a registered hotkey.
+Make the machine's secret from a strong password and sign a start permission with the hotkey, both on their own
+computer. Start Kokoah's published harness image in a sealed machine on their own cloud account; the machine
+fetches exactly that submission, creates the account's key inside itself, and signs the binding line with it. Fund
+the account, publish the binding with the machine's address, and the agent trades. The agent's code never leaves the machine in readable form if it was encrypted, and
 nobody, the builder included, can trade the account by hand (section 6).
 
 **Validators.** Run the open-source validator with a hotkey and a database. It fetches public data, challenges the
@@ -227,8 +228,11 @@ or AMD SEV-SNP hardware, whose memory the cloud host cannot read and whose softw
 - **The account's key is born inside the machine.** The harness creates the Hyperliquid account's key inside the
   machine and never exports it. The exchange accepts only orders signed with that key, so nobody, the agent's author
   included, can trade the account by hand. A copy encrypted with a secret only the agent's owner holds is kept by
-  the operator's service, which cannot read it. If the machine stops, a new sealed machine started with the same
-  secret proves it is genuine and gets the copy back, so the account carries on as an agent. The owner can also
+  the operator's service, which cannot read it. The secret comes from a password the tool accepts only when it is
+  strong, stretched so that every guess is slow and costly; the service adds its own encryption over every copy,
+  so a stolen database opens nothing; and a copy is filed under a hotkey only with that hotkey's own signed
+  permission. If the machine stops, a new sealed machine started with the same secret proves it is genuine and gets
+  the copy back, so the account carries on as an agent. The owner can also
   take the key out themselves with a request signed by their own wallet; that is recorded publicly, and the account
   never earns the agent bonus again, since a person now holds its key.
 - **The agent runs in a sandbox.** The submitted code runs as a separate user, with no network at all: every
@@ -275,8 +279,9 @@ agents' attestation tokens signed by Google, and chain state. The operator's onl
 the day's file, committed on chain from the owner hotkey, which validators compare with the hash of the file they
 fetched themselves; a mismatch is published. The operator cannot add a fill, change a figure, pay a favorite,
 withhold a payment or declare an account an agent: any validator would compute a different result and the chain's
-consensus would show it. The agent service only stores submissions; validators compare the
-fingerprint the attested harness reports with the one committed on chain, not with anything the service says.
+consensus would show it. The agent service stores submissions and the machines' encrypted key copies and lists
+the released keys; validators compare the fingerprint the attested harness reports with the one committed on chain,
+not with anything the service says.
 
 Parameters are part of the versioned code. A change is announced at least seven days before it takes effect,
 recorded in the changelog (appendix F), and published in every daily artifact as the mechanism's version number.
@@ -325,16 +330,19 @@ which strategies without an edge took none of the skill reward. The data plane r
 exchange credits to the operator's builder, to the cent, with every row of the daily file matched and every
 history-only fill confirmed from the trader's own signed orders. The sealed-machine path end to end: submission,
 key creation, its encrypted copy, restore on a new machine and public release, the sandbox (no network, no access to other processes), orders through the harness with
-the builder code, and every validator check with each failure case; the harness image built and run with an
-example agent reading live market data through the harness. Two independent validators on the test network scored
-the same days with identical weights.
+the builder code, and every validator check with each failure case. The harness image is a reproducible build:
+two machines with different tool versions produced the same digest from the same commit. On a real Confidential
+Space machine with Intel TDX, through the public agent service: the service and a validator verified the
+Google-signed token of the approved image; the agent traded the exchange's test network with the builder code on
+every fill; a replacement machine restored the same account; a release ended its agent status; reused and forged
+start permissions were refused. Two independent validators on the test network scored the same days with
+identical weights.
 
 **Before mainnet.**
 
-1. An agent on a real Confidential Space machine: a Google-signed token from the released image verified by the
-   validator, and the cloud key service's condition on the image.
-2. An agent trading the exchange's test network through the harness: orders, cancels, leverage and a withdrawal.
-3. A month of real traders and agents on the test network: who passes the entry test, the copy groups, the volume
+1. A sealed-machine agent changing leverage and withdrawing to its owner's address on the test network (orders and
+   cancels are done).
+2. A month of real traders and agents on the test network: who passes the entry test, the copy groups, the volume
    competition.
 
 **Assumptions.** Each trader's own fill history is complete and names every builder fee but not the builder; the
@@ -348,10 +356,10 @@ Paying tokens for trading activity is subject to legal review in the operator's 
 
 Done: the scoring library with its tests, the validator with its record and interface, the binding flow, the data
 plane from the traders' own histories, eligibility, the two rewards, the sealed-machine agent harness with its
-sandbox, key handling, agent service and validator checks, and a test-network subnet with running validators.
+sandbox, key handling and validator checks, the released harness image run on a real sealed machine and approved,
+the agent service live at `https://api.kokoah.com/miners`, and a test-network subnet with running validators.
 
-Next: the released harness image on a real sealed machine and its digest approved; real traders and agents on the
-test network for at least a month; then mainnet, only after the verification list is complete and published, with
+Next: real traders and agents on the test network for at least a month; then mainnet, only after the verification list is complete and published, with
 the parameters the test-network period supports.
 
 Beyond the subnet itself, Kokoah's platform keeps adding AI assistance so that trading is easier for everyone: help
@@ -482,6 +490,10 @@ and `/` (the leaderboard page).
 
 ### Appendix F. Changelog
 
+- **2.1 (2026-10-22).** The harness image released (a reproducible build) and run on a real sealed machine with
+  Intel TDX; the agent service live at `https://api.kokoah.com/miners`, accepting code and key copies only from
+  registered hotkeys; the machine's secret made from a strength-checked password or at random; the service's own
+  encryption over every stored copy; a copy filed only with the hotkey's signed start permission.
 - **2.0 (2026-10-22).** Mechanism v6.0. The whole miner emission is paid out in two rewards: 80% by builder fees
   paid, 20% by proven skill (a 90-day entry test at 95% confidence, a luck floor, participation capped at $1M of
   volume over 30 days, and a copy rule); the fee caps, the burn of the unawarded remainder and the holding factor

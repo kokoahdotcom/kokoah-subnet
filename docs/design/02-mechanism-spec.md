@@ -67,7 +67,7 @@ and the whole emission paid to miners every day.
 
 Only the bound address's Hyperliquid data is used: perpetual fills with the Kokoah builder code (credit), the
 address's daily account value and flows (skill), the hotkey's stake (holding). Fills without the builder code count
-for nothing. **Perpetuals only (owner, 2026-10-21):** the app's builder code also rides on spot orders, where the
+for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
 exchange charges it on sells; spot fills (pairs like `PURR/USDC` or index names like `@107`) are recorded but never
 counted, in this version. No other platform is ever read.
 
@@ -454,7 +454,7 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
 
 **Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
 packages it imports inside), optionally encrypted with a key only the miner holds, and submits it to the owner's
-service signed by the hotkey (`agent submit`; one submission per hotkey per 12 hours). The machine fetches exactly
+service signed by a registered hotkey (`agent submit`; one submission per hotkey per 12 hours). The machine fetches exactly
 that submission, checks its id, decrypts it inside, and computes the **code fingerprint** (sha256 of the zip).
 
 **Binding.** The machine signs the subnet binding line with the account's key; the miner publishes it with an
@@ -492,5 +492,6 @@ miner's own hardware is not accepted (the token must be Google's).
    confirmed by its own order's builder field, and the earnings check (§3). The public per-user API keeps 10,000 fills per address.
 3. The TAO/USD mark for `p_d`: the day's mean of the exchange's TAO perpetual; a configured value is the fallback.
 4. The buyback path (USDC on Hyperliquid → TAO → `add_stake_burn`) and its publication.
-5. Agents need a released harness image (for example on Docker Hub) whose digest is added to the approved list.
+5. Resolved 2026-10-22: the harness image is released (`docker.io/kokoahdotcom/kokoah-subnet-agent`, a reproducible
+   build), run on a real Intel TDX machine and approved in `src/kokoah_subnet/agent/images.py`.
 6. Legal review of paying tokens for trading (pending for the app).

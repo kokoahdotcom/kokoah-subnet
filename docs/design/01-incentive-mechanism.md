@@ -50,7 +50,9 @@ A miner can run an agent: their trading code inside a sealed cloud machine runni
 creates the trading account's key inside itself and never lets it out, so nobody, the miner included, can trade
 that account by hand. The agent has no internet; it can only ask the harness to place orders, which always carry
 Kokoah's fee. Every validator checks, every day, the cloud provider's signed proof that the machine runs the approved
-harness with the code the miner committed to. A verified agent gets 10% more weight in the skill reward.
+harness with the code the miner committed to. A verified agent gets 10% more weight in the skill reward. The machine
+keeps a copy of the key with Kokoah, locked twice: with the miner's own secret (from a password the tool only accepts
+when it is strong) and with Kokoah's own key; only the miner's hotkey can file it, with a signed permission.
 
 ## Where the trades come from
 
@@ -76,5 +78,5 @@ own record.
 
 ## Still open
 
-An agent on a real sealed cloud machine with the released image; a month of real traders and agents on testnet;
-legal review.
+An agent changing leverage and withdrawing from a real sealed machine (its orders, cancels, restore and release ran
+on real Intel TDX on 2026-10-22); a month of real traders and agents on testnet; legal review.

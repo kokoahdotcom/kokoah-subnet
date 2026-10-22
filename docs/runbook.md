@@ -123,7 +123,8 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
 - A harness release: commit, `deploy/agent/build.sh <commit>` (a reproducible build from a clean export of the
   commit; it prints the digest), `docker push docker.io/kokoahdotcom/kokoah-subnet-agent:<tag>`, run it once on a
   real sealed machine, add the digest with its commit to `src/kokoah_subnet/agent/images.py`, release the
-  validator; validators accept the new image once they update. Anyone can rebuild the commit and compare digests.
+  validator and restart the agent service (both read the approved list at start); validators accept the new image
+  once they update. Anyone can rebuild the commit and compare digests.
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
 
