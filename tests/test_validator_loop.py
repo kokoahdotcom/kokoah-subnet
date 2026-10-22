@@ -22,7 +22,7 @@ HK_A, HK_B, OWNER, BURN = "hkA", "hkB", "hkOwner", "hkBurn"
 EQUITY: dict[str, float] = {}  # address -> recorded account value in the fake history (default $25,000)
 PORTFOLIO_FAILS: set[str] = set()  # addresses whose history read fails
 HISTORY: dict[str, list[dict[str, Any]]] = {}  # address -> extra fills in its own history (not in the builder file)
-APPROVED: dict[str, list[str]] = {}  # address -> approved builders (default: only the scored builder)
+OTHER_BUILDER: set[str] = set()  # addresses whose history-only orders paid another builder
 EARNED = {"builderRewards": "100000"}
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
@@ -114,8 +114,24 @@ def _csv(addr_a: str, addr_b: str) -> str:
 def _info_handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     t = body["type"]
-    if t == "approvedBuilders":
-        return httpx.Response(200, json=APPROVED.get(body["user"].lower(), ["0xbuilder"]))
+    if t == "userDetails":
+        user = body["user"].lower()
+        txs = [
+            {
+                "hash": f"0xtx{r['tid']}",
+                "user": user,
+                "error": None,
+                "action": {
+                    "type": "order",
+                    "orders": [{"c": r["cloid"]}] if r.get("cloid") else [{"a": 0}],
+                    "builder": {"b": "0xother" if user in OTHER_BUILDER and r["tid"] >= 1000 else "0xbuilder", "f": 25},
+                },
+            }
+            for r in HISTORY.get(user, [])
+        ]
+        return httpx.Response(200, json={"type": "userDetails", "txs": txs})
+    if t == "txDetails":
+        return httpx.Response(200, json={"type": "txDetails", "tx": {}})
     if t == "referral":
         return httpx.Response(200, json=dict(EARNED))
     if t == "userFillsByTime" and body["user"].lower() in HISTORY and body.get("startTime") == DAY_MS:
@@ -182,7 +198,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     EQUITY.clear()
     PORTFOLIO_FAILS.clear()
     HISTORY.clear()
-    APPROVED.clear()
+    OTHER_BUILDER.clear()
     EARNED["builderRewards"] = "100000"
     a, b = Account.create(), Account.create()
     cfg = ValidatorConfig(
@@ -411,7 +427,7 @@ def _history_of_file_fills(offset_ms: int = 321) -> list[dict[str, Any]]:
                 "fee": "35",
                 "builderFee": "12.5",
                 "tid": 1 + i,
-                "cloid": KO,
+                "cloid": KO[:-4] + f"{i:04x}",
                 "closedPnl": "0",
             }
         )
@@ -429,7 +445,7 @@ def _history_of_file_fills(offset_ms: int = 321) -> list[dict[str, Any]]:
                 "fee": "35",
                 "builderFee": "12.5",
                 "tid": 1000 + i,
-                "cloid": KO,
+                "cloid": KO[:-4] + f"{1000 + i:04x}",
                 "closedPnl": "0",
             }
         )
@@ -451,7 +467,7 @@ async def test_fills_after_midday_count_from_the_traders_own_history(tmp_path: P
         earned = c.execute(S.builder_rewards.select()).all()
     sources = sorted(r.source for r in rows)
     assert sources.count("both") == 20 and sources.count("history") == 4
-    assert all(r.tid is not None and r.cloid == KO for r in rows)
+    assert all(r.tid is not None and r.cloid.startswith(KO[:-4]) for r in rows)
     assert len(earned) == 1 and earned[0].builder_rewards == 100000.0
     await hl.close()
 
@@ -490,14 +506,16 @@ async def test_credited_fees_beyond_what_the_builder_earned_raise_the_alarm(tmp_
     await hl.close()
 
 
-async def test_another_approved_builder_needs_our_order_marker(tmp_path: Path) -> None:
+async def test_an_order_that_paid_another_builder_is_not_counted(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
-    hist = _history_of_file_fills()
-    for r in hist[20:22]:
-        r["cloid"] = None  # two afternoon fills from another app
-    HISTORY[addr_a] = hist
-    APPROVED[addr_a] = ["0xbuilder", "0xother"]
+    HISTORY[addr_a] = _history_of_file_fills()
+    OTHER_BUILDER.add(addr_a)  # the four afternoon orders carried someone else's builder code
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     ra = next(r for r in result.records if r.hotkey == HK_A)
-    assert ra.fees.fills == 22  # the 20 the file confirms and the 2 with our marker at our rate
+    assert ra.fees.fills == 20  # only the fills the file confirms
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        stages = [r.stage for r in c.execute(S.errors.select()).all()]
+    assert "builder" in stages
     await hl.close()

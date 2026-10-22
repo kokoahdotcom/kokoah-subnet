@@ -16,6 +16,7 @@ import httpx
 from kokoah_subnet.mechanism.fills import Fill, parse_user_fills
 
 MAINNET_INFO = "https://api.hyperliquid.xyz/info"
+MAINNET_EXPLORER = "https://rpc.hyperliquid.xyz/explorer"
 PAGE = 2000  # fills per response; the API keeps the most recent 10,000 per address
 
 # request weights per info type (the exchange budgets 1,200 weight per minute per address; documented values,
@@ -64,8 +65,10 @@ class HyperliquidInfo:
         rate_limit_s: float = 0.0,
         budget_per_minute: int = 1000,
         concurrency: int = 6,
+        explorer_url: str = MAINNET_EXPLORER,
     ) -> None:
         self._url = url
+        self._explorer = explorer_url
         self._client = httpx.AsyncClient(timeout=timeout_s)
         self._gap = rate_limit_s
         self._limiter = RateLimiter(budget_per_minute)
@@ -74,14 +77,18 @@ class HyperliquidInfo:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def post(self, body: Mapping[str, Any], attempts: int = 4) -> Any:
+    async def explorer(self, body: Mapping[str, Any], attempts: int = 4) -> Any:
+        """The explorer endpoint (`userDetails`: an address's own transactions; `txDetails`: one transaction)."""
+        return await self.post(body, attempts, url=self._explorer)
+
+    async def post(self, body: Mapping[str, Any], attempts: int = 4, url: str | None = None) -> Any:
         last: Exception | None = None
         weight = WEIGHTS.get(str(body.get("type")), 20)
         for attempt in range(attempts):
             await self._limiter.acquire(weight)
             async with self._sem:
                 try:
-                    r = await self._client.post(self._url, json=dict(body))
+                    r = await self._client.post(url or self._url, json=dict(body))
                     if r.status_code == 429 or r.status_code >= 500:
                         raise httpx.HTTPStatusError(f"status {r.status_code}", request=r.request, response=r)
                     r.raise_for_status()

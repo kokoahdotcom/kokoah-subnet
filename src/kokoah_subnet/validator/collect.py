@@ -32,7 +32,7 @@ from kokoah_subnet.mechanism import (
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
 from kokoah_subnet.mechanism.eligibility import daily_average_equity, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
-from kokoah_subnet.mechanism.fills import assign_counterparties, merge_sources
+from kokoah_subnet.mechanism.fills import assign_counterparties, builder_orders, confirm_builder, merge_sources
 
 from .agents import check_agents
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
@@ -161,10 +161,20 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
     }
 
 
-async def approved_builders(hl: HyperliquidInfo, user: str) -> set[str]:
-    """The builders the address has approved to charge it a fee (`approvedBuilders`), lowercase."""
-    result = await hl.post({"type": "approvedBuilders", "user": user})
-    return {str(b).lower() for b in (result or [])}
+async def confirmed_builder_orders(
+    hl: HyperliquidInfo, user: str, builder: str, taker_hashes: set[str]
+) -> tuple[set[str], set[str]]:
+    """The client order ids and transaction hashes of `user`'s orders that carried `builder`: from the address's
+    own transactions, and for taker fills not found there, from the transaction that placed and filled them."""
+    details = await hl.explorer({"type": "userDetails", "user": user})
+    cloids, hashes = builder_orders(details.get("txs", []) if isinstance(details, dict) else [], builder)
+    for h in sorted(taker_hashes - hashes):
+        tx = (await hl.explorer({"type": "txDetails", "hash": h})).get("tx") or {}
+        if str(tx.get("user", "")).lower() == user.lower():
+            more_cloids, more_hashes = builder_orders([tx], builder)
+            cloids |= more_cloids
+            hashes |= more_hashes
+    return cloids, hashes
 
 
 async def builder_rewards(hl: HyperliquidInfo, builder: str) -> dict[str, float]:
@@ -389,12 +399,21 @@ async def collect_and_score(
         # of the day); without it the day cannot be scored correctly, so a failed read fails the day (retried hourly)
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
-            approved = await approved_builders(hl, address)
+            merged = merge_sources(own, public, params.builder_fee_rate)
+            candidates = [f for f in merged if f.source == "history"]
+            if candidates:
+                # the history does not name the builder: each candidate's order must be one the address signed
+                # with Kokoah's builder (its own transactions on the explorer)
+                takers = {f.hash for f in candidates if f.crossed and f.hash}
+                cloids, hashes = await confirmed_builder_orders(hl, address, builder, takers)
+                merged, refused = confirm_builder(merged, cloids, hashes)
+                if refused:
+                    store.put_error(
+                        day, hk, address, "builder", f"{len(refused)} history fills not confirmed as Kokoah orders"
+                    )
         except Exception as exc:
             store.put_error(day, hk, address, "fill history", str(exc))
             raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
-        only_ours = approved == {builder}
-        merged = merge_sources(own, public, only_ours, params.builder_fee_rate)
         history_only = [f for f in merged if f.source == "history"]
         file_only = [f for f in merged if f.source == "file"]
         if file_only:
@@ -402,12 +421,11 @@ async def collect_and_score(
                 day, hk, address, "fill history", f"{len(file_only)} file fills not in the history (beyond its reach)"
             )
         log.info(
-            "%s: %d builder fills (%d from the history only, %d from the file only), approved builders %s",
+            "%s: %d builder fills (%d from the history only, %d from the file only)",
             address,
             len(merged),
             len(history_only),
             len(file_only),
-            sorted(approved),
         )
         own = merged
         for f in public:

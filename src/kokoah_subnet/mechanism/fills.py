@@ -39,6 +39,7 @@ class Fill:
     tid: int | None = None  # the exchange's trade id, shared by both sides of a trade (history fills only)
     cloid: str | None = None  # the client order id (history fills only)
     source: str = "file"  # "file" (builder file only), "history" (the address's own history only), "both"
+    hash: str | None = None  # the transaction that produced the fill (history fills only)
 
     @property
     def notional(self) -> float:
@@ -132,6 +133,7 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
         builder = float(r.get("builderFee") or 0.0)
         tid = r.get("tid")
         cloid = r.get("cloid")
+        tx = r.get("hash")
         out.append(
             Fill(
                 time_ms=int(r["time"]),
@@ -148,6 +150,7 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
                 tid=int(tid) if tid is not None else None,
                 cloid=str(cloid).lower() if cloid else None,
                 source="history",
+                hash=str(tx).lower() if tx else None,
             )
         )
     return out
@@ -168,36 +171,66 @@ def match_total_fees(builder_fills: Sequence[Fill], user_fills: Sequence[Fill]) 
     return out
 
 
-KOKOAH_CLOID_MARKER = "0x6b6f"  # Kokoah's order ids start with ASCII "ko" (kokoah-shared, actions/cloid.ts)
+def history_candidate(f: Fill, rate: float) -> bool:
+    """A fill seen only in the address's own history may be a builder fill when it paid a builder fee of at most the
+    configured rate. The history does not name the builder, so a candidate counts only once its order is confirmed
+    to carry the scored builder (`confirm_builder`)."""
+    return f.builder_fee > 0 and f.builder_fee <= f.notional * rate * (1 + 1e-4) + 2e-6
 
 
-def is_builder_rate(f: Fill, rate: float) -> bool:
-    """The fill's builder fee is the configured rate of its notional (the exchange rounds fees to 6 decimals)."""
-    expected = f.notional * rate
-    return f.builder_fee > 0 and abs(f.builder_fee - expected) <= 2e-6 + 1e-4 * expected
+def confirm_builder(
+    fills: Sequence[Fill], builder_cloids: set[str], builder_hashes: set[str]
+) -> tuple[list[Fill], list[Fill]]:
+    """(confirmed, refused): history-only fills whose order the address signed with the scored builder, by client
+    order id (from the address's own transactions) or by the transaction that placed and filled it (a taker fill).
+    Fills from the file are confirmed by the file itself."""
+    keep: list[Fill] = []
+    refused: list[Fill] = []
+    for f in fills:
+        if f.source != "history":
+            keep.append(f)
+        elif (f.cloid and f.cloid in builder_cloids) or (f.hash and f.hash in builder_hashes):
+            keep.append(f)
+        else:
+            refused.append(f)
+    return keep, refused
 
 
-def history_counts(f: Fill, only_builder_approved: bool, rate: float) -> bool:
-    """Whether a fill seen only in the address's own history is a fill through the builder. The history carries the
-    builder fee but not the builder's address. The exchange charges a builder fee only for a builder the user has
-    approved, so when the scored builder is the only approved one, every builder fee is its own (at no more than
-    the configured rate). Otherwise the fill must also carry Kokoah's order marker and exactly the configured rate."""
-    if f.builder_fee <= 0:
-        return False
-    if only_builder_approved:
-        return f.builder_fee <= f.notional * rate * (1 + 1e-4) + 2e-6
-    return bool(f.cloid and f.cloid.startswith(KOKOAH_CLOID_MARKER)) and is_builder_rate(f, rate)
+def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> tuple[set[str], set[str]]:
+    """From an address's own transactions (the explorer's `userDetails`): the client order ids of orders it placed
+    with `builder`, and the hashes of those order transactions. A client order id that was later modified is left
+    out (a modify carries no builder field)."""
+    b = builder.lower()
+    cloids: set[str] = set()
+    hashes: set[str] = set()
+    modified: set[str] = set()
+    for tx in transactions:
+        action = tx.get("action") or {}
+        kind = action.get("type")
+        if tx.get("error"):
+            continue
+        if kind == "order" and str((action.get("builder") or {}).get("b", "")).lower() == b:
+            hashes.add(str(tx.get("hash", "")).lower())
+            cloids.update(str(o["c"]).lower() for o in action.get("orders", []) if o.get("c"))
+        elif kind in ("modify", "batchModify"):
+            mods = action.get("modifies") or [action]
+            for m in mods:
+                order = m.get("order") or {}
+                if order.get("c"):
+                    modified.add(str(order["c"]).lower())
+                if isinstance(m.get("oid"), str):
+                    modified.add(str(m["oid"]).lower())
+    return cloids - modified, hashes
 
 
-def merge_sources(
-    file_fills: Sequence[Fill], history: Sequence[Fill], only_builder_approved: bool, rate: float
-) -> list[Fill]:
+def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: float) -> list[Fill]:
     """One address's builder fills for a day from both sources (specification section 3).
 
     The exchange's per-builder daily file is incomplete (it has held about the first twelve hours of each UTC day),
     so the address's own fill history is the primary source. A fill in both is taken from the history (exact time,
     total fee, trade id) with the file's counterparty and builder fee; a fill only in the file is kept as it is
-    (beyond the history's 10,000-fill reach); a fill only in the history counts when `history_counts` says so."""
+    (beyond the history's 10,000-fill reach); a fill only in the history is kept as a candidate when it paid a
+    builder fee within the rate (`history_candidate`), to be confirmed by `confirm_builder`."""
     pool: dict[tuple[str, str, int, float, float, str], list[Fill]] = {}
     for f in file_fills:
         pool.setdefault(f.match_key(), []).append(f)
@@ -207,7 +240,7 @@ def merge_sources(
         if matches:
             fl = matches.pop(0)
             out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
-        elif history_counts(h, only_builder_approved, rate):
+        elif history_candidate(h, rate):
             out.append(h)
     out.extend(f for fs in pool.values() for f in fs)
     return sorted(out, key=lambda x: (x.time_ms, x.coin, x.side, x.px, x.sz))

@@ -7,7 +7,9 @@ from kokoah_subnet.mechanism import DEFAULT, Fill, MinerState
 from kokoah_subnet.mechanism.day import DayInputs, MinerInputs, score_day
 from kokoah_subnet.mechanism.fills import (
     assign_counterparties,
-    history_counts,
+    builder_orders,
+    confirm_builder,
+    history_candidate,
     match_total_fees,
     merge_sources,
     parse_user_fills,
@@ -17,6 +19,7 @@ A = "0xaaaa000000000000000000000000000000000001"
 B = "0xbbbb000000000000000000000000000000000002"
 T0 = 1792454400000 + 15 * 3_600_000  # 2026-10-20 15:00 UTC, after the file's cut
 RATE = DEFAULT.builder_fee_rate
+BUILDER = "0x43ccc0618e4358494f87a4b8699230203dc4ab67"
 KO = "0x6b6f0101" + "ab" * 12
 
 
@@ -64,7 +67,7 @@ def test_merge_takes_history_details_keeps_file_counterparty_and_file_only_fills
     in_both = hist(T0 + 731, bf=0.25, tid=7)
     afternoon = hist(T0 + 3_600_000, bf=0.25, tid=8)  # not in the file: the file stops near midday
     beyond = filed(T0 - 7_200_000, cp="0xbeef")  # in the file only (the history's reach is 10,000 fills)
-    out = merge_sources([filed(T0, cp="0xfeed"), beyond], [in_both, afternoon], True, RATE)
+    out = merge_sources([filed(T0, cp="0xfeed"), beyond], [in_both, afternoon], RATE)
     by_source = {f.source: f for f in out}
     assert set(by_source) == {"both", "history", "file"}
     assert by_source["both"].counterparty == "0xfeed" and by_source["both"].tid == 7
@@ -73,18 +76,33 @@ def test_merge_takes_history_details_keeps_file_counterparty_and_file_only_fills
     assert [f.time_ms for f in out] == sorted(f.time_ms for f in out)
 
 
-def test_which_history_only_fills_count() -> None:
+def test_history_candidates_and_their_confirmation() -> None:
     fee = 100.0 * 10.0 * RATE
-    # only our builder approved: every builder fee is ours (up to the configured rate)
-    assert history_counts(hist(T0, bf=fee, cloid=None), True, RATE)
-    assert history_counts(hist(T0, bf=fee / 2, cloid=None), True, RATE)  # a lower (promotional) fee
-    assert not history_counts(hist(T0, bf=fee * 2, cloid=None), True, RATE)  # more than we charge: not ours
-    assert not history_counts(hist(T0, bf=None), True, RATE)  # no builder fee: not a builder fill
-    # another builder approved too: our order marker and exactly our rate
-    assert history_counts(hist(T0, bf=fee), False, RATE)
-    assert not history_counts(hist(T0, bf=fee, cloid=None), False, RATE)
-    assert not history_counts(hist(T0, bf=fee, cloid="0x12345678" + "00" * 12), False, RATE)
-    assert not history_counts(hist(T0, bf=fee * 0.8), False, RATE)
+    assert history_candidate(hist(T0, bf=fee), RATE) and history_candidate(hist(T0, bf=fee / 2), RATE)
+    assert not history_candidate(hist(T0, bf=fee * 2), RATE)  # more than Kokoah charges
+    assert not history_candidate(hist(T0, bf=None), RATE)  # no builder fee at all
+    ours, theirs, untagged = "0x6b6f0101" + "aa" * 12, "0x6b6f0101" + "bb" * 12, None
+    txs = [
+        {"hash": "0xh1", "action": {"type": "order", "orders": [{"c": ours}], "builder": {"b": BUILDER, "f": 25}}},
+        # a look-alike order id on an order that paid someone else's builder
+        {"hash": "0xh2", "action": {"type": "order", "orders": [{"c": theirs}], "builder": {"b": "0xself", "f": 25}}},
+        {"hash": "0xh3", "action": {"type": "order", "orders": [{"a": 0}], "builder": {"b": BUILDER, "f": 25}}},
+    ]
+    cloids, hashes = builder_orders(txs, BUILDER)
+    assert cloids == {ours} and hashes == {"0xh1", "0xh3"}
+    fills = [hist(T0, bf=fee, cloid=ours), hist(T0 + 1, bf=fee, cloid=theirs), hist(T0 + 2, bf=fee, cloid=untagged)]
+    fills[2] = fills[2].__class__(**{**fills[2].__dict__, "hash": "0xh3"})  # a taker fill of an untagged order
+    keep, refused = confirm_builder(fills, cloids, hashes)
+    assert [f.cloid for f in keep] == [ours, None] and [f.cloid for f in refused] == [theirs]
+
+
+def test_a_modified_order_is_not_confirmed() -> None:
+    c = "0x6b6f0101" + "cc" * 12
+    txs = [
+        {"hash": "0xa", "action": {"type": "order", "orders": [{"c": c}], "builder": {"b": BUILDER, "f": 25}}},
+        {"hash": "0xb", "action": {"type": "modify", "oid": 5, "order": {"c": c}}},
+    ]
+    assert builder_orders(txs, BUILDER)[0] == set()
 
 
 def test_trade_ids_name_the_counterparty() -> None:
