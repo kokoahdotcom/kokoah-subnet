@@ -6,6 +6,7 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Bittensor 11](https://img.shields.io/badge/bittensor-11.3.0-black)
 ![Status: testnet](https://img.shields.io/badge/status-testnet-orange)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Kokoah Subnet turns real trading into a Bittensor subnet. Its miners are traders, and trading agents, who trade
 Hyperliquid perpetuals through [Kokoah](https://kokoah.com). Every routed order carries Kokoah's builder code, so
@@ -14,6 +15,15 @@ miner every day from public data alone: the trader's own fills and account histo
 
 The result is a subnet whose activity is real economic activity: capital and trading revenue flowing into
 Bittensor, measured openly and paid by rules anyone can check.
+
+## Get started
+
+| I want to | Guide |
+|---|---|
+| **Mine**: earn by trading Hyperliquid perpetuals through Kokoah | [Miner guide](docs/miners.md) |
+| **Validate**: score miners and set weights | [Validator guide](docs/validators.md) |
+| **Build an agent**: trade with my own code in a sealed machine | [Agent guide](docs/agents.md) |
+| **Understand the design** | [Whitepaper](docs/whitepaper.md) |
 
 ## How it works
 
@@ -82,17 +92,19 @@ agent harness has run end to end on a real Intel TDX machine. Mainnet follows th
 
 | Document | What it covers |
 |---|---|
+| [Miner guide](docs/miners.md) | Registering, linking an account, what counts, eligibility, pay, status |
+| [Validator guide](docs/validators.md) | Setup, configuration, the daily cycle, the interface, monitoring, upgrades |
+| [Agent guide](docs/agents.md) | Writing, submitting and running a trading agent in a sealed machine |
 | [Whitepaper](docs/whitepaper.md) | The subnet, its incentives and its guarantees |
 | [Mechanism specification](docs/design/02-mechanism-spec.md) | Every formula, parameter and edge case |
 | [The mechanism in plain words](docs/design/01-incentive-mechanism.md) | The same rules, without the math |
-| [Runbook](docs/runbook.md) | Running a validator, binding a miner, the operator's duties |
-| [Agent guide](docs/agents.md) | Writing, submitting and running a trading agent |
+| [Runbook](docs/runbook.md) | Operations: services, dashboards, the operator's duties |
 | [Binding from the app](docs/app-binding.md) | How a Kokoah trader becomes a miner |
 | [The validator's record](docs/database.md) | Every table a validator keeps, with example queries |
 
-## Getting started
+## Development
 
-Requires Python 3.12, [uv](https://docs.astral.sh/uv/) and Docker (for the local chain).
+Requires Python 3.12, [uv](https://docs.astral.sh/uv/) and Docker (for the local chain and the record).
 
 ```bash
 uv sync                                    # install from the lock file
@@ -101,7 +113,7 @@ uv run kokoah-subnet verify                # the specification's numerical check
 uv run kokoah-subnet --help                # miner, agent, validator and operator commands
 ```
 
-To run a validator, follow the [runbook](docs/runbook.md).
+To mine, follow the [miner guide](docs/miners.md); to run a validator, the [validator guide](docs/validators.md).
 
 ## Repository layout
 
@@ -122,3 +134,7 @@ tests/           offline tests
 
 Please report vulnerabilities privately through this repository's GitHub security advisories rather than in a
 public issue.
+
+## License
+
+[MIT](LICENSE)
