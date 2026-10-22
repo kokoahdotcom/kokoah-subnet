@@ -1,68 +1,124 @@
-# kokoah-subnet
+# Kokoah Subnet
 
-A Bittensor subnet built by the Kokoah team, kept separate from the Kokoah trading app. Miners are traders who
-trade Hyperliquid perpetuals through the Kokoah builder code; validators score them from public data. This repo
-holds the whitepaper, the mechanism specification, the research behind it, and the validator and scoring code.
+**Verified trading activity on Hyperliquid, as a Bittensor subnet.**
 
-- `docs/whitepaper.md`: the public description of the subnet and its incentive mechanism.
-- `docs/runbook.md`: how to run a validator, how a miner binds an address, what the operator does.
-- `docs/database.md`: the record every validator keeps (PostgreSQL via `scripts/db.sh`, SQLite for tests).
-- `docs/app-binding.md`: what the application does so a trader becomes a miner; `docs/agents.md`: how to run a
-  trading agent in a sealed machine; `docs/mainnet-checklist.md`: the owner's go-live steps.
-- `src/kokoah_subnet/agent/` and `deploy/agent/`: the sealed-machine harness (trusted, holds the account key),
-  the agent sandbox, attestation, key wrapping and the owner's agent service (`kokoah-subnet agent ...`).
-- The validator's read-only interface (`kokoah-subnet validator serve`, port 48100) serves the daily artifacts,
-  the bindings, a summary and the leaderboard page at `/`.
-- `docs/design/02-mechanism-spec.md`: the complete formal specification (every formula and parameter);
-  `01-incentive-mechanism.md` says the same in plain words.
-- `scripts/verify_mechanism.py`: numerical verification of the specification's claims (`uv run python
-  scripts/verify_mechanism.py`); `scripts/sim_skill.py` is the simulation behind
-  the calibration.
+[![CI](https://github.com/kokoahdotcom/kokoah-subnet/actions/workflows/ci.yml/badge.svg)](https://github.com/kokoahdotcom/kokoah-subnet/actions/workflows/ci.yml)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+![Bittensor 11](https://img.shields.io/badge/bittensor-11.3.0-black)
+![Status: testnet](https://img.shields.io/badge/status-testnet-orange)
 
-- The maintainer's status notes and working rules are kept locally, outside this repository.
-- Stack: Python 3.12, [uv](https://docs.astral.sh/uv/), Bittensor SDK 11 (`bittensor==11.3.0`, which ships `btcli`),
-  FastAPI and httpx for the hotkey-signed HTTP between validators and miners (`btauth/1`).
+Kokoah Subnet turns real trading into a Bittensor subnet. Its miners are traders, and trading agents, who trade
+Hyperliquid perpetuals through [Kokoah](https://kokoah.com). Every routed order carries Kokoah's builder code, so
+every trade pays a small, public fee, and those fees buy back and burn the subnet's token. Validators score each
+miner every day from public data alone: the trader's own fills and account history on Hyperliquid, and the chain.
 
-## Setup
+The result is a subnet whose activity is real economic activity: capital and trading revenue flowing into
+Bittensor, measured openly and paid by rules anyone can check.
+
+## How it works
+
+```mermaid
+flowchart LR
+    T[Traders and agents<br/>hotkey + Hyperliquid account] -->|orders with Kokoah's builder code| H[Hyperliquid]
+    H -->|public fills and account history| V[Validators]
+    C[Bittensor chain<br/>bindings, stake, metagraph] --> V
+    V -->|daily scores, weights every tempo| C
+    C -->|emission| T
+    H -->|builder fees| K[Kokoah]
+    K -->|buy back and burn| C
+```
+
+1. **Bind.** A trader links a Hyperliquid account to a registered hotkey, with a signature from that account.
+2. **Trade.** Every fill through the Kokoah builder code counts. Nothing else does.
+3. **Score.** Each day, every validator independently reads the public record and computes the same scores.
+4. **Pay.** Validators set weights; the chain pays the miners' emission accordingly.
+
+## Rewards at a glance
+
+| | Share | Earned by |
+|---|---|---|
+| **Volume reward** | 80% | The builder fees each eligible trader paid, smoothed over recent days |
+| **Skill reward** | 20% | A proven record: risk-adjusted returns that pass a 90-day statistical test, so luck does not pay |
+
+- **Eligibility.** An account takes part on days its average account value is at least $10,000 and after it has
+  made three qualifying trades.
+- **Agents.** Trading agents that run in a verified sealed machine earn 10% more skill weight.
+- **Fairness.** Splitting one account into many earns nothing extra; copies of one strategy share one weight;
+  wash trading between bound accounts does not count.
+- **Paid out in full.** The whole miner emission goes to miners each day; only a day with no eligible miner at
+  all goes to the burn address.
+
+The [whitepaper](docs/whitepaper.md) explains the design; the [specification](docs/design/02-mechanism-spec.md)
+gives every formula and parameter.
+
+## Trading agents
+
+A miner can trade with an agent: their own code running in a **sealed machine** (Google Cloud Confidential Space on
+Intel TDX or AMD SEV-SNP) started from Kokoah's published, reproducible harness image. The machine creates the
+trading account's key inside itself, so nobody, the miner included, can trade that account by hand. The agent runs
+in a sandbox with no network; every order it places carries the Kokoah builder code. Each day every validator
+checks Google's signed proof of the exact machine image and code before counting the account as an agent.
+
+Miners submit agent code and their machines keep an encrypted copy of the key at
+`https://api.kokoah.com/miners`, with registered, hotkey-signed requests only. See the [agent guide](docs/agents.md).
+
+## Trust model
+
+- **Validators need no one's word.** Scores come from public exchange data and the chain, through open-source
+  code; every validator computes the same result, and any difference shows on chain.
+- **The operator cannot pick winners.** It cannot add a fill, change a figure, or declare an account an agent.
+- **Everything is on the record.** Each validator keeps a complete record of what it saw and decided, and
+  publishes a daily artifact with every miner's figures.
+- **Agents are verified, not trusted.** The harness image is a reproducible build anyone can rebuild and compare,
+  and a sealed machine's claims are checked against Google's attestation every day.
+
+## Status
+
+Running on the Bittensor test network (netuid 385), with two validators, each keeping its own record, scoring live
+Hyperliquid data with identical results. The
+agent harness has run end to end on a real Intel TDX machine. Mainnet follows the test-network period.
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [Whitepaper](docs/whitepaper.md) | The subnet, its incentives and its guarantees |
+| [Mechanism specification](docs/design/02-mechanism-spec.md) | Every formula, parameter and edge case |
+| [The mechanism in plain words](docs/design/01-incentive-mechanism.md) | The same rules, without the math |
+| [Runbook](docs/runbook.md) | Running a validator, binding a miner, the operator's duties |
+| [Agent guide](docs/agents.md) | Writing, submitting and running a trading agent |
+| [Binding from the app](docs/app-binding.md) | How a Kokoah trader becomes a miner |
+| [The validator's record](docs/database.md) | Every table a validator keeps, with example queries |
+
+## Getting started
+
+Requires Python 3.12, [uv](https://docs.astral.sh/uv/) and Docker (for the local chain).
 
 ```bash
-uv sync                                 # creates .venv from uv.lock (Python 3.12)
-uv run btcli --version                  # 11.3.0
-scripts/localnet.sh start               # local Bittensor chain in Docker, ws://127.0.0.1:9944, fast blocks
-uv run kokoah-subnet info --network local
-scripts/localnet.sh stop
+uv sync                                    # install from the lock file
+scripts/check.sh                           # lint, types and the full offline test suite (as CI runs it)
+uv run kokoah-subnet verify                # the specification's numerical checks
+uv run kokoah-subnet --help                # miner, agent, validator and operator commands
 ```
 
-`scripts/check.sh` runs the same steps as CI: ruff (lint and format), mypy and the offline tests.
+To run a validator, follow the [runbook](docs/runbook.md).
 
-## Scoring a day offline
-
-```bash
-uv run kokoah-subnet verify                                  # the specification's numerical checks
-uv run kokoah-subnet score-day --fills 20261020.csv.lz4 --miners miners.json --state state.json \
-    --price-usd 5.33 --day-index 1 --owner-hotkey <owner hotkey ss58> --out day.json
-```
-
-`--fills` is Hyperliquid's per-builder daily file (or a plain CSV with the same header); `miners.json` is a list of
-`{hotkey, address, returns, mean_equity_usd, avg_equity_usd, staked_min_alpha, collateral_min_alpha}` (a miner
-without `avg_equity_usd`, the day's average account value, is not eligible that day); the state file carries the
-smoothed values from day to day. The result lists every miner's credit, factors, multiplier, share, cap and pay, the
-burn, and the weight fractions (miners by pay, the burn to the owner hotkey). The same code path runs in the
-validator against live data.
-
-Networks: `local` (Docker, throwaway, pre-funded Alice account), `test` (Bittensor testnet, test TAO without value),
-`finney` (mainnet, real TAO; nothing is sent there without the owner's go-ahead).
-
-## Layout
+## Repository layout
 
 ```
-docs/                 whitepaper.md, design/ (specification, plain-words summary), research/ (dated notes)
-sim/                  index.html, an interactive model of pay, caps, burn, revenue and buyback
-scripts/              localnet.sh (Docker chain), check.sh (CI steps), verify_mechanism.py, sim_*.py, git-hooks/
-src/kokoah_subnet/    cli.py, chain.py (read-only chain facts), mechanism/ (the scoring, pure functions),
-                      validator/ (Hyperliquid client, builder file, chain reads and weights, day runner)
-tests/                offline tests (no network)
+src/kokoah_subnet/
+  mechanism/     scoring: pure functions, fully tested
+  validator/     the daily loop: data plane, chain reads, weights, record, public interface
+  agent/         the sealed-machine harness, sandbox, attestation and agent service
+  binding/       how a hotkey binds a Hyperliquid account
+deploy/          harness image (reproducible build), systemd units, reverse-proxy sample
+dashboards/      validator monitoring
+scripts/         local chain, CI checks, verification and simulations
+docs/            whitepaper, specification and guides
+tests/           offline tests
 ```
 
-Wallets never enter the repo. They live in `~/.bittensor/wallets`; the public `//Alice` dev key is only for the
-localnet.
+## Security
+
+Please report vulnerabilities privately through this repository's GitHub security advisories rather than in a
+public issue.
