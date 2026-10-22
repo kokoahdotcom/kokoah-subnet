@@ -12,7 +12,8 @@ builder fee to the operator, and those fees buy back and burn the subnet token o
 outside Bittensor flows back into it. Validators score each trader from the exchange's own public records and from
 chain state, so the work the subnet rewards is real, external and checkable by anyone. The pay rule is simple and
 hard to game: a trader's share follows the fees they actually paid, adjusted by a small quality factor, and is
-capped at a fraction of what the trade cost them, so no fake-volume strategy can profit. Emission the caps leave
+capped at a fraction of what the trade cost them, so no fake-volume strategy can profit. Rewards go to traders
+with real capital at work, an account averaging at least $10,000 over the day, and emission the caps leave
 unawarded is destroyed.
 
 ### Key facts
@@ -51,7 +52,8 @@ to do both.
   publishes. Those fees buy back and burn the subnet token on chain, transaction by transaction. Value earned on an
   external venue is returned to the network in a form anyone can verify.
 - **New participants and capital.** Hyperliquid traders join Bittensor to take part: they register hotkeys, lock
-  collateral, and are paid in alpha that the holding factor rewards them for keeping. A trading community that had
+  collateral, keep at least $10,000 at work in their trading accounts, and are paid in alpha that the holding
+  factor rewards them for keeping. A trading community that had
   no reason to be on Bittensor gets one.
 - **A verifiable data product.** The public ranking of traders, computed by independent validators from the
   traders' own fills, is a signal that did not exist before: who trades well, at what scale, with what
@@ -92,13 +94,16 @@ unawarded remainder to be burned.
 
 Once a day, after the UTC day closes, every validator fetches the exchange's file of all fills routed under the
 Kokoah builder code, reads which hotkey each address is bound to, fetches each bound address's public account
-history and fee schedule, reads stake and the pool rate from the chain, and scores the day. The weights it sets
+history and fee schedule, works out from the exchange's recorded account values whether each trader held at least
+$10,000 on average through the day, reads stake and the pool rate from the chain, and scores the day. The weights it sets
 every tempo pay each trader their share and direct the rest to the burn hotkey. Everything it fetched and decided
 goes into its record and its daily artifact.
 
 ```mermaid
 flowchart TD
-  F[Fees paid through the builder code today] --> S[Smoothed fee credit<br/>30% today, 70% the running figure]
+  E{Eligible today?<br/>average account value at least $10,000<br/>and qualified by three trades worth $1,000} -->|yes| F[Fees paid through the builder code today]
+  E -->|no| Z[No credit, no share, no pay today<br/>earlier credit fades] --> R
+  F --> S[Smoothed fee credit<br/>30% today, 70% the running figure]
   S --> M[Rate multiplier 0.85 to 1.0<br/>+0.05 skill, +0.10 holding]
   M --> SH[Share of the day's pool<br/>in proportion to credit x rate]
   SH --> P{Pay = the smaller of}
@@ -108,8 +113,8 @@ flowchart TD
   P --> R[Remainder of the pool] --> BURN[Burn hotkey, destroyed]
 ```
 
-Figure 2. The pay rule. The share follows fees paid; two caps bound what any trader can receive; what the caps
-leave over is destroyed.
+Figure 2. The pay rule. Only eligible traders take part on a day; the share follows fees paid; two caps bound
+what any trader can receive; what the caps leave over, and the share nobody was eligible for, is destroyed.
 
 ## 3. Who does what
 
@@ -231,7 +236,7 @@ ratio below 0.864; the chosen 0.75 leaves margin.
 | Hedge, taker at the deepest volume and staking discounts (1.44 a side), hidden leg at the best rebate | 2.88 | 5 | −0.6 | 5.91 | −1.37 |
 | Market maker at the deepest rebate, maker both legs, one through the builder | −0.6 | 5 | −0.6 | 3.3 | −0.5 |
 | Instant round trips in one account, base tier | 9 | 5 | 0 | 10 | −4 |
-| Farm of small accounts | 9 | 5 | 0 | 10 | −4 each |
+| Farm of small accounts | 9 | 5 | 0 | 0 below $10,000 average equity, else 10 | −14 or −4 each |
 
 The tightest case, the rebated market maker, would need a hidden rebate of 0.55 bps a side to break even, almost
 twice the best rebate the exchange offers. A search over 105 combinations of volume tier, staking discount and
@@ -243,8 +248,9 @@ of them while the honest traders received their proportional share.
 account and the same fills spread over two or five accounts receive the same total. This is the proportional
 allocation rule, which Chen, Papadimitriou and Roughgarden (2019) show to be the unique rule that is
 budget-balanced, symmetric, sybil-proof and weakly collusion-proof. What is not linear works against splitting:
-each registration costs a burn and locks collateral, each account must pass the gates on its own, and the holding
-target is per hotkey.
+each registration costs a burn and locks collateral, each account must hold $10,000 on average and qualify with
+its own three trades before it earns anything, each account must pass the gates on its own, and the holding target
+is per hotkey.
 
 **Honest high-frequency trading is welcome.** Scalpers and market makers earn credit on every fill like everyone
 else and are paid less than their costs like everyone else; whether that trade-off is worth it is their decision,
@@ -294,8 +300,9 @@ Validators adopt it by updating; nothing changes until they do.
 
 Every validator keeps a complete relational record of what it saw and decided: every fill in the builder file
 with whether it counted and why not, every per-miner figure with the parts behind it (confidence, quality,
-smoothed credit and fees, holding inputs, gate counts, mirror shares, caps and pay), every account value, ledger
-entry and position, every commitment and binding decision, every pool and stake sample, every epoch's payout per
+smoothed credit and fees, holding inputs, gate counts, mirror shares, caps and pay), every eligibility decision with
+its reason, every account value with the recorded points behind each day's average, every ledger entry and
+position, every commitment and binding decision, every pool and stake sample, every epoch's payout per
 UID as the chain made it, every weight submission, every burn, every error. Each day's artifact is published
 with its figures per miner, the file hash and whether it matched the operator's commitment, refused bindings with
 their reasons, and the abuse signals; the ranking and the artifacts are served over a read-only interface
@@ -341,7 +348,12 @@ burning it leaves alpha emission to everyone else unchanged. On a test-network s
 the per-builder daily file is fetchable by anyone for the operator's builder address, bindings publish and resolve
 on chain, the validator scores complete days into its record and submits weights; the chain paid the whole
 unawarded pool of an epoch to the burn hotkey, and the operator's burn process destroyed it with one `burn_alpha`
-transaction. The verification script, the simulations and the chain measurements are in the repository.
+transaction. Eligibility is tested end to end: a fall below $10,000 pays nothing that day and only lets earlier
+credit fade, recovery pays again from the first day back with nothing owed for the days missed, the first two
+qualifying trades earn nothing and the third does, an order filled in pieces counts as one trade, a new address,
+hotkey swap or new registration restarts credit and qualification while keeping the pay history and penalties,
+and the same inputs in any order give identical results. The verification script, the simulations and the chain
+measurements are in the repository.
 
 **Before mainnet.**
 
@@ -357,7 +369,11 @@ transaction. The verification script, the simulations and the chain measurements
 high-frequency accounts (it is, and it is public). The exchange publishes a day's file hours after the day ends;
 validators score days in order and wait for a late file, and a day never published is closed by announcement, the
 same on every validator. The caps need the builder fee to stay above 0.015%, which the validator checks in every
-file. The TAO/USD rate is the day's mean of the exchange's own TAO perpetual, with a configured fallback. Whether, and when, root enables emission for a new subnet is the network's decision, not the
+file. The TAO/USD rate is the day's mean of the exchange's own TAO perpetual, with a configured fallback.
+The day's average account value comes from the exchange's own recorded history of the account, about one point
+every two hours; validators read it while the day is within the exchange's seven-day window, keep the points they
+read, and treat a day with too few points as unknown rather than estimate it; a failed read delays the day's
+scoring and never makes a trader ineligible. Whether, and when, root enables emission for a new subnet is the network's decision, not the
 operator's. Paying tokens for trading activity is subject to legal review in the operator's jurisdictions.
 
 ## 10. Roadmap
@@ -450,7 +466,8 @@ The one law: with `C` the total fees on the builder leg and `H` the other leg's 
 ### Appendix B. Worked example
 
 A young subnet: fees today $2,000 on $8M of volume, and a daily miner pool worth far more than the sum of the caps.
-Two miners, equal volume of $4M, all taker at the base tier, smoothed credit $1,000 each, total fees on the
+Two eligible miners, both qualified and holding well over $10,000 on average through the day, equal volume of
+$4M, all taker at the base tier, smoothed credit $1,000 each, total fees on the
 builder leg $2,800 each. Miner A has strong skill and holds everything (rate 1.0); miner B has no skill and sold
 everything (0.85). Caps: min(2 × 1,000, 0.75 × 2,800) = $2,000, times the rate: A is paid alpha worth $2,000 and B
 alpha worth $1,700; the rest of the pool is destroyed. Same volume, pay within 15%; total pay $3,700 against
@@ -459,6 +476,10 @@ $2,000 of fees collected, covered if the two keep at least 46% of it.
 A busy subnet: fees $87,700 a day on $350M of volume. The sum of caps exceeds the pool; nothing is destroyed; the
 pool works as a volume rebate returning about 18% of fees, with shares within 15% for equal volume.
 
+A third miner on either day whose account averaged $8,000 is recorded with its volume and skill, earns no
+credit, takes no share and is paid nothing; its earlier credit fades by 30%. On its next day at or above $10,000
+it earns again, from that day's trades.
+
 ### Appendix C. A validator's day
 
 1. Fetch the previous UTC day's per-builder fill file; verify its hash against the operator's on-chain commitment.
@@ -466,7 +487,9 @@ pool works as a volume rebate returning about 18% of fees, with shares within 15
 3. For each bound address: fetch public fills for the total fee field and the off-market check against the
    exchange's minute candles, account value and ledger for returns and flows, positions, the fee schedule,
    sub-accounts and transfer partners for clusters; read the day's minimum own stake and the pool rate from the
-   chain at blocks anchored to the day. A failed read never costs the trader the day's credit.
+   chain at blocks anchored to the day; read the account's recorded value history for the day's average. A failed
+   read never costs the trader the day's credit; a failed read of the value history delays the day's scoring
+   instead, so it never makes a trader ineligible.
 4. Read the account's recorded history and compute each trader's average account value for the day; walk the
    day's trades for qualification; update smoothed credit (eligible trades only), total fees and skill; compute holding, gates, the rate; compute shares, caps in alpha at
    the day's mean rate, pay, and the remainder.
@@ -493,7 +516,8 @@ accepts the current commitment on its signatures alone and agrees with the other
 Read-only, served by every validator: `/days` (scored days), `/days/latest` and `/days/{day}` (the full daily
 artifact: per-miner credit, factors, rate, share, cap, pay; the remainder; weights; file hash and whether it
 matches the operator's commitment; refused bindings; errors), `/bindings`, `/leaderboard` (the ranking with totals
-over all days), `/summary` (alpha paid and burned, builder fees, paid-to-fees ratio over all days), and `/` (the
+over all days, each trader's eligibility for the day with the reason when not, the day's average account value
+and qualification progress), `/summary` (alpha paid and burned, builder fees, paid-to-fees ratio over all days), and `/` (the
 leaderboard page).
 
 ### Appendix F. Changelog
@@ -501,7 +525,8 @@ leaderboard page).
 - **1.2 (2026-10-22).** Mechanism v5.9: eligibility. A trader earns on days the account averages at least
   $10,000, after three qualifying trades worth $1,000 together; ineligible days earn no credit and no pay and
   nothing is owed later; credit and qualification restart with a new address, a hotkey swap or a new
-  registration, while the track record, pay history and penalties stay.
+  registration, while the track record, pay history and penalties stay. The summary, both figures, the attack
+  table, the verification list, the worked example, the validator's day and the interface describe it.
 - **1.1 (2026-10-21).** Off-market fills valued at the exchange's minute marks and their transfers removed from
   the returns; the day's TAO/USD from hourly candles; chain samples anchored to the scored day; vault transfers as
   flows; a failed exchange read never costs the day's credit; re-scores start from the state before the day; the
