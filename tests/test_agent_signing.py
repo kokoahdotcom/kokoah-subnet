@@ -1,6 +1,8 @@
 """Hyperliquid signing matches the official SDK's published test vectors (hyperliquid-python-sdk,
 tests/signing_test.py, read 2026-10-22)."""
 
+from typing import Any
+
 from eth_account import Account
 
 from kokoah_subnet.agent.hlsign import (
@@ -17,7 +19,7 @@ from kokoah_subnet.agent.hlsign import (
 KEY = "0x0123456789012345678901234567890123456789012345678901234567890123"
 
 
-def order(asset: int, sz: float, px: float, tif: str, cloid: str | None = None) -> dict:
+def order(asset: int, sz: float, px: float, tif: str, cloid: str | None = None) -> dict[str, Any]:
     wire = {
         "a": asset,
         "b": True,

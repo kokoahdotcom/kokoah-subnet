@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from cryptography.exceptions import InvalidTag
 
 from kokoah_subnet.agent.bundle import check_zip, decrypt, encrypt, is_encrypted, new_key, package, sha256_hex, unpack
 
@@ -32,7 +33,7 @@ def test_private_code_round_trips_and_needs_the_key(tmp_path: Path) -> None:
     blob = encrypt(plain, key)
     assert is_encrypted(blob) and plain not in blob
     assert decrypt(blob, key) == plain
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidTag):
         decrypt(blob, new_key())
 
 
