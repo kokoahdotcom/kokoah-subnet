@@ -7,10 +7,11 @@ per-miner states. It never touches a network, so a replay of recorded days is th
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .credit import DayFees, day_fees
+from .eligibility import fresh_identity, identity_change, qualify
 from .exclusions import (
     bound_counterparty_notional,
     clip_to_mark,
@@ -44,6 +45,9 @@ class MinerInputs:
     exchange_rates_bps: tuple[float, float] | None = None  # (taker, maker) fallback for unknown total fees
     round_trips_window: int | None = None  # precomputed gate counts (the live loop); else from window_fills
     active_days_window: int | None = None
+    # eligibility (section 9a)
+    avg_equity_usd: float | None = None  # the day's time-weighted average account value; None = unknown (ineligible)
+    registered_block: int | None = None  # the hotkey's registration block (a new registration is a fresh identity)
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,16 @@ class MinerRecord:
     active_days_window: int = 0
     returns_days: int = 0
     cap_usd: float = 0.0
+    # eligibility (section 9a)
+    eligible: bool = True
+    ineligible_reason: str | None = None
+    avg_equity_usd: float | None = None
+    qualified: bool = False
+    qual_trades: int = 0
+    qual_notional: float = 0.0
+    qualified_at_ms: int | None = None
+    credited: DayFees = field(default_factory=DayFees.zero)  # the part of today's fills that earned credit
+    identity_reset: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,8 +133,23 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     partial: list[tuple[Any, ...]] = []
     for m in inputs.miners:
         state = inputs.states.get(m.hotkey, MinerState())
+        reset = identity_change(state, m.address, m.registered_block)
+        if reset is not None:
+            state = fresh_identity(state)  # credit and qualification never pass to a fresh identity
         own = bound_fills.get(m.address, [])
-        fees = day_fees(own, params, m.exchange_rates_bps)
+        fees = day_fees(own, params, m.exchange_rates_bps)  # everything traded today, recorded
+        qual = qualify(own, state.qualified, state.qual_trades, state.qual_notional, params)
+        equity_ok = m.avg_equity_usd is not None and m.avg_equity_usd >= params.min_equity_usd
+        eligible = qual.qualified and equity_ok
+        reason = None
+        if not qual.qualified:
+            reason = "not yet qualified"
+        elif m.avg_equity_usd is None:
+            reason = "average equity unknown"
+        elif not equity_ok:
+            reason = "average equity below the minimum"
+        # only trades made while eligible earn credit; an ineligible day adds nothing and the smoothing decays
+        credited = day_fees(qual.credited, params, m.exchange_rates_bps) if eligible else DayFees.zero()
         gross = fees.notional + against_bound.get(m.address, 0.0)
         counterparty_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0
         mirrored = max(counterparty_share, position_share.get(m.address, 0.0))
@@ -149,14 +178,20 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             )
         )
         mult = multiplier(skill, hold, gates, params)
-        phi_hat = (1 - params.smoothing) * state.phi_hat + params.smoothing * fees.credit * action.credit_factor
-        fee_hat = (1 - params.smoothing) * state.fee_hat + params.smoothing * fees.total_fee
-        miner_days.append(MinerDay(m.hotkey, phi_hat, fee_hat, mult))
+        phi_hat = (1 - params.smoothing) * state.phi_hat + params.smoothing * credited.credit * action.credit_factor
+        fee_hat = (1 - params.smoothing) * state.fee_hat + params.smoothing * credited.total_fee
+        if eligible:
+            miner_days.append(MinerDay(m.hotkey, phi_hat, fee_hat, mult))  # an ineligible miner takes no share
         partial.append(
             (
                 m,
                 state,
                 fees,
+                credited,
+                qual,
+                eligible,
+                reason,
+                reset,
                 mirrored,
                 action.credit_factor,
                 action.zero_multiplier,
@@ -185,6 +220,11 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         m,
         state,
         fees,
+        credited,
+        qual,
+        eligible,
+        reason,
+        reset,
         mirrored,
         credit_factor,
         reported,
@@ -203,7 +243,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         rt,
         ad,
     ) in partial:
-        pay = allocation.pays[m.hotkey]
+        pay = allocation.pays.get(m.hotkey, 0.0)
         records.append(
             MinerRecord(
                 m.hotkey,
@@ -217,8 +257,8 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 hold,
                 gates,
                 mult,
-                allocation.shares[m.hotkey],
-                allocation.caps[m.hotkey],
+                allocation.shares.get(m.hotkey, 0.0),
+                allocation.caps.get(m.hotkey, 0.0),
                 pay,
                 confidence=parts.confidence,
                 quality=parts.quality,
@@ -231,18 +271,35 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 round_trips_window=rt,
                 active_days_window=ad,
                 returns_days=len(m.returns),
-                cap_usd=allocation.caps[m.hotkey] * inputs.price_usd,
+                cap_usd=allocation.caps.get(m.hotkey, 0.0) * inputs.price_usd,
+                eligible=eligible,
+                ineligible_reason=reason,
+                avg_equity_usd=m.avg_equity_usd,
+                qualified=qual.qualified,
+                qual_trades=qual.trades,
+                qual_notional=qual.notional,
+                qualified_at_ms=qual.qualified_at_ms,
+                credited=credited,
+                identity_reset=reset,
             )
         )
-        states[m.hotkey] = advance(
+        advanced = advance(
             state,
-            fees,
+            credited,
             raw,
             pay,
             params,
             credit_factor=credit_factor,
             zero_from_day=inputs.day_index if reported else None,
             day_index=inputs.day_index,
+        )
+        states[m.hotkey] = replace(
+            advanced,
+            qualified=qual.qualified,
+            qual_trades=qual.trades,
+            qual_notional=qual.notional,
+            address=m.address,
+            registered_block=m.registered_block or state.registered_block,
         )
 
     return DayResult(inputs.day_index, allocation, records, states)

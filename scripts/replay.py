@@ -179,6 +179,7 @@ def main() -> int:
                     address=a.address,
                     returns=a.returns[-60:],
                     mean_equity_usd=a.equity,
+                    avg_equity_usd=a.equity,
                     staked_min_alpha=a.staked,
                     collateral_min_alpha=10.0,
                     round_trips_window=sum(r for r, _ in window),

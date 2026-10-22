@@ -19,6 +19,8 @@ from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
 
 HK_A, HK_B, OWNER, BURN = "hkA", "hkB", "hkOwner", "hkBurn"
+EQUITY: dict[str, float] = {}  # address -> recorded account value in the fake history (default $25,000)
+PORTFOLIO_FAILS: set[str] = set()  # addresses whose history read fails
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -148,14 +150,28 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         px = "100000" if req["coin"] == "BTC" else "4000"
         return httpx.Response(200, json=[{"t": req["startTime"] + m * 60_000, "c": px} for m in range(0, 1440, 1)])
     if t == "portfolio":
+        user = body["user"].lower()
+        if user in PORTFOLIO_FAILS:
+            return httpx.Response(500, json={"error": "down"})
         hist = {"accountValueHistory": [[DAY_MS - 86_400_000, "24000"]], "pnlHistory": [[DAY_MS - 86_400_000, "0"]]}
-        return httpx.Response(200, json=[["perpMonth", hist]])
+        value = str(EQUITY.get(user, 25_000.0))
+        # the 7-day window: a made-up point at the far edge, recorded points every two hours, the live point last
+        week = [[DAY_MS - 7 * 86_400_000 + 123, "1"]]
+        week += [[DAY_MS + h * 7_200_000, value] for h in range(-24, 18)]
+        week += [[DAY_MS + 86_400_000 + 3_600_000 + 456, "999999"]]
+        all_time = {"accountValueHistory": [[DAY_MS - 90 * 86_400_000, "1000"]], "pnlHistory": []}
+        return httpx.Response(
+            200,
+            json=[["perpMonth", hist], ["perpWeek", {"accountValueHistory": week}], ["perpAllTime", all_time]],
+        )
     if t == "subAccounts":
         return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
     return httpx.Response(400, json={"error": t})
 
 
 def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _FakeChain, str, str]:
+    EQUITY.clear()
+    PORTFOLIO_FAILS.clear()
     a, b = Account.create(), Account.create()
     cfg = ValidatorConfig(
         network="fake",
@@ -255,6 +271,7 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         assert len(board) == 2 and board[0]["volume_usd"] >= board[1]["volume_usd"]
         assert board[0]["days"] == 1 and board[0]["total_volume_usd"] == board[0]["volume_usd"]
         assert board[0]["cap_binds"] is True  # a young subnet: the cap, not the share, sets the pay
+        assert all(r["eligible"] and r["qualified"] and r["avg_equity_usd"] == 25_000.0 for r in board)
         page = await c.get("/")
         assert page.status_code == 200 and "Leaderboard" in page.text and 'fetch("leaderboard")' in page.text
         summary = (await c.get("/summary")).json()
@@ -336,4 +353,41 @@ async def test_effective_fee_floor_is_checked(tmp_path: Path) -> None:
         stages = [r.stage for r in c.execute(S.errors.select()).all()]
     assert "fee floor" in stages
     assert DEFAULT.min_safe_fee_bps == pytest.approx(1.5)
+    await hl.close()
+
+
+async def test_eligibility_through_the_whole_pass(tmp_path: Path) -> None:
+    """A new miner qualifies on its third trade (the first two earn nothing); one below $10,000 of average equity
+    is recorded but paid nothing and takes no share; the averages and their points are on the record."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    EQUITY[addr_b] = 9_999.0
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    ra, rb = (next(r for r in result.records if r.hotkey == hk) for hk in (HK_A, HK_B))
+    assert ra.eligible and ra.qualified and ra.qual_trades == 3 and ra.avg_equity_usd == pytest.approx(25_000.0)
+    assert ra.credited.fills == 18 and ra.credited.builder_fee == pytest.approx(18 * 12.5)
+    assert ra.pay_alpha > 0
+    assert not rb.eligible and rb.ineligible_reason == "average equity below the minimum"
+    assert rb.qualified  # trades still count toward qualification
+    assert rb.fees.fills == 10 and rb.credited.fills == 0  # recorded, not credited
+    assert rb.pay_alpha == 0.0 and rb.share_alpha == 0.0
+    assert store.states()[HK_B].phi_hat == 0.0
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        daily = {r.address: r for r in c.execute(S.equity_daily.select()).all()}
+        rows = {r.hotkey: r for r in c.execute(S.miner_days.select()).all()}
+        points = c.execute(S.equity_points.select().where(S.equity_points.c.address == addr_a)).all()
+    assert daily[addr_b].avg_equity_usd == pytest.approx(9_999.0) and daily[addr_a].points == 12
+    assert rows[HK_A].eligible is True and rows[HK_A].credited_fills == 18 and rows[HK_A].qual_trades == 3
+    assert rows[HK_B].ineligible_reason == "average equity below the minimum"
+    assert all(p.value not in (1.0, 999999.0) for p in points)  # the edge and live points were dropped
+    await hl.close()
+
+
+async def test_a_failed_history_read_fails_the_day_instead_of_zeroing_the_trader(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    with pytest.raises(RuntimeError, match="portfolio history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.day(DAY) is None  # not scored: the loop retries within the hour
     await hl.close()

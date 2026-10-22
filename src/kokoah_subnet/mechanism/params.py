@@ -1,4 +1,4 @@
-"""Mechanism parameters (specification v5.6, section 12).
+"""Mechanism parameters (specification section 12).
 
 Frozen and validated, so a scoring run cannot drift from the published values by accident.
 """
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "5.8"
+SPEC_VERSION = "5.9"
 
 # The best maker rebate anywhere on Hyperliquid, bps a side (fee schedule read 2026-10-19). It bounds the smallest
 # total fee a round trip through the builder can carry, and with it the safe range of `c_tot` (spec section 11).
@@ -45,6 +45,13 @@ class Params:
     gate_round_trips: int = 10
     gate_active_days: int = 7
     gate_mean_equity_usd: float = 500.0
+    # eligibility (section 9a): no emission on a day the account is below the floor or before qualifying
+    min_equity_usd: float = 10_000.0  # the day's time-weighted average account value
+    equity_window: str = "perpWeek"  # the exchange's portfolio history read for the average (perps account value)
+    equity_origin_window: str = "perpAllTime"  # its first point marks when the account's history begins
+    equity_min_points: int = 4  # fewer recorded points inside the day: the average is unknown (never estimated)
+    qualify_trades: int = 3  # a new identity's first trades: qualifying trades needed
+    qualify_notional_usd: float = 1_000.0  # and their eligible notional
     # exclusions (section 3)
     mark_clip: float = 0.005
     mirror_window_s: float = 60.0
@@ -72,6 +79,10 @@ class Params:
             raise ValueError("maker_credit must be in (0, 1]")
         if self.c_max <= 0 or self.c_tot <= 0:
             raise ValueError("caps must be positive")
+        if self.min_equity_usd < 0 or self.qualify_trades < 1 or self.qualify_notional_usd < 0:
+            raise ValueError("eligibility thresholds must be non-negative and at least one trade")
+        if self.equity_min_points < 2:
+            raise ValueError("equity_min_points must be at least 2")
         if self.c_tot >= self.c_tot_limit:
             raise ValueError(f"c_tot {self.c_tot} is not farm-proof; it must stay below {self.c_tot_limit:.3f}")
 

@@ -28,6 +28,7 @@ from kokoah_subnet.mechanism import (
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
+from kokoah_subnet.mechanism.eligibility import daily_average_equity, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 
 from .builder_feed import BASE_URL, decompress, download, file_url, sha256
@@ -42,6 +43,8 @@ from .hyperliquid import (
     mark_by_minute,
     mean_close,
     off_market_transfer,
+    portfolio_origin,
+    portfolio_points,
     positions_from_state,
     sub_accounts,
     transfer_partners,
@@ -217,19 +220,16 @@ async def collect_and_score(
             for hk, c in all_commitments.items()
         ],
     )
-    # hotkey swaps: the same UID on the same coldkey with a new hotkey keeps its smoothed state (re-binding required)
+    # hotkey swaps: the same UID on the same coldkey with a new hotkey keeps its pay history, skill and penalties,
+    # never its fee credit or qualification (re-binding required; the swap is recorded and applied when scoring)
     swaps: list[tuple[str, str]] = []
     previous = {n["uid"]: n for n in store.latest_neurons()}
     for n in snap.neurons:
         prev_n = previous.get(n.uid)
-        if (
-            prev_n
-            and prev_n["hotkey"] != n.hotkey
-            and prev_n["coldkey"] == n.coldkey
-            and store.carry_state(prev_n["hotkey"], n.hotkey)
-        ):
+        if prev_n and prev_n["hotkey"] != n.hotkey and prev_n["coldkey"] == n.coldkey:
+            store.put_swap(day, n.uid, prev_n["hotkey"], n.hotkey, n.coldkey)
             swaps.append((prev_n["hotkey"], n.hotkey))
-            log.info("hotkey swap on uid %d: state carried from %s to %s", n.uid, prev_n["hotkey"], n.hotkey)
+            log.info("hotkey swap on uid %d: %s -> %s", n.uid, prev_n["hotkey"], n.hotkey)
     before = store.bindings()
     resolution = resolve_bindings(before, published, snap.block, registered=uid_of.keys())
     store.put_bindings(resolution.accepted, day=day)
@@ -246,7 +246,9 @@ async def collect_and_score(
                 {"hotkey": hk, "event": "left", "address": before[hk].address, "reason": "hotkey no longer registered"}
             )
     for old_hk, new_hk in swaps:
-        events.append({"hotkey": new_hk, "event": "swapped", "address": None, "reason": f"state carried from {old_hk}"})
+        events.append(
+            {"hotkey": new_hk, "event": "swapped", "address": None, "reason": f"history (not credit) from {old_hk}"}
+        )
     for hk, reason in resolution.refused.items():
         events.append(
             {
@@ -261,6 +263,7 @@ async def collect_and_score(
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
     collateral_locked = {n.hotkey: n.collateral_locked_alpha for n in snap.neurons}
+    registered_block = {n.hotkey: n.block_at_registration or None for n in snap.neurons}
     start_ms, end_ms = day_bounds_ms(day)
     blocks = day_sample_blocks(snap.block, now.timestamp(), start_ms / 1000, snap.tempo, params.price_samples)
     samples = await price_samples(client, cfg.netuid, blocks)
@@ -280,6 +283,7 @@ async def collect_and_score(
     errors: dict[str, str] = {}
     rates_of: dict[str, tuple[float, float]] = {}
     edge_lists: dict[str, list[tuple[str, str, str]]] = {}
+    avg_equity: dict[str, tuple[float | None, int]] = {}
 
     marks_cache: dict[str, dict[int, float]] = {}
     marks_lock = asyncio.Lock()
@@ -303,16 +307,33 @@ async def collect_and_score(
         trader the day's fee credit, it only delays the figures that depend on the failed read."""
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
+        # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
+        # hourly) instead of costing the trader the day, and the average is never estimated from a snapshot.
         try:
-            if not store.equity_series(address, 1):
-                # first time this address is scored: the exchange's own history gives the returns from day one
-                history = daily_equity_from_portfolio(await hl.portfolio(address))
-                for h_day, value, flows in history:
-                    if h_day < day:
-                        store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
-                log.info("backfilled %d days of account value for %s", len(history), address)
-        except Exception as exc:  # noqa: BLE001 - a missing history only delays the skill factor
-            log.warning("no portfolio backfill for %s: %s", address, exc)
+            windows = await hl.portfolio(address)
+        except Exception as exc:
+            store.put_error(day, hk, address, "portfolio", str(exc))
+            raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
+        store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
+        origin = portfolio_origin(windows, params.equity_origin_window)
+        avg = daily_average_equity(
+            store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+            start_ms,
+            end_ms,
+            origin,
+            params.equity_min_points,
+        )
+        store.put_equity_daily(address, day, avg.value, avg.points, origin, params.equity_window, avg.note)
+        avg_equity[hk] = (avg.value, avg.points)
+        if avg.value is None:
+            store.put_error(day, hk, address, "average equity", avg.note)
+        if not store.equity_series(address, 1):
+            # first time this address is scored: the exchange's own history gives the returns from day one
+            history = daily_equity_from_portfolio(windows)
+            for h_day, value, flows in history:
+                if h_day < day:
+                    store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
+            log.info("backfilled %d days of account value for %s", len(history), address)
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
             own = match_total_fees(own, public)
@@ -402,6 +423,8 @@ async def collect_and_score(
                 exchange_rates_bps=rates,
                 round_trips_window=rt_window,
                 active_days_window=active_window,
+                avg_equity_usd=avg.value,
+                registered_block=registered_block.get(hk),
             )
         )
 
@@ -413,12 +436,16 @@ async def collect_and_score(
     cluster_of = clusters(addresses, [(a, b) for a, b, _ in edges])
     store.put_clusters(day, cluster_of, edges)
     all_fills = [f for lst in fills_by_address.values() for f in lst]
+    states = store.states_before(day)
+    for _, old_hk, new_hk in store.swaps_through(day):
+        if old_hk in states and new_hk not in states:
+            states[new_hk] = fresh_identity(states.pop(old_hk))
     inputs = DayInputs(
         day_index=day_index(cfg, day, params),
         price_usd=price_usd,
         fills=all_fills,
         miners=miners,
-        states=store.states_before(day),
+        states=states,
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         penalized_until=store.penalties(day_index(cfg, day, params)),
@@ -500,6 +527,19 @@ async def collect_and_score(
                 "pay_usd": r.pay_alpha * price_usd,
                 "exchange_taker_bps": rates_of.get(r.address, (None, None))[0],
                 "exchange_maker_bps": rates_of.get(r.address, (None, None))[1],
+                "eligible": r.eligible,
+                "ineligible_reason": r.ineligible_reason,
+                "avg_equity_usd": r.avg_equity_usd,
+                "equity_points": avg_equity.get(r.hotkey, (None, 0))[1],
+                "qualified": r.qualified,
+                "qual_trades": r.qual_trades,
+                "qual_notional": r.qual_notional,
+                "qualified_at_ms": r.qualified_at_ms,
+                "credited_credit": r.credited.credit,
+                "credited_notional": r.credited.notional,
+                "credited_fills": r.credited.fills,
+                "identity_reset": r.identity_reset,
+                "registered_block": registered_block.get(r.hotkey),
             }
             for r in result.records
         ],

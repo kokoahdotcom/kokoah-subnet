@@ -152,9 +152,19 @@ def test_score_day_command(tmp_path: Path) -> None:
     fills.write_text(CSV)
     miners = tmp_path / "miners.json"
     miners.write_text(
-        json.dumps([{"hotkey": "hkA", "address": "0xAAAA000000000000000000000000000000000001", "staked_min_alpha": 5}])
+        json.dumps(
+            [
+                {
+                    "hotkey": "hkA",
+                    "address": "0xAAAA000000000000000000000000000000000001",
+                    "staked_min_alpha": 5,
+                    "avg_equity_usd": 20_000,
+                }
+            ]
+        )
     )
     state = tmp_path / "state.json"
+    state.write_text(dump_states({"hkA": MinerState(qualified=True)}))  # an established miner
     out = tmp_path / "out.json"
     code = main(
         [

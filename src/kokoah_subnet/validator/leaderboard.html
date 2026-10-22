@@ -131,6 +131,11 @@ validator's published daily artifact (<code>/days/latest</code>).</p>
       const flags = [];
       if (r.reported) flags.push('<span class="pill bad">reported</span>');
       else if (r.mirrored_share > 0.25) flags.push('<span class="pill warn">mirrored ' + fmt.pct(r.mirrored_share) + '</span>');
+      if (r.eligible === false) {
+        if (r.qualified === false) flags.push('<span class="pill warn">qualifying ' + Math.min(r.qual_trades || 0, 3) + '/3</span>');
+        else if (r.avg_equity_usd == null) flags.push('<span class="pill warn">equity unknown</span>');
+        else flags.push('<span class="pill warn">equity ' + fmt.usd(r.avg_equity_usd) + ' &lt; $10k</span>');
+      }
       if (!r.gates_pass) flags.push('<span class="pill warn">gates</span>');
       if (r.cap_binds) flags.push('<span class="pill good">capped</span>');
       return `<tr><td class="l">${i + 1}</td><td class="l"><span class="addr" title="${r.hotkey}">${fmt.short(r.address)}</span></td>

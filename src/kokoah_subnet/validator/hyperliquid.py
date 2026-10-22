@@ -313,3 +313,34 @@ def off_market_transfer(px: float, mark: float, sz: float, side: str, clip: floa
     if mark <= 0 or abs(px / mark - 1) <= clip:
         return 0.0
     return (mark - px) * sz if side == "B" else (px - mark) * sz
+
+
+def _window(windows: list[Any], name: str) -> Mapping[str, Any] | None:
+    for w in windows:
+        if isinstance(w, list | tuple) and len(w) == 2 and w[0] == name and isinstance(w[1], Mapping):
+            return w[1]
+    return None
+
+
+def portfolio_points(windows: list[Any], name: str, edge_days: float = 6.0) -> list[tuple[int, float]]:
+    """The recorded (time ms, account value) points of one portfolio window. The window's last point is the live
+    value at the moment of the request, and a point at the window's far edge can be made up for the window's
+    start; both differ from one request to the next, so both are dropped and only recorded history is returned
+    (the same for every validator that asks while the day is inside the window). A young account's first point is
+    a real one and is kept."""
+    w = _window(windows, name)
+    if not w:
+        return []
+    pts = [(int(t), float(v)) for t, v in w.get("accountValueHistory", [])][:-1]
+    if len(pts) > 1 and pts[-1][0] - pts[0][0] > edge_days * 86_400_000:
+        pts = pts[1:]
+    return pts
+
+
+def portfolio_origin(windows: list[Any], name: str) -> int | None:
+    """When the account's recorded history begins (the first point of the all-time window)."""
+    w = _window(windows, name)
+    if not w:
+        return None
+    pts = w.get("accountValueHistory", [])
+    return int(pts[0][0]) if pts else None

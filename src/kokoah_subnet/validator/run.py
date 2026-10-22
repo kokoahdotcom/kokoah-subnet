@@ -16,10 +16,11 @@ def load_states(path: Path | None) -> dict[str, MinerState]:
     if path is None or not path.exists():
         return {}
     raw = json.loads(path.read_text())
+    known = set(MinerState.__dataclass_fields__)
     return {
         hk: MinerState(
             **{
-                **v,
+                **{k: x for k, x in v.items() if k in known},
                 "paid": tuple(v.get("paid", ())),
                 "paid_days": tuple((int(d), float(a)) for d, a in v.get("paid_days", ())),
             }
@@ -34,7 +35,8 @@ def dump_states(states: dict[str, MinerState]) -> str:
 
 def load_miners(path: Path, fills_window: dict[str, list[Fill]] | None = None) -> list[MinerInputs]:
     """Miner inputs from a JSON list: hotkey, address, returns, mean_equity_usd, staked_min_alpha,
-    collateral_min_alpha, start_positions, exchange_rates_bps."""
+    collateral_min_alpha, start_positions, exchange_rates_bps, avg_equity_usd (the day's average account value;
+    missing means unknown, so the miner is not eligible), registered_block."""
     raw: list[dict[str, Any]] = json.loads(path.read_text())
     out = []
     for m in raw:
@@ -51,6 +53,8 @@ def load_miners(path: Path, fills_window: dict[str, list[Fill]] | None = None) -
                 window_fills=(fills_window or {}).get(address, []),
                 start_positions={str(k): float(v) for k, v in m.get("start_positions", {}).items()},
                 exchange_rates_bps=(float(rates[0]), float(rates[1])) if rates else None,
+                avg_equity_usd=float(m["avg_equity_usd"]) if m.get("avg_equity_usd") is not None else None,
+                registered_block=int(m["registered_block"]) if m.get("registered_block") else None,
             )
         )
     return out

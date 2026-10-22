@@ -121,6 +121,91 @@ class Store:
                     )
                 )
 
+    def put_equity_points(self, address: str, window: str, points: Iterable[tuple[int, float]], day: str) -> int:
+        """Keep the exchange's recorded account-value points (new ones only: a recorded point never changes)."""
+        a = address.lower()
+        pts = {int(t): float(v) for t, v in points}
+        if not pts:
+            return 0
+        with self._engine.begin() as c:
+            have = {
+                int(t)
+                for (t,) in c.execute(
+                    select(S.equity_points.c.time_ms).where(
+                        S.equity_points.c.address == a,
+                        S.equity_points.c.source_window == window,
+                        S.equity_points.c.time_ms.in_(list(pts)),
+                    )
+                )
+            }
+            new = [t for t in sorted(pts) if t not in have]
+            for t in new:
+                c.execute(
+                    insert(S.equity_points).values(
+                        address=a, source_window=window, time_ms=t, value=pts[t], first_seen_day=day
+                    )
+                )
+        return len(new)
+
+    def equity_points(self, address: str, window: str, start_ms: int, end_ms: int) -> list[tuple[int, float]]:
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(S.equity_points.c.time_ms, S.equity_points.c.value)
+                .where(
+                    S.equity_points.c.address == address.lower(),
+                    S.equity_points.c.source_window == window,
+                    S.equity_points.c.time_ms >= start_ms,
+                    S.equity_points.c.time_ms < end_ms,
+                )
+                .order_by(S.equity_points.c.time_ms)
+            ).all()
+        return [(int(t), float(v)) for t, v in rows]
+
+    def put_equity_daily(
+        self,
+        address: str,
+        day: str,
+        avg: float | None,
+        points: int,
+        origin_ms: int | None,
+        window: str,
+        note: str,
+    ) -> None:
+        a = address.lower()
+        with self._engine.begin() as c:
+            c.execute(delete(S.equity_daily).where(S.equity_daily.c.address == a, S.equity_daily.c.day == day))
+            c.execute(
+                insert(S.equity_daily).values(
+                    address=a,
+                    day=day,
+                    avg_equity_usd=avg,
+                    points=points,
+                    origin_ms=origin_ms,
+                    source_window=window,
+                    note=note or None,
+                    computed_at=_now(),
+                )
+            )
+
+    def put_swap(self, day: str, uid: int, old_hotkey: str, new_hotkey: str, coldkey: str | None) -> None:
+        with self._engine.begin() as c:
+            c.execute(delete(S.hotkey_swaps).where(S.hotkey_swaps.c.day == day, S.hotkey_swaps.c.uid == uid))
+            c.execute(
+                insert(S.hotkey_swaps).values(
+                    day=day, uid=uid, old_hotkey=old_hotkey, new_hotkey=new_hotkey, coldkey=coldkey
+                )
+            )
+
+    def swaps_through(self, day: str) -> list[tuple[str, str, str]]:
+        """(day, old hotkey, new hotkey) of every recorded swap up to `day`, oldest first."""
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(S.hotkey_swaps.c.day, S.hotkey_swaps.c.old_hotkey, S.hotkey_swaps.c.new_hotkey)
+                .where(S.hotkey_swaps.c.day <= day)
+                .order_by(S.hotkey_swaps.c.day, S.hotkey_swaps.c.uid)
+            ).all()
+        return [(str(d), str(o), str(n)) for d, o, n in rows]
+
     def equity_series(self, address: str, days: int) -> list[tuple[str, float, float]]:
         """Up to `days` most recent (day, value, flows + off-market transfers), oldest first."""
         with self._engine.connect() as c:
@@ -236,6 +321,9 @@ class Store:
             rows = c.execute(select(S.state_history).where(S.state_history.c.day == prev)).mappings().all()
         out: dict[str, MinerState] = {}
         for r in rows:
+            if r.get("json"):
+                out[str(r["hotkey"])] = _state_from_json(str(r["json"]))
+                continue
             paid_days = tuple((int(d), float(a)) for d, a in (r["paid"] or []) if isinstance(d, int | float))
             out[str(r["hotkey"])] = MinerState(
                 phi_hat=float(r["phi_hat"] or 0.0),
@@ -270,6 +358,7 @@ class Store:
                             g=s.g,
                             paid=[[d, a] for d, a in s.paid_days],
                             zero_until_day=s.zero_until_day,
+                            json=json.dumps(asdict(s)),
                         )
                     )
 
@@ -348,16 +437,6 @@ class Store:
                 select(S.neurons.c.uid, S.neurons.c.hotkey, S.neurons.c.coldkey).where(S.neurons.c.day == day)
             ).all()
         return [{"uid": int(u), "hotkey": str(h), "coldkey": str(k)} for u, h, k in rows]
-
-    def carry_state(self, old_hotkey: str, new_hotkey: str) -> bool:
-        """After a hotkey swap (same UID and coldkey), the smoothed state follows the new hotkey."""
-        with self._engine.begin() as c:
-            row = c.execute(select(S.states.c.json).where(S.states.c.hotkey == old_hotkey)).first()
-            if row is None:
-                return False
-            c.execute(delete(S.states).where(S.states.c.hotkey.in_([old_hotkey, new_hotkey])))
-            c.execute(insert(S.states).values(hotkey=new_hotkey, json=row[0]))
-        return True
 
     # ----- chain samples ----------------------------------------------------------------------------------
 
@@ -629,7 +708,8 @@ def _state_from_json(s: str) -> MinerState:
     raw = json.loads(s)
     raw["paid"] = tuple(raw.get("paid", ()))
     raw["paid_days"] = tuple((int(d), float(a)) for d, a in raw.get("paid_days", ()))
-    return MinerState(**raw)
+    known = set(MinerState.__dataclass_fields__)
+    return MinerState(**{k: v for k, v in raw.items() if k in known})
 
 
 def _next_day(day: str) -> str:

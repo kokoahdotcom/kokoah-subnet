@@ -80,6 +80,7 @@ def test_penalties_swaps_and_latest_neurons(tmp_path: Path) -> None:
     assert s.penalties(10) == {"0xa": 40} and s.penalties(40) == {}
     s.put_neurons("2026-10-21", 100, [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}])
     assert s.latest_neurons() == [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}]
-    s.put_states({"hkOld": MinerState(phi_hat=7.0)})
-    assert s.carry_state("hkOld", "hkNew") and set(s.states()) == {"hkNew"} and s.states()["hkNew"].phi_hat == 7.0
-    assert not s.carry_state("nobody", "hkX")
+    s.put_swap("2026-10-21", 1, "hkOld", "hkNew", "ck")
+    s.put_swap("2026-10-23", 2, "hkA", "hkB", "ck2")
+    assert s.swaps_through("2026-10-22") == [("2026-10-21", "hkOld", "hkNew")]
+    assert len(s.swaps_through("2026-10-23")) == 2

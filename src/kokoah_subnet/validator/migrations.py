@@ -44,6 +44,26 @@ STEPS: list[tuple[int, str, Step]] = [
             "ALTER TABLE builder_files ADD COLUMN IF NOT EXISTS rechecked_at timestamptz"
         ),
     ),
+    (
+        6,
+        "eligibility: miner_days columns, full state in state_history",
+        _pg(
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS eligible boolean; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS ineligible_reason varchar(64); "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS avg_equity_usd double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS equity_points integer; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS qualified boolean; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS qual_trades integer; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS qual_notional double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS qualified_at_ms bigint; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS credited_credit double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS credited_notional double precision; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS credited_fills integer; "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS identity_reset varchar(32); "
+            "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS registered_block bigint; "
+            "ALTER TABLE state_history ADD COLUMN IF NOT EXISTS json text"
+        ),
+    ),
 ]
 
 

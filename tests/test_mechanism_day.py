@@ -49,6 +49,7 @@ def miner(hotkey: str, address: str, returns: list[float], staked: float) -> Min
         address=address,
         returns=returns,
         mean_equity_usd=50_000.0,
+        avg_equity_usd=50_000.0,
         staked_min_alpha=staked,
         collateral_min_alpha=10.0,
         window_fills=window_fills(address),
@@ -64,10 +65,22 @@ def test_worked_example_through_score_day() -> None:
     # states carry a smoothed credit of $1,000 (as in the spec) and B has been paid 100 alpha it no longer holds
     states = {
         "hkA": MinerState(
-            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0, fee_hat=2800.0, g=0.65, paid=(100.0,), paid_days=((99, 100.0),)
+            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0,
+            fee_hat=2800.0,
+            g=0.65,
+            paid=(100.0,),
+            paid_days=((99, 100.0),),
+            qualified=True,
+            address=A,
         ),
         "hkB": MinerState(
-            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0, fee_hat=2800.0, g=0.0, paid=(100.0,), paid_days=((99, 100.0),)
+            phi_hat=1000.0 / 0.7 - 0.3 / 0.7 * 1000.0,
+            fee_hat=2800.0,
+            g=0.0,
+            paid=(100.0,),
+            paid_days=((99, 100.0),),
+            qualified=True,
+            address=B,
         ),
     }
     inputs = DayInputs(
@@ -98,11 +111,15 @@ def test_worked_example_through_score_day() -> None:
 
 def test_fresh_miner_starts_at_the_floor_and_smooths_in() -> None:
     fills = taker_fills(A, 10, 10_000.0)
-    inputs = DayInputs(day_index=0, price_usd=1.0, fills=fills, states={}, miners=[MinerInputs("hk", A)])
+    inputs = DayInputs(
+        day_index=0, price_usd=1.0, fills=fills, states={}, miners=[MinerInputs("hk", A, avg_equity_usd=20_000.0)]
+    )
     res = score_day(inputs, DEFAULT)
     r = res.records[0]
     assert not r.gates_pass and r.multiplier == 0.85
-    assert res.states["hk"].phi_hat == pytest.approx(0.3 * r.fees.credit)
+    assert r.eligible and r.qualified
+    assert r.credited.fills == 8  # the first two trades qualify but earn nothing
+    assert res.states["hk"].phi_hat == pytest.approx(0.3 * r.credited.credit)
     assert r.pay_alpha <= r.cap_alpha
 
 
@@ -114,8 +131,11 @@ def test_mirrored_pair_loses_credit_and_is_reported() -> None:
         day_index=5,
         price_usd=1.0,
         fills=fa + fb,
-        states={},
-        miners=[MinerInputs("hkA", A, staked_min_alpha=1.0), MinerInputs("hkB", B)],
+        states={"hkA": MinerState(qualified=True), "hkB": MinerState(qualified=True)},
+        miners=[
+            MinerInputs("hkA", A, staked_min_alpha=1.0, avg_equity_usd=1e6),
+            MinerInputs("hkB", B, avg_equity_usd=1e6),
+        ],
     )
     res = score_day(inputs, DEFAULT)
     for r in res.records:

@@ -153,6 +153,20 @@ miner_days = Table(
     Column("pay_usd", Float),
     Column("exchange_taker_bps", Float),
     Column("exchange_maker_bps", Float),
+    # eligibility (spec section 9a)
+    Column("eligible", Boolean),
+    Column("ineligible_reason", String(64)),
+    Column("avg_equity_usd", Float),  # the day's time-weighted average account value (None = unknown)
+    Column("equity_points", Integer),  # recorded points inside the day behind the average
+    Column("qualified", Boolean),
+    Column("qual_trades", Integer),
+    Column("qual_notional", Float),
+    Column("qualified_at_ms", BigInteger),  # the trade that completed qualification, on the day it happened
+    Column("credited_credit", Float),  # the part of the day's credit that counted (eligible trades only)
+    Column("credited_notional", Float),
+    Column("credited_fills", Integer),
+    Column("identity_reset", String(32)),  # why credit and qualification were dropped today, if they were
+    Column("registered_block", BigInteger),
 )
 
 # the smoothed state after each day (history, not only the latest)
@@ -166,6 +180,7 @@ state_history = Table(
     Column("g", Float),
     Column("paid", JSON),
     Column("zero_until_day", Integer),
+    Column("json", Text),  # the full state (eligibility fields included); the columns above are for queries
 )
 
 states = Table(  # the latest state per hotkey (what the next day starts from)
@@ -185,6 +200,39 @@ equity = Table(
     Column("offmarket_pnl", Float),  # money moved in through off-market fills that day (removed from the return)
     Column("fetched_at", DateTime(timezone=True)),
     Column("raw", JSON),  # the clearinghouse margin summary
+)
+
+equity_points = Table(  # the exchange's recorded account-value points behind each day's average (spec 9a)
+    "equity_points",
+    metadata,
+    Column("address", String(42), primary_key=True),
+    Column("source_window", String(16), primary_key=True),
+    Column("time_ms", BigInteger, primary_key=True),
+    Column("value", Float, nullable=False),
+    Column("first_seen_day", String(10)),
+)
+
+equity_daily = Table(  # the daily average account value per address, as scored
+    "equity_daily",
+    metadata,
+    Column("address", String(42), primary_key=True),
+    Column("day", String(10), primary_key=True),
+    Column("avg_equity_usd", Float),  # None when the recorded history could not say
+    Column("points", Integer),
+    Column("origin_ms", BigInteger),
+    Column("source_window", String(16)),
+    Column("note", Text),
+    Column("computed_at", DateTime(timezone=True)),
+)
+
+hotkey_swaps = Table(  # same UID and coldkey, new hotkey: pay history and skill follow, credit does not
+    "hotkey_swaps",
+    metadata,
+    Column("day", String(10), primary_key=True),
+    Column("uid", Integer, primary_key=True),
+    Column("old_hotkey", String(64), nullable=False),
+    Column("new_hotkey", String(64), nullable=False),
+    Column("coldkey", String(64)),
 )
 
 ledger_updates = Table(  # deposits, withdrawals, transfers: the raw ledger records behind `flows`

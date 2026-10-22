@@ -10,7 +10,8 @@ from .params import Params
 
 @dataclass(frozen=True)
 class MinerState:
-    """Everything that belongs to the binding and survives a migration."""
+    """Everything carried from day to day for one hotkey. Credit and qualification belong to one identity and are
+    dropped when it changes (`eligibility.fresh_identity`); pay history, skill and penalties are kept."""
 
     phi_hat: float = 0.0  # smoothed fee credit, USD
     fee_hat: float = 0.0  # smoothed total fees on the builder leg, USD
@@ -19,6 +20,12 @@ class MinerState:
     zero_until_day: int | None = None  # day index until which g' = h' = 0 (mirror report)
     paid_days: tuple[tuple[int, float], ...] = ()  # (day index, alpha paid), so the window follows calendar days
     last_day: int | None = None  # the last day index this state was advanced on
+    # eligibility (section 9a): belongs to one identity (hotkey + bound address + registration), never carried over
+    qualified: bool = False
+    qual_trades: int = 0
+    qual_notional: float = 0.0
+    address: str | None = None  # the bound address the credit was earned with
+    registered_block: int | None = None  # the hotkey's registration the credit was earned under
 
     def paid_window(self, day_index: int | None = None, days: int = 60) -> float:
         """Alpha paid in the last `days` calendar days before `day_index` (all stored days when no index is given)."""
