@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="local development only: accept keys from machines without checking their attestation",
     )
+    aserv.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="also accept this harness image digest (sha256:...), to test a build before its release; repeatable",
+    )
 
     validator = sub.add_parser("validator", help="run the validator loop or serve its published results")
     vsub = validator.add_subparsers(dest="validator_command", required=True)
@@ -513,7 +519,7 @@ def _agent(args: argparse.Namespace) -> int:
         app = create_app(
             args.data_dir,
             args.db_url,
-            images=list(APPROVED_HARNESS_IMAGES),
+            images=[*APPROVED_HARNESS_IMAGES, *args.image],
             accept_unverified_machines=args.dev_accept_any_machine,
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
