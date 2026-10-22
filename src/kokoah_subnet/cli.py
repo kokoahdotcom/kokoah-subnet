@@ -30,7 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--state", type=Path, help="per-miner state JSON (read, then written back)")
     score.add_argument("--price-usd", required=True, type=float, help="the day's mean alpha price in USD")
     score.add_argument("--day-index", required=True, type=int, help="scoring day index (days since the subnet start)")
-    score.add_argument("--burn-hotkey", default="burn", help="hotkey that receives the unawarded remainder")
+    score.add_argument(
+        "--burn-hotkey", default="burn", help="hotkey that receives a day on which no miner has any weight"
+    )
     score.add_argument("--out", type=Path, help="write the day's result JSON here (default: stdout)")
 
     verify = sub.add_parser("verify", help="run the mechanism's numerical verification")
@@ -153,7 +155,9 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--netuid", required=True, type=int)
     vrun.add_argument("--builder", required=True, help="the builder address whose daily fill file is scored")
     vrun.add_argument(
-        "--burn-hotkey", required=True, help="registered hotkey (own coldkey) that receives the remainder"
+        "--burn-hotkey",
+        required=True,
+        help="registered hotkey (own coldkey) that receives a day on which no miner has any weight",
     )
     vrun.add_argument("--data-dir", required=True, type=Path)
     vrun.add_argument(

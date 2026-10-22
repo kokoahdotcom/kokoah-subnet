@@ -256,7 +256,7 @@ the identity lasts.
 ```
 Φ_i,d = 0 and Σ fee_f = 0 for the smoothing        Φ̂ and F̂ decay by 0.7, nothing is added
 miner i is left out of Σ_j score_j                 it takes no share, so it dilutes nobody
-pay_i,d = 0                                        its slice of the pool goes to the burn hotkey
+pay_i,d = 0                                        the eligible miners share the pool without it
 ```
 
 Volume, fills, account value and the skill smoothing are recorded as on any day. Credit from before the
