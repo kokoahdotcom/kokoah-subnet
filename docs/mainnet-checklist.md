@@ -12,7 +12,9 @@ Costs are read live (`btcli query subnet-registration-cost --network finney`) an
       day goes to the owner hotkey).
 - [x] Agents: the harness image built reproducibly and pushed (Docker Hub), tested on a real sealed Intel TDX
       machine, its digest added to `src/kokoah_subnet/agent/images.py` (harness 1.0.0, 2026-10-22).
-- [ ] The agent service hosted (`kokoah-subnet agent service --netuid <N>`) at a public URL.
+- [x] The agent service hosted on this server at `https://api.kokoah.com/miners` (registered hotkeys only, the
+      service's own key over stored copies, daily backups); testnet validators read it. For mainnet: switch its
+      `--netuid`/`--network`, and keep the service key file's offline copy.
 - [ ] Validator hosts decided (this server, the node servers, or rented machines), each with the record database.
 - [x] The builder fee switched on in the application (0.025%, live since 2026-10-20); the subnet pays nothing while it is zero.
 - [ ] The test-network period's measurements published: an agent on a real sealed machine (run 2026-10-22), both pools with real traders,

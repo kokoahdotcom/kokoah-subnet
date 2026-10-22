@@ -5,6 +5,6 @@ it is built from: `deploy/agent/build.sh <commit>` rebuilds it and prints the sa
 the image, so approving an image does not change it)."""
 
 APPROVED_HARNESS_IMAGES: tuple[str, ...] = (
-    # harness 1.0.0, commit c5dd5ef24705, docker.io/kokoahdotcom/kokoah-subnet-agent; tested on Intel TDX
-    "sha256:80746d9aa5d401b477b251f20f0c96067306f0cd077703a5374cd8f4db1da468",
+    # harness 1.0.0, commit 4f08902beae2, docker.io/kokoahdotcom/kokoah-subnet-agent; tested on Intel TDX
+    "sha256:1f4a32c49d2d3365187b46e9255fd429085190af51f8b04e1def06ecef03a65a",
 )
