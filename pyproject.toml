@@ -40,7 +40,7 @@ packages = ["src/kokoah_subnet"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-# The research notes are prose; their code snippets are quotes from the docs, not code of this repo.
+# The docs are prose; their code snippets are quotes, not code of this repo.
 extend-exclude = ["docs"]
 
 [tool.ruff.lint]
