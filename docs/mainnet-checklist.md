@@ -10,7 +10,7 @@ Costs are read live (`btcli query subnet-registration-cost --network finney`) an
 - [ ] Owner coldkey custody decided (hardware or multisig; an operations proxy for day-to-day owner calls).
 - [ ] The real burn wallet created on its own coldkey, its password known to the operator's burn process host.
 - [ ] Validator hosts decided (this server, the node servers, or rented machines), each with the record database.
-- [ ] The builder fee switched on in the application (0.025%); the subnet pays nothing while it is zero.
+- [x] The builder fee switched on in the application (0.025%, live since 2026-10-20); the subnet pays nothing while it is zero.
 - [ ] The test-network period's measurements published: a month of burns directed vs executed, the holding effect,
       real-trader replays, total-fee matching.
 - [ ] The whitepaper's parameters frozen for launch (specification version noted in every artifact).
