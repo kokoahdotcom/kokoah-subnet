@@ -9,7 +9,8 @@ validator/schema.py`; the tables, by what they answer:
 |---|---|
 | What ran, with what settings? | `runs` (one row per validator start: network, netuid, hotkeys, versions, config) |
 | What happened each scored day? | `days` (headline figures, file hash, whether it matched the operator's commitment, the full published artifact as JSON), `builder_files` (hash at scoring and at the later re-check) |
-| Every trade, counted or not, and why not | `fills` (every row of the builder file: address, hotkey if bound, coin, side, price, size, notional, taker flag, builder fee, total fee, counterparty, closed PnL, `excluded` = spot / unbound / cluster / bound_counterparty / mark_clip / NULL) |
+| Every trade, counted or not, and why not | `fills` (every row of the builder file and every builder fill from a bound address's own history: address, hotkey if bound, coin, side, price, size, notional, taker flag, builder fee, total fee, counterparty, closed PnL, `excluded` = spot / unbound / cluster / bound_counterparty / mark_clip / NULL, `source` = file / history / both, trade id, client order id) |
+| Did every credited fee reach the builder? | `builder_rewards` (what the exchange reported the builder had earned, at every scoring run; the health check compares it with the builder fees of all counted fills) |
 | Every miner's figures and the parts behind them | `miner_days` (credit, fees, notional, PnL, smoothed credit and fees, confidence, quality, raw and smoothed skill, holding with its inputs, gates with their counts, mirror shares, multiplier, share, caps in USD and alpha, pay in alpha and USD, exchange fee rates; eligibility: eligible, the reason when not, the day's average account value and its point count, qualification progress and the trade that completed it, the credited part of the day, an identity reset and its reason, the registration block) |
 | The smoothed state over time | `state_history` (per day, with the full state as JSON), `states` (latest), `hotkey_swaps` (same UID and coldkey, new hotkey: history follows, credit does not) |
 | The equity floor | `equity_points` (the exchange's recorded account values per address, kept as read; the live and window-edge points are not kept), `equity_daily` (the day's time-weighted average, its point count, when the account's history begins, and why it is unknown when it is) |
@@ -44,6 +45,8 @@ SELECT day, notional, builder_fee, confidence, quality, skill, holding, multipli
 SELECT e.at, n.uid, n.hotkey, n.emission, n.incentive FROM epoch_neurons n JOIN epochs e ON e.block = n.block ORDER BY e.at, n.uid;
 -- who was not eligible, and why
 SELECT day, hotkey, ineligible_reason, avg_equity_usd, equity_points, qual_trades, qual_notional FROM miner_days WHERE NOT eligible ORDER BY day;
+-- where the counted fills came from (the builder file has covered about the first half of each day)
+SELECT day, source, count(*), sum(builder_fee) FROM fills WHERE hotkey IS NOT NULL AND excluded IS NULL GROUP BY day, source ORDER BY day;
 -- why fills were not counted
 SELECT day, excluded, count(*), sum(notional) FROM fills GROUP BY day, excluded ORDER BY day;
 -- the holding effect: did traders at holding 1 keep more of their pay than traders at holding 0?

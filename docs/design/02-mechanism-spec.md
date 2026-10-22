@@ -1,6 +1,15 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.9, 2026-10-22)
+# Kokoah subnet incentive mechanism: complete specification (v5.10, 2026-10-22)
 
-Self-contained. Every symbol is defined here. v5.9 (2026-10-22): eligibility (§9a). A miner earns on a day only
+Self-contained. Every symbol is defined here. v5.10 (2026-10-22): the data plane (§3). Hyperliquid's per-builder
+daily file turned out to be incomplete: from 2026-10-01 to 2026-10-20 it held only the fills of about the first
+twelve hours of each UTC day (00:00 to 12:12, checked for Kokoah's builder and two large builders; one day was
+complete), and a day whose fills all fell after the cut has no file at all. The fills it leaves out did pay the
+fee: Kokoah's builder earnings on the exchange ($7.58 by 2026-10-22) equal the builder fees in its traders' own fill
+histories, while the files show $1.54. Each bound address's own fill history is therefore the primary source, the
+file a cross-check; the file's whole-second times are matched on the second (earlier matching on the millisecond
+never matched, so total fees fell back to fee rates); counterparties come from trade ids; a missing file no longer
+holds a day back past a deadline; and the fees credited to traders are checked against the builder's earnings. v5.9
+(2026-10-22): eligibility (§9a). A miner earns on a day only
 when its account's time-weighted average value that day is at least $10,000 and it has qualified with its first
 three trades worth $1,000 together; ineligible days earn no credit and no pay, the smoothed credit decays, and
 nothing is owed later. Credit and qualification belong to one identity: a migration to a new address, a hotkey
@@ -85,12 +94,36 @@ for nothing. **Perpetuals only (owner, 2026-10-21):** the app's builder code als
 exchange charges it on sells; spot fills (pairs like `PURR/USDC` or index names like `@107`) are recorded but never
 counted, in this version. No other platform is ever read.
 
-Data plane. Hyperliquid publishes one file per builder and day (`builder_fills/{builder}/{YYYYMMDD}.csv.lz4`:
-time, user, coin, side, px, sz, crossed, special trade type, tif, trigger flag, **counterparty**, closed PnL, TWAP
-id, builder fee). That file is the canonical list of scored fills: every validator fetches it independently, and
-the owner commits its hash on chain daily so disagreements are visible. The total `fee_f` comes from the address's
-own public fills (`userFillsByTime`, matched by user, coin, time, price, size and side) or, for addresses beyond the
-public limit of 10,000 fills, from the address's published fee rates (`userFees`) times notional.
+Data plane (v5.10). Two public sources, for every bound address and day:
+
+- **The address's own fill history** (`userFillsByTime`, paged), the primary source. Every fill carries its exact
+  time, price, size, side, taker flag, its total fee (the exchange's fee plus the builder fee), the builder fee
+  (`builderFee`), the trade id (`tid`, the same on both sides of a trade) and the client order id (`cloid`). It
+  does not name the builder.
+- **The per-builder daily file** (`builder_fills/{builder}/{YYYYMMDD}.csv.lz4`: time to the second, user, coin,
+  side, px, sz, crossed, special trade type, tif, trigger flag, **counterparty**, closed PnL, TWAP id, builder fee),
+  which names the builder but has held only about the first twelve hours of each UTC day. It is fetched by every
+  validator, its hash is recorded and committed on chain by the owner, and it confirms fills and names their
+  counterparties where it has them.
+
+The two are merged per address on (coin, side, price, size, second), identical rows one to one. A fill in both is
+taken from the history with the file's counterparty and builder fee. A fill only in the file is kept as it is (it
+lies beyond the history's reach of 10,000 fills; its total fee then comes from the address's fee rates, `userFees`,
+times notional). A fill only in the history counts as a builder fill when it paid a builder fee and either the
+scored builder is the only builder the address has approved (`approvedBuilders`: the exchange charges a builder
+fee only for an approved builder, so every builder fee is ours; at no more than the configured rate), or it carries
+Kokoah's order marker (a `cloid` starting `0x6b6f`) at exactly the configured rate. Counterparties of history fills
+come from trade ids: the validator reads the day's fills of every bound address and of up to 25 linked accounts per
+address (sub-accounts and transfer partners), and a fill whose trade id appears among another known address's fills
+traded with that address. A failed read of the history or of the approvals fails the day's scoring (retried within
+the hour) rather than scoring the day without it.
+
+**Earnings check.** The exchange reports what the builder has earned (`referral`: `builderRewards`). The validator
+records it at every scoring run, and the health check raises an alarm when the builder fees of all counted fills
+of bound addresses, over all scored days, exceed it: every credited fee must have reached the builder. (Kokoah's
+other traders pay fees too, so earnings exceed the credited fees in normal operation.) This catches the one gap
+the attribution rule leaves: a trader who approves another builder and gives its orders Kokoah's marker pays that
+builder real fees (the one law still makes it a loss) while the subnet would credit them.
 
 Removed before anything is computed:
 
@@ -333,6 +366,7 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
 | mark clip | 0.5% |
+| data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when the builder is the only approved one, or with Kokoah's order marker at exactly the fee rate; no file 12 h after the day: scored from the histories |
 | migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero (v5.9) |
 | emission split | miner 41%, owner 18% (locked), validators 41% (owner, 2026-10-20; the chain's default) |
 
@@ -399,10 +433,12 @@ after 60 days.
   recorded and flagged, the scored file stands.
 - External incentives on the exchange (referral rewards, points) are not the subnet's and do not change the bound:
   the subnet alone never makes a zero-edge round trip profitable.
-- **Late or missing files.** The exchange publishes a day's file hours after the day ends; the validator scores
-  every unscored day in order, oldest first, and waits for a missing file rather than skipping ahead (the smoothing
-  carries from day to day). A day the exchange never publishes is closed by announcement with
-  `kokoah-subnet validator skip-day`: scored as a day with no fills, the same on every validator.
+- **Late or missing files.** The exchange writes a day's file about an hour after the day ends, and none when the
+  part of the day it covers had no fills. The validator scores every unscored day in order, oldest first, waits
+  for the file until 12 hours after the day ends (`file_deadline_hours`), and then scores the day from the bound
+  addresses' histories alone (recorded as an error, so the health check shows it). A file published later is
+  fetched by the re-check and its hash recorded; the scored day stands. `kokoah-subnet validator skip-day` remains
+  for a day to be closed by announcement as a day with no fills (an outage of the exchange's history itself).
 - **Day zero** is a parameter of the mechanism (`Params.day_zero`), so every validator counts penalty and holding
   windows from the same date.
 - **Fee floor.** The one law needs the builder fee above `rebate + rebate / (1 − c_tot)` = 1.5 bps a side at
@@ -437,8 +473,10 @@ Before launch:
    positive at any pool size, and real high-volume traders are paid their proportional share.
 3. **Holding bonus.** Measure selling by miners with `h' = 1` against `h' = 0` on testnet; report; the weights
    stay inside the 15% rule.
-4. **Data plane.** Confirm the builder-fills file is fetchable by anyone for the real builder address (unknown
-   builders return 403), and that `fee_f` matching against `userFillsByTime` is exact.
+4. **Data plane.** Done 2026-10-22: the builder file is fetchable by anyone for the real builder address but
+   incomplete (about the first twelve hours of each day); the merged sources recover every builder fee the
+   exchange credits to the builder ($7.584 found against $7.584466 reported), and every file row matched a history
+   fill on the second.
 5. **Leaderboard metrics** (no effect on pay): skill `g` with its parts, managed capital (mean equity), volume,
    dollar profit, execution quality (realized slippage against the mark), holding, coverage figures.
 
@@ -446,8 +484,10 @@ Before launch:
 
 1. Resolved 2026-10-20: the builder fee is charged on maker fills as on taker fills (Kokoah attaches one rate,
    0.025%, at order placement; other builders' daily files show maker fills paying it).
-2. Builder attribution relies on Hyperliquid's per-builder daily file (public per builder, confirmed for the
-   backend's ingest; see §15 item 4); the public per-user API keeps 10,000 fills per address.
+2. Builder attribution: the address's own history (complete, but it does not name the builder) merged with the
+   per-builder daily file (names the builder, about half the day), with the approvals rule, the order marker and
+   the earnings check (§3). The public per-user API keeps 10,000 fills per address; an address beyond that within
+   a day keeps the file's fills for the part the history cannot reach.
 3. The TAO/USD mark for `p_d`: the node's daily mean; an exchange median is the fallback.
 4. The buyback path (USDC on Hyperliquid → TAO → `add_stake_burn`) and its publication.
 5. Legal review of paying tokens for trading (pending for the app).

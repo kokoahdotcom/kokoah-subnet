@@ -2,7 +2,7 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, version 1.2, October 2026. Mechanism specification v5.9.
+Whitepaper, version 1.3, October 2026. Mechanism specification v5.10.
 
 ### Summary
 
@@ -20,8 +20,10 @@ unawarded is destroyed.
 
 - **Miners are traders.** They register a hotkey, bind their Hyperliquid address with one signed line, and trade.
   They run no software and never expose keys.
-- **Scored from public data.** Validators recompute everything from the exchange's per-builder daily file, each
-  trader's public account history and the chain; every validator reaches the same weights from the same inputs.
+- **Scored from public data.** Validators recompute everything from each trader's own fills on the exchange,
+  cross-checked with the exchange's per-builder daily file, from each trader's public account history and from the
+  chain; every validator reaches the same weights from the same inputs, and the fees credited to traders are
+  checked against what the exchange reports the builder has earned.
 - **Pay follows fees paid.** Equal activity, equal pay, within a 15% band set by skill and holding. Twice the
   activity, about twice the pay.
 - **Real traders with real capital.** A trader earns on a day when the account's average value that day is at
@@ -81,7 +83,7 @@ flowchart LR
   K --> H[Hyperliquid<br/>fills, fees, account state]
   H -->|builder fee| O[Operator]
   O -->|buyback and burn| C[(Bittensor chain)]
-  H -->|per-builder daily file,<br/>public account data| V[Validators]
+  H -->|traders' own fills, daily builder file,<br/>public account data| V[Validators]
   C -->|stake, commitments,<br/>pool rate| V
   V -->|weights: miners by pay,<br/>remainder to the burn hotkey| C
   C -->|alpha emission| T
@@ -92,9 +94,9 @@ Figure 1. The flow. Trades go through the application to the exchange; the excha
 exchange's public data and the chain feed the validators; the validators' weights pay the traders and send the
 unawarded remainder to be burned.
 
-Once a day, after the UTC day closes, every validator fetches the exchange's file of all fills routed under the
-Kokoah builder code, reads which hotkey each address is bound to, fetches each bound address's public account
-history and fee schedule, works out from the exchange's recorded account values whether each trader held at least
+Once a day, after the UTC day closes, every validator reads which hotkey each address is bound to, reads each bound
+address's own fills from the exchange together with the exchange's daily file of fills routed under the Kokoah
+builder code, fetches each bound address's public account history and fee schedule, works out from the exchange's recorded account values whether each trader held at least
 $10,000 on average through the day, reads stake and the pool rate from the chain, and scores the day. The weights it sets
 every tempo pay each trader their share and direct the rest to the burn hotkey. Everything it fetched and decided
 goes into its record and its daily artifact.
@@ -144,7 +146,7 @@ process, and publishes the code, the parameters and every change. What the opera
 
 ## 4. The pay rule
 
-Every number below is a parameter of specification v5.9; the complete formulas are in appendix A.
+Every number below is a parameter of specification v5.10; the complete formulas are in appendix A.
 
 **Eligibility.** A trader earns on a day when two things hold. The account's average value over that day is at
 least $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a
@@ -288,18 +290,21 @@ hyperparameter, so the operator never sells into its own buyback.
 ## 7. What the operator cannot do
 
 The weights that pay traders are set by validators, not by the operator. Validators run the open-source code on
-public inputs: the exchange's per-builder file, each trader's public account history, and chain state. The
+public inputs: each trader's own fills and account history on the exchange, the exchange's per-builder file, and
+chain state. The
 operator's only input to scoring is the hash of the day's file, committed on chain from the owner hotkey, which
 validators compare with the hash of the file they fetched themselves from the exchange; a mismatch is published.
 The operator cannot add a fill, change a figure, pay a favorite or withhold a payment: any validator would compute
-a different result and the chain's consensus would show it.
+a different result and the chain's consensus would show it. Every validator also compares the builder fees it
+credits to traders with what the exchange reports the builder has earned, and raises an alarm if the credited
+fees are ever larger: every fee the subnet pays for must have reached the builder.
 
 Parameters are part of the versioned code. A change is announced at least seven days before it takes effect,
 recorded in the changelog (appendix F), and published in every daily artifact as the mechanism's version number.
 Validators adopt it by updating; nothing changes until they do.
 
-Every validator keeps a complete relational record of what it saw and decided: every fill in the builder file
-with whether it counted and why not, every per-miner figure with the parts behind it (confidence, quality,
+Every validator keeps a complete relational record of what it saw and decided: every builder fill, from the
+trader's own history or the builder file, with its source, whether it counted and why not, every per-miner figure with the parts behind it (confidence, quality,
 smoothed credit and fees, holding inputs, gate counts, mirror shares, caps and pay), every eligibility decision with
 its reason, every account value with the recorded points behind each day's average, every ledger entry and
 position, every commitment and binding decision, every pool and stake sample, every epoch's payout per
@@ -345,7 +350,8 @@ and honest traders were paid proportionally; the replay also found and removed a
 honest traders by coincidence. Two independent validators on the test network scored the same day with the same
 file hash and identical weights. On a local chain: directing most of the miner pool to one hotkey and
 burning it leaves alpha emission to everyone else unchanged. On a test-network subnet with the real public data:
-the per-builder daily file is fetchable by anyone for the operator's builder address, bindings publish and resolve
+each trader's own fills merged with the per-builder daily file recover every builder fee the exchange credits to
+the operator's builder, to the cent, with every row of the daily file matched; bindings publish and resolve
 on chain, the validator scores complete days into its record and submits weights; the chain paid the whole
 unawarded pool of an epoch to the burn hotkey, and the operator's burn process destroyed it with one `burn_alpha`
 transaction. Eligibility is tested end to end: a fall below $10,000 pays nothing that day and only lets earlier
@@ -363,13 +369,16 @@ measurements are in the repository.
    Pass criterion unchanged: no zero-edge strategy nets positive at any pool size, and genuine high-volume traders
    receive their proportional share.
 3. Holding: selling by traders at factor 1 against factor 0 on the test network.
-4. Total-fee matching against public fill histories checked on real bound traders over a month of data.
+4. The merged fills checked against the builder's earnings on real bound traders over a month of data.
 
-**Assumptions.** The public per-address fill API keeps 10,000 fills, so the per-builder file is essential for
-high-frequency accounts (it is, and it is public). The exchange publishes a day's file hours after the day ends;
-validators score days in order and wait for a late file, and a day never published is closed by announcement, the
-same on every validator. The caps need the builder fee to stay above 0.015%, which the validator checks in every
-file. The TAO/USD rate is the day's mean of the exchange's own TAO perpetual, with a configured fallback.
+**Assumptions.** Each trader's own fill history is complete and names every builder fee, but not the builder; the
+exchange's per-builder daily file names the builder and has so far covered about the first half of each day. The
+validator merges the two: a fill seen only in the history counts when the operator's builder is the only one the
+trader has approved, or when it carries the application's order marker at exactly the operator's fee, and the
+earnings check catches anything else. The history keeps 10,000 fills per account, and the daily file covers the
+rest for the busiest accounts. Validators score days in order, wait for the day's file until twelve hours after
+the day ends, and then score from the histories. The caps need the builder fee to stay above 0.015%, which the
+validator checks every day. The TAO/USD rate is the day's mean of the exchange's own TAO perpetual, with a configured fallback.
 The day's average account value comes from the exchange's own recorded history of the account, about one point
 every two hours; validators read it while the day is within the exchange's seven-day window, keep the points they
 read, and treat a day with too few points as unknown rather than estimate it; a failed read delays the day's
@@ -482,14 +491,17 @@ it earns again, from that day's trades.
 
 ### Appendix C. A validator's day
 
-1. Fetch the previous UTC day's per-builder fill file; verify its hash against the operator's on-chain commitment.
+1. Fetch the previous UTC day's per-builder fill file (waiting up to twelve hours after the day for it); verify its
+   hash against the operator's on-chain commitment.
 2. Read every commitment on the subnet; resolve which address each hotkey is bound to.
-3. For each bound address: fetch public fills for the total fee field and the off-market check against the
-   exchange's minute candles, account value and ledger for returns and flows, positions, the fee schedule,
+3. For each bound address: fetch its own fills and the builders it has approved, merge them with the daily file
+   (the fills the file confirms, and the history's fills that are the builder's), name counterparties by trade id
+   against the other bound addresses and the linked accounts; check the off-market fills against the exchange's
+   minute candles; read account value and ledger for returns and flows, positions, the fee schedule,
    sub-accounts and transfer partners for clusters; read the day's minimum own stake and the pool rate from the
    chain at blocks anchored to the day; read the account's recorded value history for the day's average. A failed
-   read never costs the trader the day's credit; a failed read of the value history delays the day's scoring
-   instead, so it never makes a trader ineligible.
+   read never costs the trader the day's credit; a failed read of the fill history or of the value history delays
+   the day's scoring instead, so it never costs a trader a fill or makes a trader ineligible.
 4. Read the account's recorded history and compute each trader's average account value for the day; walk the
    day's trades for qualification; update smoothed credit (eligible trades only), total fees and skill; compute holding, gates, the rate; compute shares, caps in alpha at
    the day's mean rate, pay, and the remainder.
@@ -522,6 +534,10 @@ leaderboard page).
 
 ### Appendix F. Changelog
 
+- **1.3 (2026-10-22).** Mechanism v5.10: each trader's own fills on the exchange are the primary source, merged
+  with the per-builder daily file (which has covered about the first half of each day), counterparties named by
+  trade id, a day's scoring no longer held back by a missing file, and the credited fees checked against the
+  builder's earnings on the exchange.
 - **1.2 (2026-10-22).** Mechanism v5.9: eligibility. A trader earns on days the account averages at least
   $10,000, after three qualifying trades worth $1,000 together; ineligible days earn no credit and no pay and
   nothing is owed later; credit and qualification restart with a new address, a hotkey swap or a new

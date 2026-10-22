@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v5.9, 2026-10-22)
+# Incentive mechanism in plain words (v5.10, 2026-10-22)
 
 The formulas are in `02-mechanism-spec.md`; this page says what they do. The public, polished version is the
 whitepaper (`docs/whitepaper.md`).
@@ -39,6 +39,15 @@ $10,000 you earn again; nobody is ever excluded for good.
 5. **Burn what is left.** When the pool is bigger than the sum of the caps (a young subnet), the rest goes to a
    separate burn hotkey (not the owner's) and a small operator process destroys it on chain, one public
    transaction each time.
+
+## Where the trades come from
+
+Validators read each linked trader's own trade history from Hyperliquid, which shows the Kokoah fee on every
+trade, and check it against Hyperliquid's daily list of Kokoah trades. That daily list has so far covered only
+about the first half of each day, so it is a cross-check, not the source. A trade counts when Kokoah is the only
+app the trader has allowed to charge a fee, or when the order carries Kokoah's own marker at Kokoah's exact fee.
+Every day the total credited to traders is compared with what Hyperliquid says Kokoah has earned; more would raise
+an alarm.
 
 ## Why cheating does not pay
 

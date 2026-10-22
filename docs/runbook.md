@@ -21,7 +21,12 @@ kokoah-subnet-operator.timer`). The hourly check posts to `KOKOAH_SUBNET_ALERT_W
 in `~/.local/share/kokoah/subnet-alert.env`) only when something is wrong; the daily operator step commits
 yesterday's file hash from the owner hotkey at 00:20 UTC and retries hourly until noon if the file is late.
 
-If the exchange never publishes a day's file, close it by announcement on every validator:
+The exchange's daily builder file has covered only about the first half of each UTC day, and it writes none for a
+day whose covered part had no fills. The validator therefore scores each bound address from its own fill history
+(merged with the file), waits for the file until 12:00 UTC the next day, and then scores from the histories alone
+(an error is recorded, so the check shows it). The check also alarms when the builder fees credited to traders
+exceed what the exchange says the builder has earned. Only if the exchange's fill history itself is unavailable
+for a day, close it by announcement on every validator:
 `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>` (scored as a day with no fills).
 
 `uv run kokoah-subnet validator check` prints the health report (latest day, last weights, last epoch, errors in
