@@ -226,8 +226,11 @@ or AMD SEV-SNP hardware, whose memory the cloud host cannot read and whose softw
 
 - **The account's key is born inside the machine.** The harness creates the Hyperliquid account's key inside the
   machine and never exports it. The exchange accepts only orders signed with that key, so nobody, the agent's author
-  included, can trade the account by hand. The key exists only in the machine's memory and is never written
-  anywhere: a machine that stops takes it with it, so an agent's owner withdraws the funds before stopping it.
+  included, can trade the account by hand. A copy encrypted with a secret only the agent's owner holds is kept by
+  the operator's service, which cannot read it. If the machine stops, a new sealed machine started with the same
+  secret proves it is genuine and gets the copy back, so the account carries on as an agent. The owner can also
+  take the key out themselves with a request signed by their own wallet; that is recorded publicly, and the account
+  never earns the agent bonus again, since a person now holds its key.
 - **The agent runs in a sandbox.** The submitted code runs as a separate user, with no network at all: every
   attempt to open an internet connection is refused by the operating system. Its only way out is a local channel to
   the harness, which offers orders, cancels and leverage changes, and read-only market and account data.
@@ -243,8 +246,9 @@ challenge. The machine answers with a token from Google that names the exact har
 production confidential machine, and carries both the challenge and a digest of the subnet, the hotkey, the account
 and the code fingerprint. The validator checks Google's signature, that the image is an approved harness, that the
 fingerprint is the one committed on chain, and on the exchange that the account has no other trading key approved.
-Only then does the account count as an agent that day. Nothing in the check trusts the operator or the agent's
-author.
+It also checks that the account's key was never released to its owner. Only then does the account count as an
+agent that day. The check trusts neither the agent's author nor the operator's word about the machine; the one thing
+it takes from the operator is the public list of released keys.
 
 ## 7. Sustainability
 
@@ -320,7 +324,7 @@ strategy earn one weight; the agent bonus is exactly 10% of the skill weight and
 which strategies without an edge took none of the skill reward. The data plane recovers every builder fee the
 exchange credits to the operator's builder, to the cent, with every row of the daily file matched and every
 history-only fill confirmed from the trader's own signed orders. The sealed-machine path end to end: submission,
-key creation in memory, the sandbox (no network, no access to other processes), orders through the harness with
+key creation, its encrypted copy, restore on a new machine and public release, the sandbox (no network, no access to other processes), orders through the harness with
 the builder code, and every validator check with each failure case; the harness image built and run with an
 example agent reading live market data through the harness. Two independent validators on the test network scored
 the same days with identical weights.

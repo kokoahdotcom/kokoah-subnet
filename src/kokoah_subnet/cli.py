@@ -73,15 +73,29 @@ def build_parser() -> argparse.ArgumentParser:
     abind.add_argument("--wallet", required=True)
     abind.add_argument("--wallet-hotkey", default="default")
     abind.add_argument("--wallet-path", default=None)
-    amsg = asub.add_parser("message", help="print the text the miner's own address signs to withdraw or stop")
-    amsg.add_argument("kind", choices=["withdraw", "stop"])
+    amsg = asub.add_parser("message", help="print the text the miner's own address signs (withdraw, stop, release)")
+    amsg.add_argument("kind", choices=["withdraw", "stop", "release"])
     amsg.add_argument("--account", required=True, help="the agent account address")
     amsg.add_argument("--amount", default="", help="withdraw: USDC amount")
+    arel = asub.add_parser(
+        "release", help="take the account key out of the service (ends the agent bonus for the account, for good)"
+    )
+    arel.add_argument("--service", required=True)
+    arel.add_argument("--account", required=True)
+    arel.add_argument("--time-ms", required=True, type=int, help="from `agent message release`")
+    arel.add_argument("--signature", required=True, help="the master address's signature of that message")
+    arel.add_argument("--secret-file", required=True, type=Path, help="a file holding the secret given at start (hex)")
+    arel.add_argument("--out", required=True, type=Path, help="where to write the private key (created, mode 600)")
     aserv = asub.add_parser("service", help="run the owner's agent service")
     aserv.add_argument("--data-dir", type=Path, required=True)
     aserv.add_argument("--db-url", default="")
     aserv.add_argument("--host", default="127.0.0.1")
     aserv.add_argument("--port", type=int, default=48130)
+    aserv.add_argument(
+        "--dev-accept-any-machine",
+        action="store_true",
+        help="local development only: accept keys from machines without checking their attestation",
+    )
 
     validator = sub.add_parser("validator", help="run the validator loop or serve its published results")
     vsub = validator.add_subparsers(dest="validator_command", required=True)
@@ -108,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--poll-seconds", type=int, default=60)
     vrun.add_argument("--once", action="store_true", help="one pass, then exit")
     vrun.add_argument("--day", default=None, help="score this day instead of yesterday")
+    vrun.add_argument(
+        "--agent-service",
+        default=os.environ.get("KOKOAH_AGENT_SERVICE", ""),
+        help="the owner's agent service URL (its released list); without it no account counts as an agent",
+    )
     owner = sub.add_parser("owner", help="operator tools")
     osub = owner.add_subparsers(dest="owner_command", required=True)
     ocommit = osub.add_parser("commit-file", help="commit the day's builder file hash from the owner hotkey")
@@ -227,6 +246,7 @@ def _validator(args: argparse.Namespace) -> int:
             tao_usd_fallback=args.tao_usd_fallback,
             poll_s=args.poll_seconds,
             db_url=args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", ""),
+            agent_service=args.agent_service,
         )
         asyncio.run(run(cfg, once=args.once, day=args.day))
         return 0
@@ -453,15 +473,34 @@ def _agent(args: argparse.Namespace) -> int:
         return asyncio.run(_publish())
     if args.agent_command == "message":
         from kokoah_subnet.agent.harness import stop_message, withdraw_message
+        from kokoah_subnet.agent.keystore import release_message
 
         t = int(time.time() * 1000)
-        text = (
-            withdraw_message(args.account, args.amount, t) if args.kind == "withdraw" else stop_message(args.account, t)
-        )
+        if args.kind == "withdraw":
+            text = withdraw_message(args.account, args.amount, t)
+        elif args.kind == "stop":
+            text = stop_message(args.account, t)
+        else:
+            text = release_message(args.account, t)
         print(json.dumps({"message": text, "time_ms": t}))
+        if args.kind == "release":
+            print("taking the key out ends the agent bonus for this account for good, and the release is public;")
+            print("sign it with your master address (EIP-191), then within 5 minutes run `kokoah-subnet agent release`")
+            return 0
         fields = "time_ms, signature, amount_usd" if args.kind == "withdraw" else "time_ms, signature"
         print(f"sign the message with your own address (EIP-191) and POST {{{fields}}} to <endpoint>/{args.kind}")
         print("within 5 minutes")
+        return 0
+    if args.agent_command == "release":
+        from kokoah_subnet.agent.keystore import KeyService, decrypt_key
+
+        secret = bytes.fromhex(args.secret_file.read_text().strip())
+        blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
+        key = decrypt_key(blob, args.account, secret)
+        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("0x" + key.hex() + "\n")
+        print(f"the private key of {args.account.lower()} is in {args.out} (mode 600); the agent bonus has ended")
         return 0
     if args.agent_command == "service":
         import uvicorn
@@ -469,7 +508,14 @@ def _agent(args: argparse.Namespace) -> int:
         from kokoah_subnet.agent.images import APPROVED_HARNESS_IMAGES
         from kokoah_subnet.agent.service import create_app
 
-        app = create_app(args.data_dir, args.db_url, images=list(APPROVED_HARNESS_IMAGES))
+        if args.dev_accept_any_machine:
+            print("development mode: keys are accepted from any machine (never use this in production)")
+        app = create_app(
+            args.data_dir,
+            args.db_url,
+            images=list(APPROVED_HARNESS_IMAGES),
+            accept_unverified_machines=args.dev_accept_any_machine,
+        )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
     return 2

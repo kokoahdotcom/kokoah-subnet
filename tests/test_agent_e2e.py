@@ -57,7 +57,7 @@ def make_agent(tmp_path: Path) -> Path:
 @pytest.fixture()
 def world(tmp_path: Path) -> dict[str, Any]:
     hotkey = Keypair.create_from_uri("//Alice")
-    service = TestClient(create_app(tmp_path / "svc"))
+    service = TestClient(create_app(tmp_path / "svc", accept_unverified_machines=True))
     plain = package(make_agent(tmp_path))
     bundle_key = new_key()
     blob = encrypt(plain, bundle_key)  # private code: the service stores only ciphertext
@@ -94,7 +94,6 @@ def test_submission_rules(world: dict[str, Any], tmp_path: Path) -> None:
     bob = Keypair.create_from_uri("//Bob")
     forged = {**body, "hotkey": bob.ss58_address}
     assert svc.post("/v1/agents", json=forged).status_code == 403
-    assert svc.put("/v1/keys/" + world["h"].address, json={"blob": "eA==", "hotkey": "x"}).status_code in (404, 405)
 
 
 async def _check(world: dict[str, Any], binding: Binding, images: list[str], others: list[Any]) -> Any:

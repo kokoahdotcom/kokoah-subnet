@@ -1,9 +1,15 @@
-"""The subnet owner's agent service (specification v6, section 16): where miners submit agent code and where the
-sealed machines fetch it.
+"""The subnet owner's agent service (specification v6, section 16): where miners submit agent code, where the
+sealed machines fetch it, and where they keep their account key encrypted with the miner's secret.
 
     POST /v1/agents            submit a bundle, signed by the miner's hotkey
     GET  /v1/agents/{id}       a submission's record      GET /v1/agents/{id}/bundle   its exact bytes
     GET  /v1/images            the approved harness images
+    PUT  /v1/keys/{address}                 store an encrypted account key (a sealed machine's attestation required)
+    GET  /v1/keys/{address}/challenge       a fresh challenge for a restore
+    POST /v1/keys/{address}/restore         the encrypted key back to a new sealed machine (attestation required)
+    POST /v1/keys/{address}/release         the encrypted key to the miner (signed by the master address): public,
+                                            and the account never earns the agent bonus again
+    GET  /v1/released                       every released account
 
 A submission's id is the sha256 of the stored bytes (encrypted or not), so a machine can check it fetched exactly
 what was submitted. A plain bundle is checked here (a zip with an entry.py, safe paths, within the size limits) and
@@ -17,16 +23,20 @@ The hotkey signs `kokoah-agent-submit-1 sha256=<id> hotkey=<ss58>`. One submissi
 from __future__ import annotations
 
 import base64
+import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from eth_account import Account
+from eth_account.messages import encode_defunct
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import Boolean, Column, Float, MetaData, String, Table, create_engine, insert, select
+from sqlalchemy import Boolean, Column, Float, Integer, MetaData, String, Table, Text, create_engine, insert, select
 
 from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted, sha256_hex
+from .keystore import release_message, restore_digest, store_digest
 
 SUBMIT_COOLDOWN_S = 12 * 3600
 metadata = MetaData()
@@ -42,6 +52,29 @@ submissions = Table(
 )
 
 
+keys = Table(
+    "agent_keys",
+    metadata,
+    Column("address", String(42), primary_key=True),
+    Column("hotkey", String(64), nullable=False),
+    Column("master", String(42), nullable=False),
+    Column("blob", Text, nullable=False),
+    Column("stored_at", Float, nullable=False),
+    Column("released_at", Float),  # when the miner took the key (then never an agent again)
+)
+key_events = Table(  # every store, restore and release, for the record
+    "agent_key_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("address", String(42), nullable=False, index=True),
+    Column("event", String(16), nullable=False),
+    Column("at", Float, nullable=False),
+    Column("detail", Text),
+)
+CHALLENGE_TTL_S = 300
+SIGNED_REQUEST_WINDOW_MS = 300_000
+
+
 def submit_message(blob_sha256: str, hotkey: str) -> str:
     return f"kokoah-agent-submit-1 sha256={blob_sha256} hotkey={hotkey}"
 
@@ -50,6 +83,22 @@ def default_verifier(message: str, signature: str, hotkey: str) -> bool:
     from bittensor.wallets import verify_message
 
     return bool(verify_message(message, signature, hotkey))
+
+
+class StoredKey(BaseModel):
+    blob: str  # base64 of the encrypted key
+    master: str
+    hotkey: str
+    token: str  # attestation token whose nonce is the store digest
+
+
+class Restore(BaseModel):
+    token: str  # attestation token whose nonce is the restore digest of an outstanding challenge
+
+
+class Release(BaseModel):
+    time_ms: int
+    signature: str  # EIP-191 signature of `release_message` by the master address
 
 
 class Submission(BaseModel):
@@ -65,7 +114,11 @@ def create_app(
     verify: Callable[[str, str, str], bool] = default_verifier,
     is_registered: Callable[[str], bool] | None = None,
     clock: Callable[[], float] = time.time,
+    attestation_keys: Any = None,
+    accept_unverified_machines: bool = False,
 ) -> FastAPI:
+    """`attestation_keys`: the token keys (Google's when None). `accept_unverified_machines` is for local
+    development only: any token is accepted for storing and restoring keys."""
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "bundles").mkdir(exist_ok=True)
     engine = create_engine(db_url or f"sqlite:///{data_dir / 'agents.sqlite'}", future=True)
@@ -137,5 +190,106 @@ def create_app(
     @app.get("/v1/images")
     def approved_images() -> dict[str, list[str]]:
         return {"images": list(images or [])}
+
+    challenges: dict[str, tuple[str, float]] = {}
+    key_source: list[Any] = [attestation_keys]
+
+    def machine_proof(token: str, nonce: str) -> None:
+        if accept_unverified_machines:
+            return
+        from .attest import AttestationError, google_keys, verify_token
+
+        if key_source[0] is None:
+            key_source[0] = google_keys()
+        try:
+            verify_token(token, key_source[0], list(images or []), [nonce])
+        except AttestationError as exc:
+            raise HTTPException(status_code=403, detail=f"not a genuine sealed machine: {exc}") from exc
+
+    def event(c: Any, address: str, kind: str, detail: str = "") -> None:
+        c.execute(insert(key_events).values(address=address, event=kind, at=clock(), detail=detail or None))
+
+    def check_address(address: str) -> str:
+        a = address.lower()
+        if len(a) != 42 or not a.startswith("0x") or any(ch not in "0123456789abcdef" for ch in a[2:]):
+            raise HTTPException(status_code=400, detail="bad address")
+        return a
+
+    @app.put("/v1/keys/{address}")
+    def store_key(address: str, body: StoredKey) -> dict[str, Any]:
+        a = check_address(address)
+        try:
+            blob = base64.b64decode(body.blob, validate=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="blob must be base64") from exc
+        machine_proof(body.token, store_digest(a, body.master, blob))
+        with engine.begin() as c:
+            if c.execute(select(keys.c.address).where(keys.c.address == a)).first():
+                raise HTTPException(status_code=409, detail="a key is already kept for this address")
+            c.execute(
+                insert(keys).values(
+                    address=a, hotkey=body.hotkey, master=body.master.lower(), blob=body.blob, stored_at=clock()
+                )
+            )
+            event(c, a, "store", f"hotkey {body.hotkey}")
+        return {"stored": a}
+
+    def kept(c: Any, a: str) -> Any:
+        row = c.execute(select(keys).where(keys.c.address == a)).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="no key kept for this address")
+        return row
+
+    @app.get("/v1/keys/{address}/challenge")
+    def challenge(address: str) -> dict[str, str]:
+        a = check_address(address)
+        value = secrets.token_hex(32)
+        challenges[a] = (value, clock() + CHALLENGE_TTL_S)
+        return {"challenge": value}
+
+    @app.post("/v1/keys/{address}/restore")
+    def restore(address: str, body: Restore) -> dict[str, Any]:
+        a = check_address(address)
+        outstanding = challenges.pop(a, None)
+        if outstanding is None or outstanding[1] < clock():
+            raise HTTPException(status_code=409, detail="ask for a fresh challenge first")
+        machine_proof(body.token, restore_digest(a, outstanding[0]))
+        with engine.begin() as c:
+            row = kept(c, a)
+            if row["released_at"] is not None:
+                raise HTTPException(status_code=410, detail="this key was released to the miner")
+            event(c, a, "restore")
+        return {"address": a, "blob": row["blob"]}
+
+    @app.post("/v1/keys/{address}/release")
+    def release(address: str, body: Release) -> dict[str, Any]:
+        a = check_address(address)
+        if abs(clock() * 1000 - body.time_ms) > SIGNED_REQUEST_WINDOW_MS:
+            raise HTTPException(status_code=403, detail="stale request")
+        with engine.begin() as c:
+            row = kept(c, a)
+            try:
+                signer = Account.recover_message(
+                    encode_defunct(text=release_message(a, body.time_ms)),
+                    signature=bytes.fromhex(body.signature.removeprefix("0x")),
+                )
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=403, detail="bad signature") from exc
+            if str(signer).lower() != row["master"]:
+                raise HTTPException(status_code=403, detail="not signed by the account's master address")
+            if row["released_at"] is None:
+                c.execute(keys.update().where(keys.c.address == a).values(released_at=clock()))
+            event(c, a, "release")
+        return {"address": a, "blob": row["blob"]}
+
+    @app.get("/v1/released")
+    def released() -> dict[str, list[dict[str, Any]]]:
+        with engine.connect() as c:
+            rows = c.execute(
+                select(keys.c.address, keys.c.released_at)
+                .where(keys.c.released_at.is_not(None))
+                .order_by(keys.c.address)
+            ).all()
+        return {"released": [{"address": a, "released_at": t} for a, t in rows]}
 
     return app

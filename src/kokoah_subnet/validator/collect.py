@@ -81,6 +81,7 @@ class ValidatorConfig:
     fills_cache: Path | None = None  # where downloaded builder files are kept (default: data_dir/fills)
     db_url: str = ""  # the record; empty = SQLite file in data_dir
     agent_images: tuple[str, ...] = APPROVED_HARNESS_IMAGES  # approved sealed-machine harness images
+    agent_service: str = ""  # the owner's agent service (its released list); empty: no account counts as an agent
     extra: dict[str, str] = field(default_factory=dict)
 
     def store_target(self) -> str | Path:
@@ -325,7 +326,13 @@ async def collect_and_score(
         http_client = agent_http or httpx.AsyncClient(timeout=20)
         try:
             checks = await check_agents(
-                agent_bindings, cfg.netuid, agent_keys, cfg.agent_images, http_client, extra_agents
+                agent_bindings,
+                cfg.netuid,
+                agent_keys,
+                cfg.agent_images,
+                http_client,
+                extra_agents,
+                service=cfg.agent_service,
             )
         except Exception as exc:  # noqa: BLE001 - no bonus today rather than no scoring
             log.warning("agent checks failed: %s", exc)

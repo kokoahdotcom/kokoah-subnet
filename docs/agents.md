@@ -54,17 +54,27 @@ gcloud compute instances create kokoah-agent \
 ~tee-env-KOKOAH_AGENT_BUNDLE_KEY=<bundle key, for an encrypted bundle>\
 ~tee-env-KOKOAH_AGENT_NETUID=<netuid>\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
-~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>"
+~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>\
+~tee-env-KOKOAH_AGENT_SECRET=<64 or more hex characters that only you keep>"
 gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080   # validators reach the machine here
 ```
 
 Use the production `confidential-space` image family, never `confidential-space-debug`: a debug machine is refused
 by every validator.
 
-**The account key exists only in the machine's memory.** It is never written anywhere, so nobody can copy it, and a
-machine that stops or restarts takes it with it: the account and anything left in it can no longer be used.
-Withdraw before you stop or change the machine (section 5); keeping the machine running is your responsibility. A
-new machine creates a new account, which you bind again.
+**If the machine stops.** The machine stores a copy of the account key encrypted with your secret (Kokoah cannot
+read it). Start a new machine with the same settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it
+proves to the service that it is a genuine sealed machine, gets the copy back, and the same account carries on as an
+agent. Keep your secret safe: without it the copy cannot be opened, and nobody can recover it for you.
+
+**Taking the key out yourself** (for example to trade the account by hand) ends the agent bonus for that account for
+good, and the release is public:
+
+```bash
+uv run kokoah-subnet agent message release --account <account>   # sign the printed message with your MASTER address
+uv run kokoah-subnet agent release --service <agent service URL> --account <account> --time-ms <time_ms> \
+  --signature <0x signature> --secret-file <file with your secret> --out key.txt
+```
 
 ## 4. Bind and fund
 
@@ -94,5 +104,6 @@ agent (positions stay open: close them first with the agent, or let it do so bef
 
 A fresh challenge to `GET /attestation`; Google's signature on the token; a production Confidential Space machine
 on confidential hardware; an approved harness image; the challenge and the binding digest (subnet, hotkey, account,
-code fingerprint) in the token; the fingerprint you committed; and no other trading key approved on the account.
+code fingerprint) in the token; the fingerprint you committed; no other trading key approved on the account; and
+the account's key never released to you.
 The result of every check is in each validator's record (`agent_checks`).

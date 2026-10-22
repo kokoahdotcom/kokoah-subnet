@@ -9,14 +9,18 @@ Start settings (environment, passed by the miner when they start the machine):
   KOKOAH_AGENT_SUBMISSION   the submission id (sha256 of the stored bundle bytes)
   KOKOAH_AGENT_BUNDLE_KEY   hex AES key for a private (encrypted) bundle
   KOKOAH_AGENT_NETUID, KOKOAH_AGENT_HOTKEY   the subnet and hotkey the account is bound to
-  KOKOAH_AGENT_MASTER       the miner's own address: the only withdrawal destination
+  KOKOAH_AGENT_MASTER       the miner's own address: the only withdrawal destination, and the only one that can
+                            take the key out (which ends the agent bonus for the account)
+  KOKOAH_AGENT_SECRET       hex, at least 32 bytes, kept by the miner: encrypts the stored copy of the key
+  KOKOAH_AGENT_RESTORE      after the machine stopped: the account address to resume on this new machine
   KOKOAH_AGENT_NETWORK      mainnet (default) or testnet
 
-The account key is created in memory when the machine starts and is never written anywhere: a machine that stops
-takes its key with it, and the account can no longer be used (withdraw before stopping).
+The account key lives in memory. A copy encrypted with the miner's secret is stored with the owner's service before
+anything else happens (with this machine's attestation), so a machine that stops can be replaced: a new machine
+started with the same secret and `KOKOAH_AGENT_RESTORE` proves it is a genuine sealed machine and gets the copy back.
 
 Steps: fetch the submission and check its id; decrypt it inside the machine; compute the code fingerprint;
-unpack it for the agent user; create the account key in memory; start the harness (agent socket and public
+unpack it for the agent user; create (and store) or restore the account key; start the harness (agent socket and public
 interface); approve Kokoah's builder fee once the account is funded; run the agent in the sandbox, restarting it
 when it exits (the agent restarts, the machine and its key do not).
 """
@@ -44,6 +48,7 @@ from . import sandbox
 from .attest import ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
+from .keystore import KeyService, decrypt_key, encrypt_key, restore_digest, store_digest
 
 log = logging.getLogger("kokoah_subnet.agent")
 IMAGE_SETTINGS = Path("/etc/kokoah-agent/image.json")
@@ -156,6 +161,24 @@ async def serve(h: Harness, uid: int | None, gid: int | None) -> None:
     await asyncio.gather(agent_server.serve(), public_server.serve(), fix_socket_permissions())
 
 
+def account_key(keys: KeyService, attestor: Any, secret: bytes, master: str, hotkey: str, restore: str | None) -> bytes:
+    """A restored key (`restore` names the account) or a new one whose encrypted copy is stored before use."""
+    if restore:
+        address = restore.lower()
+        challenge = keys.challenge(address)
+        blob = keys.restore(address, attestor.token([restore_digest(address, challenge)]))
+        key = decrypt_key(blob, address, secret)
+        log.info("restored account %s", address)
+        return key
+    account = Account.create()
+    address = account.address.lower()
+    key = bytes(account.key)
+    blob = encrypt_key(key, address, secret)
+    keys.store(address, master, hotkey, blob, attestor.token([store_digest(address, master, blob)]))
+    log.info("created account %s; its encrypted copy is stored", address)
+    return key
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     image = ImageSettings.load()
@@ -183,11 +206,19 @@ def main() -> int:
     else:
         attestor = ConfidentialSpaceAttestor()
     hotkey = env("KOKOAH_AGENT_HOTKEY")
-    key = bytes(Account.create().key)  # in memory only, never written anywhere
+    master = env("KOKOAH_AGENT_MASTER").lower()
+    key = account_key(
+        KeyService(service, http),
+        attestor,
+        bytes.fromhex(env("KOKOAH_AGENT_SECRET")),
+        master,
+        hotkey,
+        os.environ.get("KOKOAH_AGENT_RESTORE") or None,
+    )
     config = HarnessConfig(
         netuid=int(env("KOKOAH_AGENT_NETUID")),
         hotkey=hotkey,
-        master=env("KOKOAH_AGENT_MASTER").lower(),
+        master=master,
         code_sha256=code,
         builder=image.builder,
         builder_fee_tenths_bps=image.builder_fee_tenths_bps,

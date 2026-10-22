@@ -6,7 +6,9 @@ For every bound hotkey whose commitment carries an agent field, the validator:
 3. verifies the attestation token itself, against Google's published keys: production Confidential Space machine,
    confidential hardware, an approved harness image, and both nonces (its own challenge and the binding digest);
 4. checks on the exchange that the account has no other trading key approved (`extraAgents` empty), so nothing
-   but the machine can sign for it.
+   but the machine can sign for it;
+5. checks that the account's key was never released to the miner (the owner's public released list): a released
+   account is traded by a person from then on and never counts as an agent again, whatever its machine says.
 Only an account that passes all four that day gets the agent bonus. Nothing here trusts the operator or the miner.
 """
 
@@ -96,6 +98,13 @@ async def check_agent(
     )
 
 
+async def released_accounts(http: httpx.AsyncClient, service: str) -> set[str]:
+    """The accounts whose key the owner's service released to their miner (`GET /v1/released`)."""
+    r = await http.get(f"{service.rstrip('/')}/v1/released", timeout=20)
+    r.raise_for_status()
+    return {str(x["address"]).lower() for x in r.json()["released"]}
+
+
 async def check_agents(
     bindings: dict[str, Binding],
     netuid: int,
@@ -103,18 +112,44 @@ async def check_agents(
     images: Iterable[str],
     http: httpx.AsyncClient,
     extra_agents: Any,
+    service: str = "",
+    released: set[str] | None = None,
 ) -> list[AgentCheck]:
-    """Every agent binding among `bindings` (hotkey -> binding), checked concurrently."""
+    """Every agent binding among `bindings` (hotkey -> binding), checked concurrently. `released` (or the
+    owner's `service` to read it from) is required: without the released list no account counts as an agent."""
     agents = {hk: b for hk, b in bindings.items() if b.agent is not None}
     if not agents:
         return []
+    reason: str | None = None
+    if released is None:
+        if not service:
+            reason = "no agent service configured: the released list cannot be read"
+        else:
+            try:
+                released = await released_accounts(http, service)
+            except (httpx.HTTPError, ValueError, KeyError) as exc:
+                reason = f"released list unavailable: {str(exc)[:120]}"
+    if reason is not None or released is None:
+        why = reason or "released list unavailable"
+        return [
+            AgentCheck(hk, b.address, b.agent.code_sha256, b.agent.url, False, why)
+            for hk, b in sorted(agents.items())
+            if b.agent is not None
+        ]
+    out = [
+        AgentCheck(hk, b.address, b.agent.code_sha256, b.agent.url, False, "the key was released to the miner")
+        for hk, b in sorted(agents.items())
+        if b.agent is not None and b.address in released
+    ]
+    agents = {hk: b for hk, b in agents.items() if b.address not in released}
+    if not agents:
+        return out
     if keys is None:
         from kokoah_subnet.agent.attest import google_keys
 
         keys = await asyncio.to_thread(google_keys)
     approved = list(images)
-    return list(
-        await asyncio.gather(
-            *(check_agent(hk, b, netuid, keys, approved, http, extra_agents) for hk, b in sorted(agents.items()))
-        )
+    checked = await asyncio.gather(
+        *(check_agent(hk, b, netuid, keys, approved, http, extra_agents) for hk, b in sorted(agents.items()))
     )
+    return sorted([*out, *checked], key=lambda c: c.hotkey)

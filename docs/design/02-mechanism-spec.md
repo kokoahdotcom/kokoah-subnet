@@ -424,9 +424,15 @@ Agents run on the miner's own Google Cloud project, in a **Confidential Space** 
 started from Kokoah's published harness image. The harness (`src/kokoah_subnet/agent/`, `deploy/agent/`):
 
 - **Creates the account's key inside the machine** and never exports it. Nobody else can sign for the account, so
-  no person can trade it by hand: every action on it comes from the machine. The key lives only in memory and is
-  never written anywhere, so it cannot be copied out of storage either; a machine that stops takes it with it, and
-  the miner withdraws before stopping (keeping a machine running is the miner's responsibility).
+  no person can trade it by hand: every action on it comes from the machine. The key lives in memory; before the
+  account is used, the machine stores a copy encrypted with a secret only the miner holds (given at start) with
+  the owner's service, which accepts it only with the machine's attestation. **Restore:** a new sealed machine
+  started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
+  service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
+  and the account stays an agent account. **Release:** the miner can take the copy themselves with a request
+  signed by the machine's master address (`agent release`); the service records it publicly (`GET /v1/released`),
+  and from then on the account never earns the agent bonus again, whatever its machine says. The operator cannot
+  read the copy (it lacks the secret); the miner cannot get it without a public release.
 - **Runs the miner's agent code in a sandbox**: a separate user, no new privileges, no core dumps, memory and
   process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and other
   processes' memory. The agent's only way out is the harness's Unix socket.
@@ -456,10 +462,13 @@ agent_i    = answer names this subnet, hotkey, account and the committed fingerp
              ∧ the token's image digest is an approved harness image (src/kokoah_subnet/agent/images.py)
              ∧ the token's nonces include the challenge and the binding digest
              ∧ the account has no other trading key approved on the exchange (extraAgents empty)
+             ∧ the account is not on the owner's released list (read every day; unreadable: no agent that day)
 ```
 
 Only a day on which all of these hold gives the agent bonus (§7a). The validator trusts neither the operator nor
-the miner: the token is Google's, the image digest is public, and the challenge is its own.
+the miner on the machine itself: the token is Google's, the image digest is public, and the challenge is its own.
+It does trust the owner's service on one point: that it releases a stored key only publicly. That trust covers only
+the 10% agent bonus.
 
 **What stays outside the guarantee.** A person can still influence an agent indirectly (through the market data it
 reads, or a new submission); not by trading the account. The cloud provider and the chip maker are trusted for

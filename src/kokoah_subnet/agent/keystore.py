@@ -1,0 +1,103 @@
+"""The account key's copy, encrypted with the miner's secret and kept by the owner's service (spec v6, section 16).
+
+- **Store.** When a sealed machine creates an account it encrypts the key (AES-256-GCM under a key derived from a
+  secret only the miner holds, given to the machine at start) and sends the ciphertext to the owner's service,
+  with an attestation token proving a genuine sealed machine of an approved image sent it. The service cannot
+  read it; the miner never sees it.
+- **Restore.** A new sealed machine started with the same secret gets the ciphertext back after proving, with a
+  fresh attestation token, that it is a genuine sealed machine of an approved image; it decrypts the key inside.
+  No person ever holds the key, so the account stays an agent account.
+- **Release.** The miner can take the ciphertext themselves, with a request signed by their own address (the
+  machine's master). Then the miner holds the key and can trade the account by hand, so the release is public and
+  the account never earns the agent bonus again.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import os
+from typing import Any
+
+import httpx
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from eth_account import Account
+
+KEY_MAGIC = b"KAK1"
+MIN_SECRET_BYTES = 32
+
+
+def _derive(secret: bytes, address: str) -> bytes:
+    if len(secret) < MIN_SECRET_BYTES:
+        raise ValueError(f"the miner's secret must be at least {MIN_SECRET_BYTES} bytes")
+    hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"kokoah-agent-key-1 " + address.encode())
+    return hkdf.derive(secret)
+
+
+def encrypt_key(key: bytes, address: str, secret: bytes) -> bytes:
+    a = address.lower()
+    nonce = os.urandom(12)
+    return KEY_MAGIC + nonce + AESGCM(_derive(secret, a)).encrypt(nonce, key, a.encode())
+
+
+def decrypt_key(blob: bytes, address: str, secret: bytes) -> bytes:
+    a = address.lower()
+    if not blob.startswith(KEY_MAGIC):
+        raise ValueError("not an encrypted agent key")
+    key = AESGCM(_derive(secret, a)).decrypt(blob[4:16], blob[16:], a.encode())
+    if Account.from_key(key).address.lower() != a:
+        raise ValueError("the key belongs to another account")
+    return key
+
+
+def store_digest(address: str, master: str, blob: bytes) -> str:
+    blob_sha = hashlib.sha256(blob).hexdigest()
+    text = f"kokoah-agent-store-1 address={address.lower()} master={master.lower()} blob={blob_sha}"
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def restore_digest(address: str, challenge: str) -> str:
+    return hashlib.sha256(
+        f"kokoah-agent-restore-1 address={address.lower()} challenge={challenge}".encode()
+    ).hexdigest()
+
+
+def release_message(address: str, time_ms: int) -> str:
+    return f"kokoah-agent-release-1 account={address.lower()} time={time_ms}"
+
+
+class KeyService:
+    """The owner's service, as the sealed machine and the miner's tools reach it."""
+
+    def __init__(self, service: str, http: httpx.Client | None = None) -> None:
+        self.service = service.rstrip("/")
+        self.http = http or httpx.Client(timeout=30)
+
+    def _url(self, address: str, tail: str = "") -> str:
+        return f"{self.service}/v1/keys/{address.lower()}{tail}"
+
+    def store(self, address: str, master: str, hotkey: str, blob: bytes, token: str) -> None:
+        body = {"blob": base64.b64encode(blob).decode(), "master": master.lower(), "hotkey": hotkey, "token": token}
+        self.http.put(self._url(address), json=body).raise_for_status()
+
+    def challenge(self, address: str) -> str:
+        r = self.http.get(self._url(address, "/challenge"))
+        r.raise_for_status()
+        return str(r.json()["challenge"])
+
+    def restore(self, address: str, token: str) -> bytes:
+        r = self.http.post(self._url(address, "/restore"), json={"token": token})
+        r.raise_for_status()
+        return base64.b64decode(r.json()["blob"])
+
+    def release(self, address: str, time_ms: int, signature: str) -> bytes:
+        r = self.http.post(self._url(address, "/release"), json={"time_ms": time_ms, "signature": signature})
+        r.raise_for_status()
+        return base64.b64decode(r.json()["blob"])
+
+    def released(self) -> list[dict[str, Any]]:
+        r = self.http.get(f"{self.service}/v1/released")
+        r.raise_for_status()
+        return list(r.json()["released"])
