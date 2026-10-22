@@ -1,0 +1,9 @@
+# The sealed machine's packages (the harness only; no chain SDK). Pinned to the repository lock.
+cryptography==44.0.0
+eth-account==0.13.7
+fastapi==0.148.0
+httpx==0.28.1
+msgpack==1.1.0
+pydantic==2.14.1
+pyjwt==2.10.1
+uvicorn==0.54.0

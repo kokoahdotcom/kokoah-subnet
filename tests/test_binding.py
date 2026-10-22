@@ -156,3 +156,23 @@ def test_departed_hotkeys_release_their_address() -> None:
         registered=[HK2],
     )
     assert HK not in again.accepted and again.accepted[HK2].address == a.address.lower()
+
+
+def test_an_agent_field_round_trips_and_old_bindings_still_decode() -> None:
+    from eth_account import Account
+
+    from kokoah_subnet.binding import AgentRef, Binding, decode_binding, encode_binding, sign_binding
+
+    acct = Account.create()
+    sig = sign_binding(acct.key, 2, "5Hk", acct.address)
+    agent = AgentRef("ab" * 32, "203.0.113.7", 8080)
+    b = Binding(acct.address, sig, agent=agent)
+    text = encode_binding(b)
+    assert len(text) == 2 * 116
+    back = decode_binding(text)
+    assert back is not None and back.agent == agent and back.address == acct.address.lower()
+    assert back.agent.url == "http://203.0.113.7:8080"
+    plain = decode_binding(encode_binding(Binding(acct.address, sig)))
+    assert plain is not None and plain.agent is None
+    v6 = AgentRef("cd" * 32, "2001:db8::1", 443)
+    assert decode_binding(encode_binding(Binding(acct.address, sig, agent=v6))).agent.url == "http://[2001:db8::1]:443"  # type: ignore[union-attr]

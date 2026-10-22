@@ -40,7 +40,7 @@ def binding_digest(netuid: int, hotkey: str, address: str, code_sha256: str) -> 
 
 
 class Attestor(Protocol):
-    def token(self, nonces: list[str]) -> str: ...
+    def token(self, nonces: list[str], audience: str | None = None) -> str: ...
 
 
 class ConfidentialSpaceAttestor:
@@ -50,8 +50,9 @@ class ConfidentialSpaceAttestor:
         self.audience = audience
         self.socket_path = socket_path
 
-    def token(self, nonces: list[str]) -> str:
-        body = json.dumps({"audience": self.audience, "token_type": "OIDC", "nonces": nonces}).encode()
+    def token(self, nonces: list[str], audience: str | None = None) -> str:
+        fields = {"audience": audience or self.audience, "token_type": "OIDC", "nonces": nonces}
+        body = json.dumps(fields).encode()
         request = (
             b"POST /v1/token HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n"
             + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
@@ -181,11 +182,11 @@ class DevelopmentAttestor:
         self.image_digest = image_digest
         self.audience = audience
 
-    def token(self, nonces: list[str]) -> str:
+    def token(self, nonces: list[str], audience: str | None = None) -> str:
         now = int(time.time())
         claims = {
             "iss": ISSUER,
-            "aud": self.audience,
+            "aud": audience or self.audience,
             "iat": now,
             "nbf": now,
             "exp": now + 3600,

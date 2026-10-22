@@ -11,6 +11,7 @@ from .chain import (
 )
 from .message import (
     BINDING_VERSION,
+    AgentRef,
     Binding,
     binding_message,
     decode_binding,
@@ -23,6 +24,7 @@ from .message import (
 from .resolve import AcceptedBinding, Resolution, resolve_bindings
 
 __all__ = [
+    "AgentRef",
     "BINDING_VERSION",
     "PublishedBinding",
     "AcceptedBinding",

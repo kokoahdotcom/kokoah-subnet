@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from kokoah_subnet import __version__
 from kokoah_subnet.chain import NETWORKS, chain_info
@@ -52,6 +53,35 @@ def build_parser() -> argparse.ArgumentParser:
     show = msub.add_parser("show", help="list the bindings published on a subnet and whether they verify")
     show.add_argument("--netuid", required=True, type=int)
     show.add_argument("--network", default="local")
+
+    agent = sub.add_parser("agent", help="sealed-machine agents: package, submit, bind, sign, run the owner service")
+    asub = agent.add_subparsers(dest="agent_command", required=True)
+    apack = asub.add_parser("package", help="zip an agent directory (needs entry.py); --encrypt for private code")
+    apack.add_argument("directory", type=Path)
+    apack.add_argument("--out", type=Path, required=True)
+    apack.add_argument("--encrypt", action="store_true")
+    asubmit = asub.add_parser("submit", help="submit a bundle to the owner's agent service, signed by the hotkey")
+    asubmit.add_argument("--service", required=True)
+    asubmit.add_argument("--bundle", type=Path, required=True)
+    asubmit.add_argument("--wallet", required=True)
+    asubmit.add_argument("--wallet-hotkey", default="default")
+    asubmit.add_argument("--wallet-path", default=None)
+    abind = asub.add_parser("bind", help="publish the sealed machine's account and code fingerprint as the binding")
+    abind.add_argument("--netuid", required=True, type=int)
+    abind.add_argument("--endpoint", required=True, help="the machine's public address, http://host:port")
+    abind.add_argument("--network", default="local")
+    abind.add_argument("--wallet", required=True)
+    abind.add_argument("--wallet-hotkey", default="default")
+    abind.add_argument("--wallet-path", default=None)
+    amsg = asub.add_parser("message", help="print the text the miner's own address signs to withdraw or stop")
+    amsg.add_argument("kind", choices=["withdraw", "stop"])
+    amsg.add_argument("--account", required=True, help="the agent account address")
+    amsg.add_argument("--amount", default="", help="withdraw: USDC amount")
+    aserv = asub.add_parser("service", help="run the owner's agent service")
+    aserv.add_argument("--data-dir", type=Path, required=True)
+    aserv.add_argument("--db-url", default="")
+    aserv.add_argument("--host", default="127.0.0.1")
+    aserv.add_argument("--port", type=int, default=48130)
 
     validator = sub.add_parser("validator", help="run the validator loop or serve its published results")
     vsub = validator.add_subparsers(dest="validator_command", required=True)
@@ -158,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "miner":
         return _miner(args)
+    if args.command == "agent":
+        return _agent(args)
     if args.command == "validator":
         return _validator(args)
     if args.command == "owner":
@@ -347,6 +379,99 @@ def _miner(args: argparse.Namespace) -> int:
             return 0
 
         return asyncio.run(_show())
+    return 2
+
+
+def _wallet(args: argparse.Namespace) -> Any:
+    import bittensor as bt
+
+    if args.wallet_path:
+        return bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey, path=args.wallet_path)
+    return bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
+
+
+def _agent(args: argparse.Namespace) -> int:
+    import base64
+    import time
+    from urllib.parse import urlparse
+
+    import httpx
+
+    from kokoah_subnet.agent.bundle import encrypt, new_key, package, sha256_hex
+
+    if args.agent_command == "package":
+        plain = package(args.directory)
+        data = plain
+        if args.encrypt:
+            key = new_key()
+            data = encrypt(plain, key)
+            print(f"bundle key (keep it; the sealed machine needs it, nobody else has it): {key.hex()}")
+        args.out.write_bytes(data)
+        print(f"code fingerprint (commit this): {sha256_hex(plain)}")
+        print(f"submission id: {sha256_hex(data)}  ({len(data)} bytes, {'encrypted' if args.encrypt else 'plain'})")
+        return 0
+    if args.agent_command == "submit":
+        from kokoah_subnet.agent.service import submit_message
+
+        blob = args.bundle.read_bytes()
+        wallet = _wallet(args)
+        hotkey = wallet.hotkey.ss58_address
+        signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
+        r = httpx.post(
+            f"{args.service.rstrip('/')}/v1/agents",
+            json={"hotkey": hotkey, "bundle": base64.b64encode(blob).decode(), "signature": signature},
+            timeout=120,
+        )
+        print(r.status_code, r.text)
+        return 0 if r.status_code == 200 else 1
+    if args.agent_command == "bind":
+        import bittensor as bt
+
+        from kokoah_subnet.binding import AgentRef, Binding, publish_binding, verify_binding
+
+        wallet = _wallet(args)
+        hotkey = wallet.hotkey.ss58_address
+        status = httpx.get(f"{args.endpoint.rstrip('/')}/status", timeout=20).json()
+        signed = httpx.get(f"{args.endpoint.rstrip('/')}/binding", timeout=20).json()
+        if status["hotkey"] != hotkey or int(status["netuid"]) != args.netuid:
+            print(f"the machine is set up for hotkey {status['hotkey']} on netuid {status['netuid']}")
+            return 1
+        url = urlparse(args.endpoint)
+        ref = AgentRef(status["code_sha256"], url.hostname or "", url.port or 80)
+        binding = Binding(signed["address"], signed["signature"], agent=ref)
+        if not verify_binding(args.netuid, hotkey, binding):
+            print("the machine's binding signature does not verify")
+            return 1
+
+        async def _publish() -> int:
+            async with bt.Subtensor(args.network) as client:
+                result = await publish_binding(client, wallet, args.netuid, binding)
+            print(f"{'published' if result.success else 'failed'}: {result.message}")
+            print(f"agent account {binding.address}, code {ref.code_sha256}, endpoint {ref.url}")
+            return 0 if result.success else 1
+
+        return asyncio.run(_publish())
+    if args.agent_command == "message":
+        from kokoah_subnet.agent.harness import stop_message, withdraw_message
+
+        t = int(time.time() * 1000)
+        text = (
+            withdraw_message(args.account, args.amount, t) if args.kind == "withdraw" else stop_message(args.account, t)
+        )
+        print(json.dumps({"message": text, "time_ms": t}))
+        fields = "time_ms, signature, amount_usd" if args.kind == "withdraw" else "time_ms, signature"
+        print(f"sign the message with your own address (EIP-191) and POST {{{fields}}} to <endpoint>/{args.kind}")
+        print("within 5 minutes")
+        return 0
+    if args.agent_command == "service":
+        import uvicorn
+
+        from kokoah_subnet.agent.images import APPROVED_HARNESS_IMAGES
+        from kokoah_subnet.agent.service import create_app
+
+        app = create_app(args.data_dir, args.db_url, images=list(APPROVED_HARNESS_IMAGES))
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        return 0
     return 2
 
 

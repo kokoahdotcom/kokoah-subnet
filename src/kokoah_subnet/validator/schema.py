@@ -69,6 +69,23 @@ days = Table(
     Column("result_json", Text),
 )
 
+agent_checks = Table(  # each day's check of every agent account (spec v6, section 16)
+    "agent_checks",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("day", String(10), nullable=False, index=True),
+    Column("hotkey", String(64), nullable=False),
+    Column("address", String(42), nullable=False),
+    Column("code_sha256", String(64), nullable=False),
+    Column("endpoint", Text),
+    Column("ok", Boolean, nullable=False),
+    Column("reason", Text),
+    Column("image_digest", String(80)),
+    Column("hardware", String(32)),
+    Column("instance_id", String(64)),
+    Column("checked_at", DateTime(timezone=True)),
+)
+
 builder_rewards = Table(  # what the exchange says the builder has earned, at each scoring run (a check)
     "builder_rewards",
     metadata,

@@ -545,6 +545,12 @@ class Store:
             c.execute(delete(S.days).where(S.days.c.day == day))
             c.execute(delete(S.meta).where(S.meta.c.key.in_([f"attempt:{day}", "weights:day", "weights:block"])))
 
+    def put_agent_checks(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
+        with self._engine.begin() as c:
+            c.execute(delete(S.agent_checks).where(S.agent_checks.c.day == day))
+            for r in rows:
+                c.execute(insert(S.agent_checks).values(day=day, checked_at=_now(), **dict(r)))
+
     def put_builder_rewards(self, builder: str, rewards: Mapping[str, float]) -> None:
         with self._engine.begin() as c:
             c.execute(

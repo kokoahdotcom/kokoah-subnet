@@ -12,6 +12,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
 
+from kokoah_subnet.agent import harness as harness_module
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys, binding_digest, verify_token
 from kokoah_subnet.agent.harness import Harness, HarnessConfig, agent_app, public_app, stop_message, withdraw_message
 from kokoah_subnet.agent.hlsign import recover_l1_signer
@@ -145,3 +146,7 @@ def test_the_two_interfaces(setup: Any) -> None:
         "result": {"cancelled": 1},
     }
     assert public.post("/stop", json={"time_ms": t + 1, "signature": sig}).status_code == 403
+
+
+def test_the_harness_binding_line_is_the_subnet_one() -> None:
+    assert harness_module.binding_message(7, "5Abc", "0xAB") == binding_message(7, "5Abc", "0xAB")

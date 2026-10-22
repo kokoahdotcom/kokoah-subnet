@@ -34,8 +34,6 @@ from eth_account.messages import encode_defunct
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from kokoah_subnet.binding import binding_message
-
 from .attest import Attestor, binding_digest
 from .hlsign import (
     APPROVE_BUILDER_FEE_TYPES,
@@ -75,6 +73,12 @@ AGENT_METHODS = frozenset(
 SIGNED_REQUEST_WINDOW_MS = 300_000
 
 
+def binding_message(netuid: int, hotkey: str, address: str) -> str:
+    """The subnet binding line (identical to `kokoah_subnet.binding.binding_message`, kept here so the sealed
+    machine's image does not need the chain SDK; a test keeps the two the same)."""
+    return f"kokoah-bind-1 netuid={netuid} hotkey={hotkey} address={address.lower()}"
+
+
 @dataclass(frozen=True)
 class HarnessConfig:
     netuid: int
@@ -99,6 +103,7 @@ class Harness:
         attestor: Attestor,
         http: httpx.Client | None = None,
         on_stop: Callable[[], None] | None = None,
+        allow_writes: bool = True,
     ) -> None:
         self.config = config
         self._account = Account.from_key(key)  # the key lives only in this object's memory
@@ -112,6 +117,7 @@ class Harness:
         self._last_signed_request = 0
         self._assets: dict[str, tuple[int, int]] = {}  # coin -> (asset id, size decimals)
         self.builder_approved = False
+        self.allow_writes = allow_writes  # False only in development runs: nothing is sent to the exchange
 
     # ----- exchange plumbing -------------------------------------------------------------------------------
 
@@ -127,6 +133,8 @@ class Harness:
         return r.json()
 
     def _post_exchange(self, action: dict[str, Any], signature: dict[str, Any], nonce: int) -> Any:
+        if not self.allow_writes:
+            raise ValueError("exchange writes are off in this development run")
         body = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
         r = self.http.post(f"{self.config.api}/exchange", json=body)
         r.raise_for_status()

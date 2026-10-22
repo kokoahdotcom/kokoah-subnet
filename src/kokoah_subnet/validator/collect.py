@@ -16,6 +16,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from kokoah_subnet.agent.images import APPROVED_HARNESS_IMAGES
 from kokoah_subnet.binding import read_bindings, read_file_commitment, resolve_bindings
 from kokoah_subnet.mechanism import (
     SPEC_VERSION,
@@ -31,6 +34,7 @@ from kokoah_subnet.mechanism.eligibility import daily_average_equity, fresh_iden
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 from kokoah_subnet.mechanism.fills import assign_counterparties, merge_sources
 
+from .agents import check_agents
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
 from .clusters import clusters, coldkey_edges
@@ -76,6 +80,7 @@ class ValidatorConfig:
     retry_missing_s: int = 3600
     fills_cache: Path | None = None  # where downloaded builder files are kept (default: data_dir/fills)
     db_url: str = ""  # the record; empty = SQLite file in data_dir
+    agent_images: tuple[str, ...] = APPROVED_HARNESS_IMAGES  # approved sealed-machine harness images
     extra: dict[str, str] = field(default_factory=dict)
 
     def store_target(self) -> str | Path:
@@ -177,10 +182,11 @@ async def collect_and_score(
     params: Params,
     now_ts: float | None = None,
     agent_status: dict[str, bool] | None = None,
+    agent_keys: Any = None,
+    agent_http: Any = None,
 ) -> DayResult:
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
-    agent_status = agent_status or {}
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
@@ -294,6 +300,32 @@ async def collect_and_score(
 
     fills_by_address = by_user(fills)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
+    # agent accounts: challenge every sealed machine and verify its attestation (the skill bonus)
+    if agent_status is None:
+        agent_bindings = {
+            hk: binding_by_hotkey[hk].binding
+            for hk, a in address_of_hotkey.items()
+            if hk in binding_by_hotkey and binding_by_hotkey[hk].binding.address == a
+        }
+
+        async def extra_agents(address: str) -> Any:
+            return await hl.post({"type": "extraAgents", "user": address})
+
+        own_http = agent_http is None
+        http_client = agent_http or httpx.AsyncClient(timeout=20)
+        try:
+            checks = await check_agents(
+                agent_bindings, cfg.netuid, agent_keys, cfg.agent_images, http_client, extra_agents
+            )
+        except Exception as exc:  # noqa: BLE001 - no bonus today rather than no scoring
+            log.warning("agent checks failed: %s", exc)
+            store.put_error(day, None, None, "agent checks", str(exc))
+            checks = []
+        finally:
+            if own_http:
+                await http_client.aclose()
+        store.put_agent_checks(day, [c.as_row() for c in checks])
+        agent_status = {c.hotkey: c.ok for c in checks}
     hotkey_of_address = {a: hk for hk, a in address_of_hotkey.items()}
     edges = [(a, b, "coldkey") for a, b in coldkey_edges(address_of_hotkey, coldkey_of)]
     miners: list[MinerInputs] = []
