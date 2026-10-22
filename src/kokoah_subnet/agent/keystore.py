@@ -2,8 +2,10 @@
 
 - **Store.** When a sealed machine creates an account it encrypts the key (AES-256-GCM under a key derived from a
   secret only the miner holds, given to the machine at start) and sends the ciphertext to the owner's service,
-  with an attestation token proving a genuine sealed machine of an approved image sent it. The service cannot
-  read it; the miner never sees it.
+  with an attestation token proving a genuine sealed machine of an approved image sent it, and the miner's start
+  permission: a message signed by their hotkey naming the subnet, the hotkey, the master address and the code
+  (`agent authorize`), so only a hotkey's owner can file copies under it. The service cannot read the copy; the
+  miner never sees it.
 - **Restore.** A new sealed machine started with the same secret gets the ciphertext back after proving, with a
   fresh attestation token, that it is a genuine sealed machine of an approved image; it decrypts the key inside.
   No person ever holds the key, so the account stays an agent account.
@@ -68,9 +70,33 @@ def decrypt_key(blob: bytes, address: str, secret: bytes) -> bytes:
     return key
 
 
-def store_digest(address: str, master: str, blob: bytes) -> str:
+PERMIT_DAYS = 7  # a start permission is good for one machine start within this many days of signing
+
+
+def start_message(netuid: int, hotkey: str, master: str, submission: str, time_ms: int) -> str:
+    """What the miner's hotkey signs to let one sealed machine file its key copy under that hotkey."""
+    return (
+        f"kokoah-agent-start-1 netuid={netuid} hotkey={hotkey} master={master.lower()} "
+        f"submission={submission} time={time_ms}"
+    )
+
+
+def parse_permit(permit: str) -> tuple[int, str]:
+    """A start permission as passed to the machine: `<time_ms>:<hex sr25519 signature>`."""
+    t, _, signature = permit.strip().partition(":")
+    if not t.isdigit() or not signature:
+        raise ValueError("a start permission looks like <time_ms>:<signature> (from `kokoah-subnet agent authorize`)")
+    return int(t), signature.removeprefix("0x")
+
+
+def store_digest(address: str, master: str, blob: bytes, hotkey: str, submission: str, permit: str) -> str:
+    """The attested nonce of a store: the machine's own account, copy, master, hotkey, code and permission."""
     blob_sha = hashlib.sha256(blob).hexdigest()
-    text = f"kokoah-agent-store-1 address={address.lower()} master={master.lower()} blob={blob_sha}"
+    permit_sha = hashlib.sha256(permit.strip().encode()).hexdigest()
+    text = (
+        f"kokoah-agent-store-2 address={address.lower()} master={master.lower()} hotkey={hotkey} "
+        f"submission={submission} permit={permit_sha} blob={blob_sha}"
+    )
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -94,8 +120,26 @@ class KeyService:
     def _url(self, address: str, tail: str = "") -> str:
         return f"{self.service}/key-store/{address.lower()}{tail}"
 
-    def store(self, address: str, master: str, hotkey: str, blob: bytes, token: str) -> None:
-        body = {"blob": base64.b64encode(blob).decode(), "master": master.lower(), "hotkey": hotkey, "token": token}
+    def store(
+        self,
+        address: str,
+        master: str,
+        hotkey: str,
+        blob: bytes,
+        token: str,
+        netuid: int,
+        submission: str,
+        permit: str,
+    ) -> None:
+        body = {
+            "blob": base64.b64encode(blob).decode(),
+            "master": master.lower(),
+            "hotkey": hotkey,
+            "token": token,
+            "netuid": netuid,
+            "submission": submission,
+            "permit": permit.strip(),
+        }
         self.http.put(self._url(address), json=body).raise_for_status()
 
     def challenge(self, address: str) -> str:

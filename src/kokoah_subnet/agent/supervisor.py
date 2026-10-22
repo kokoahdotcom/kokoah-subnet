@@ -13,6 +13,8 @@ Start settings (environment, passed by the miner when they start the machine):
                             take the key out (which ends the agent bonus for the account)
   KOKOAH_AGENT_SECRET       hex, 32 bytes, kept by the miner (made with `kokoah-subnet agent secret`): encrypts the
                             stored copy of the key; a secret that is clearly not random is refused
+  KOKOAH_AGENT_PERMIT       the miner's start permission (`kokoah-subnet agent authorize`): signed by the hotkey,
+                            needed to file a new account's key copy; a restore does not need it
   KOKOAH_AGENT_RESTORE      after the machine stopped: the account address to resume on this new machine
   KOKOAH_AGENT_NETWORK      mainnet (default) or testnet
 
@@ -169,8 +171,19 @@ async def serve(h: Harness, uid: int | None, gid: int | None) -> None:
     await asyncio.gather(agent_server.serve(), public_server.serve(), fix_socket_permissions())
 
 
-def account_key(keys: KeyService, attestor: Any, secret: bytes, master: str, hotkey: str, restore: str | None) -> bytes:
-    """A restored key (`restore` names the account) or a new one whose encrypted copy is stored before use."""
+def account_key(
+    keys: KeyService,
+    attestor: Any,
+    secret: bytes,
+    master: str,
+    hotkey: str,
+    restore: str | None,
+    netuid: int = 0,
+    submission: str = "",
+    permit: str | None = None,
+) -> bytes:
+    """A restored key (`restore` names the account) or a new one whose encrypted copy is stored before use (with
+    the miner's start permission)."""
     if restore:
         address = restore.lower()
         challenge = keys.challenge(address)
@@ -178,11 +191,16 @@ def account_key(keys: KeyService, attestor: Any, secret: bytes, master: str, hot
         key = decrypt_key(blob, address, secret)
         log.info("restored account %s", address)
         return key
+    if not permit:
+        raise SystemExit(
+            "KOKOAH_AGENT_PERMIT is required for a new account: make it with `kokoah-subnet agent authorize`"
+        )
     account = Account.create()
     address = account.address.lower()
     key = bytes(account.key)
     blob = encrypt_key(key, address, secret)
-    keys.store(address, master, hotkey, blob, attestor.token([store_digest(address, master, blob)]))
+    token = attestor.token([store_digest(address, master, blob, hotkey, submission, permit)])
+    keys.store(address, master, hotkey, blob, token, netuid, submission, permit)
     log.info("created account %s; its encrypted copy is stored", address)
     return key
 
@@ -193,7 +211,8 @@ def main() -> int:
     dev = image.development and os.environ.get("KOKOAH_AGENT_DEV") == "1"
     http = httpx.Client(timeout=60)
     service = env("KOKOAH_AGENT_SERVICE")
-    plain, code = fetch_code(service, env("KOKOAH_AGENT_SUBMISSION"), os.environ.get("KOKOAH_AGENT_BUNDLE_KEY"), http)
+    submission = env("KOKOAH_AGENT_SUBMISSION")
+    plain, code = fetch_code(service, submission, os.environ.get("KOKOAH_AGENT_BUNDLE_KEY"), http)
     uid: int | None
     gid: int | None
     try:
@@ -227,6 +246,9 @@ def main() -> int:
         master,
         hotkey,
         os.environ.get("KOKOAH_AGENT_RESTORE") or None,
+        int(env("KOKOAH_AGENT_NETUID")),
+        submission,
+        os.environ.get("KOKOAH_AGENT_PERMIT") or None,
     )
     config = HarnessConfig(
         netuid=int(env("KOKOAH_AGENT_NETUID")),

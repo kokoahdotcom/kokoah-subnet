@@ -60,6 +60,18 @@ random secret instead: the strongest, but it exists only in the file, so keep a 
 secret that is clearly not random. Kokoah adds its own encryption over every stored copy, so its database alone
 opens nothing either.
 
+Then sign the start permission with your hotkey, on your own computer (your wallet never goes to the machine):
+
+```bash
+uv run kokoah-subnet agent authorize --netuid <netuid> --master <your own Hyperliquid address> \
+  --submission <submission id> --wallet <wallet> --wallet-hotkey <hotkey> --out permit.txt
+```
+
+It names the subnet, your hotkey, your master address and the code, and is good for one machine start within 7
+days. The service files a machine's key copy only with it: signed by that hotkey, for this subnet, for that address
+and code, used once, from a registered hotkey (at most 50 kept copies per hotkey). So nobody else can file copies
+under your hotkey, and nobody can use up anything of yours. A restore does not need a new permission.
+
 ## 4. Start the sealed machine
 
 On your own Google Cloud project (you pay for the machine; Kokoah runs nothing for you). The harness image is
@@ -84,7 +96,7 @@ gcloud compute instances create kokoah-agent \
 ~tee-env-KOKOAH_AGENT_NETUID=<netuid>\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
 ~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>" \
-  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=secret.hex
+  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=secret.hex,tee-env-KOKOAH_AGENT_PERMIT=permit.txt
 gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080   # validators reach the machine here
 ```
 

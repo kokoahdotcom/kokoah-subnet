@@ -36,10 +36,23 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import Boolean, Column, Float, Integer, MetaData, String, Table, Text, create_engine, insert, select
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Float,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    func,
+    insert,
+    select,
+)
 
 from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted, sha256_hex
-from .keystore import release_message, restore_digest, store_digest
+from .keystore import PERMIT_DAYS, parse_permit, release_message, restore_digest, start_message, store_digest
 
 SUBMIT_COOLDOWN_S = 12 * 3600
 metadata = MetaData()
@@ -65,6 +78,14 @@ keys = Table(
     Column("stored_at", Float, nullable=False),
     Column("released_at", Float),  # when the miner took the key (then never an agent again)
 )
+permits = Table(  # every start permission used: each one files one key copy, once
+    "agent_permits",
+    metadata,
+    Column("signature", String(200), primary_key=True),
+    Column("hotkey", String(64), nullable=False, index=True),
+    Column("address", String(42), nullable=False),
+    Column("used_at", Float, nullable=False),
+)
 key_events = Table(  # every store, restore and release, for the record
     "agent_key_events",
     metadata,
@@ -76,6 +97,7 @@ key_events = Table(  # every store, restore and release, for the record
 )
 CHALLENGE_TTL_S = 300
 MAX_KEY_COPY_CHARS = 512  # base64 of a key copy (a 64-byte ciphertext); anything bigger is not from a harness
+MAX_COPIES_PER_HOTKEY = 50  # kept, unreleased copies one hotkey may file (each needs its own signed permission)
 WRAP_MAGIC = b"KSW1"
 
 
@@ -115,6 +137,9 @@ class StoredKey(BaseModel):
     master: str
     hotkey: str
     token: str  # attestation token whose nonce is the store digest
+    netuid: int
+    submission: str  # the code the machine runs
+    permit: str  # `<time_ms>:<signature>`: the hotkey's signature of `start_message`
 
 
 class Restore(BaseModel):
@@ -142,11 +167,14 @@ def create_app(
     attestation_keys: Any = None,
     accept_unverified_machines: bool = False,
     wrap_key: bytes | None = None,
+    netuid: int | None = None,
 ) -> FastAPI:
     """`attestation_keys`: the token keys (Google's when None). `is_registered` (hotkey -> registered on the subnet;
     the public service always sets it) gates submissions and stored keys; restores and releases never depend on it,
     so a miner who lost their registration still gets their account back. `wrap_key` (32 bytes, kept out of the
-    backups) adds the service's own encryption over every stored copy. `accept_unverified_machines` is for local
+    backups) adds the service's own encryption over every stored copy. `netuid`: the subnet the service serves (a
+    start permission must name it). A key copy is filed only with the hotkey owner's start permission: signed by
+    the hotkey, for this subnet, at most PERMIT_DAYS old, used once. `accept_unverified_machines` is for local
     development only: any token is accepted for storing and restoring keys."""
     if wrap_key is not None and len(wrap_key) != 32:
         raise ValueError("the service's key must be 32 bytes")
@@ -264,18 +292,45 @@ def create_app(
             blob = base64.b64decode(body.blob, validate=True)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="blob must be base64") from exc
+        try:
+            signed_at, signature = parse_permit(body.permit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if netuid is not None and body.netuid != netuid:
+            raise HTTPException(
+                status_code=403, detail=f"the start permission is for subnet {body.netuid}, not {netuid}"
+            )
+        now_ms = clock() * 1000
+        if signed_at > now_ms + SIGNED_REQUEST_WINDOW_MS or now_ms - signed_at > PERMIT_DAYS * 86_400_000:
+            raise HTTPException(status_code=403, detail="the start permission has expired: sign a new one")
+        message = start_message(body.netuid, body.hotkey, body.master, body.submission, signed_at)
+        if not verify(message, signature, body.hotkey):
+            raise HTTPException(status_code=403, detail="the start permission is not signed by the hotkey")
         require_registered(body.hotkey)
-        machine_proof(body.token, store_digest(a, body.master, blob))
+        with engine.connect() as c:
+            if not c.execute(select(submissions.c.id).where(submissions.c.id == body.submission)).first():
+                raise HTTPException(status_code=403, detail="the start permission names an unknown submission")
+            if c.execute(select(permits.c.signature).where(permits.c.signature == signature)).first():
+                raise HTTPException(status_code=409, detail="this start permission was used already: one per machine")
+            count = c.execute(
+                select(func.count()).select_from(keys).where(keys.c.hotkey == body.hotkey, keys.c.released_at.is_(None))
+            ).scalar_one()
+            if count >= MAX_COPIES_PER_HOTKEY:
+                raise HTTPException(status_code=429, detail=f"{MAX_COPIES_PER_HOTKEY} key copies kept for this hotkey")
+        machine_proof(body.token, store_digest(a, body.master, blob, body.hotkey, body.submission, body.permit))
         stored = base64.b64encode(blob if wrap_key is None else wrap_blob(wrap_key, blob, a)).decode()
         with engine.begin() as c:
             if c.execute(select(keys.c.address).where(keys.c.address == a)).first():
                 raise HTTPException(status_code=409, detail="a key is already kept for this address")
+            if c.execute(select(permits.c.signature).where(permits.c.signature == signature)).first():
+                raise HTTPException(status_code=409, detail="this start permission was used already: one per machine")
             c.execute(
                 insert(keys).values(
                     address=a, hotkey=body.hotkey, master=body.master.lower(), blob=stored, stored_at=clock()
                 )
             )
-            event(c, a, "store", f"hotkey {body.hotkey}")
+            c.execute(insert(permits).values(signature=signature, hotkey=body.hotkey, address=a, used_at=clock()))
+            event(c, a, "store", f"hotkey {body.hotkey} submission {body.submission}")
         return {"stored": a}
 
     def kept(c: Any, a: str) -> Any:

@@ -1,6 +1,7 @@
-"""The account key's encrypted copy: stored only by a genuine sealed machine, restored only to one, released only to
-the master address, and a released account never counts as an agent again. Only hotkeys registered on the subnet
-submit code or store keys; restoring and releasing never depend on the registration."""
+"""The account key's encrypted copy: filed only by a genuine sealed machine with its hotkey owner's start permission,
+restored only to a genuine machine, released only to the master address, and a released account never counts as an
+agent again. Only hotkeys registered on the subnet submit code or file copies; restoring and releasing never depend
+on the registration."""
 
 import asyncio
 import base64
@@ -17,9 +18,17 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
 
+from kokoah_subnet.agent import service as service_module
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import package, sha256_hex
-from kokoah_subnet.agent.keystore import KeyService, decrypt_key, encrypt_key, release_message, store_digest
+from kokoah_subnet.agent.keystore import (
+    KeyService,
+    decrypt_key,
+    encrypt_key,
+    release_message,
+    start_message,
+    store_digest,
+)
 from kokoah_subnet.agent.service import create_app, submit_message
 from kokoah_subnet.agent.supervisor import account_key
 from kokoah_subnet.binding import AgentRef, Binding
@@ -28,15 +37,62 @@ from kokoah_subnet.validator.agents import check_agents
 
 IMAGE = "sha256:" + "ee" * 32
 SECRET = bytes(range(32))
+NETUID = 2
+ALICE = Keypair.create_from_uri("//Alice")
+BOB = Keypair.create_from_uri("//Bob")
+
+
+def submit(svc: TestClient, hotkey: Any, tmp_path: Path) -> httpx.Response:
+    d = tmp_path / f"agent-{hotkey.ss58_address[:6]}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "entry.py").write_text("print('agent')\n")
+    blob = package(d)
+    sig = bytes(hotkey.sign(submit_message(sha256_hex(blob), hotkey.ss58_address).encode())).hex()
+    body = {"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": sig}
+    response: httpx.Response = svc.post("/agents", json=body)
+    return response
+
+
+def permit(submission: str, master: str, hotkey: Any = ALICE, netuid: int = NETUID, t: int | None = None) -> str:
+    t = int(time.time() * 1000) if t is None else t
+    return f"{t}:{bytes(hotkey.sign(start_message(netuid, hotkey.ss58_address, master, submission, t).encode())).hex()}"
+
+
+def make_world(tmp_path: Path, **options: Any) -> dict[str, Any]:
+    machine_key = options.pop("machine_key", None) or rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    app = create_app(
+        tmp_path / "svc",
+        images=[IMAGE],
+        attestation_keys=StaticKeys(machine_key.public_key()),
+        netuid=NETUID,
+        **options,
+    )
+    svc = TestClient(app)
+    first = submit(svc, ALICE, tmp_path)
+    return {
+        "svc": svc,
+        "keys": KeyService("http://svc", svc),
+        "machine": DevelopmentAttestor(machine_key, IMAGE),
+        "machine_key": machine_key,
+        "submission": first.json()["id"] if first.status_code == 200 else "",
+    }
+
+
+def start(world: dict[str, Any], master: Any, restore: str | None = None, **kw: Any) -> bytes:
+    """One machine start: a new account (with a fresh start permission) or a restore."""
+    hotkey = kw.pop("hotkey", ALICE)
+    given = kw.pop("permit", None)
+    machine = kw.pop("machine", world["machine"])
+    keys = kw.pop("keys", world["keys"])
+    p = None if restore else (given or permit(world["submission"], master.address, hotkey))
+    return account_key(
+        keys, machine, SECRET, master.address, hotkey.ss58_address, restore, NETUID, world["submission"], p
+    )
 
 
 @pytest.fixture()
 def world(tmp_path: Path) -> dict[str, Any]:
-    machine_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    svc = TestClient(
-        create_app(tmp_path / "svc", images=[IMAGE], attestation_keys=StaticKeys(machine_key.public_key()))
-    )
-    return {"svc": svc, "keys": KeyService("http://svc", svc), "machine": DevelopmentAttestor(machine_key, IMAGE)}
+    return make_world(tmp_path)
 
 
 def test_the_copy_needs_the_miners_secret_and_names_its_account() -> None:
@@ -52,17 +108,17 @@ def test_the_copy_needs_the_miners_secret_and_names_its_account() -> None:
 def test_store_restore_and_release(world: dict[str, Any]) -> None:
     keys: KeyService = world["keys"]
     master = Account.create()
-    key = account_key(keys, world["machine"], SECRET, master.address, "5Hk", None)
+    key = start(world, master)
     address = Account.from_key(key).address.lower()
     # a new genuine machine with the same secret gets the same account back (the bonus continues)
-    assert account_key(keys, world["machine"], SECRET, master.address, "5Hk", address) == key
+    assert start(world, master, address) == key
     # a machine without a genuine attestation is refused, for restoring and for storing
     stranger = DevelopmentAttestor(rsa.generate_private_key(public_exponent=65537, key_size=2048), IMAGE)
     with pytest.raises(httpx.HTTPStatusError) as refused:
-        account_key(keys, stranger, SECRET, master.address, "5Hk", address)
+        start(world, master, address, machine=stranger)
     assert refused.value.response.status_code == 403
     with pytest.raises(httpx.HTTPStatusError):
-        account_key(keys, stranger, SECRET, master.address, "5Hk", None)
+        start(world, master, machine=stranger)
     # the miner takes the key out: signed by the master, public, final
     t = int(time.time() * 1000)
     bad = Account.create().sign_message(encode_defunct(text=release_message(address, t)))
@@ -73,13 +129,13 @@ def test_store_restore_and_release(world: dict[str, Any]) -> None:
     assert decrypt_key(keys.release(address, t, "0x" + bytes(good.signature).hex()), address, SECRET) == key
     assert [r["address"] for r in keys.released()] == [address]
     with pytest.raises(httpx.HTTPStatusError) as gone:
-        account_key(keys, world["machine"], SECRET, master.address, "5Hk", address)
+        start(world, master, address)
     assert gone.value.response.status_code == 410
 
 
 def test_a_restore_needs_a_fresh_challenge(world: dict[str, Any]) -> None:
     keys: KeyService = world["keys"]
-    key = account_key(keys, world["machine"], SECRET, Account.create().address, "5Hk", None)
+    key = start(world, Account.create())
     address = Account.from_key(key).address.lower()
     replayed = world["machine"].token(["00" * 32])
     r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
@@ -87,6 +143,34 @@ def test_a_restore_needs_a_fresh_challenge(world: dict[str, Any]) -> None:
     keys.challenge(address)
     r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
     assert r.status_code == 403  # the token does not answer the challenge
+
+
+def test_a_key_copy_needs_its_hotkey_owners_start_permission(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    master = Account.create()
+    sub = world["submission"]
+
+    def refused(**kw: Any) -> int:
+        with pytest.raises(httpx.HTTPStatusError) as e:
+            start(world, master, **kw)
+        return e.value.response.status_code
+
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_PERMIT"):  # the harness itself asks for one
+        account_key(world["keys"], world["machine"], SECRET, master.address, ALICE.ss58_address, None, NETUID, sub)
+    forged = f"{int(time.time() * 1000)}:{permit(sub, master.address, BOB).split(':')[1]}"  # Bob signs for Alice
+    assert refused(permit=forged) == 403
+    assert refused(permit=permit(sub, master.address, netuid=NETUID + 1)) == 403  # for another subnet
+    assert refused(permit=permit(sub, Account.create().address)) == 403  # for another withdrawal address
+    assert refused(permit=permit(sub, master.address, t=int((time.time() - 8 * 86400) * 1000))) == 403  # expired
+    assert refused(permit=permit("ab" * 32, master.address)) == 403  # signed, but for code that was never submitted
+    assert refused(permit="not-a-permission") == 400
+    good = permit(sub, master.address)
+    start(world, master, permit=good)
+    assert refused(permit=good) == 409  # one machine start per permission
+    monkeypatch.setattr(service_module, "MAX_COPIES_PER_HOTKEY", 2)
+    start(world, master)
+    assert refused() == 429  # a hotkey's kept copies are capped
 
 
 def test_validators_never_count_a_released_account() -> None:
@@ -104,9 +188,7 @@ def test_validators_never_count_a_released_account() -> None:
 
 
 def test_only_registered_hotkeys_submit_code_or_store_keys(tmp_path: Path) -> None:
-    machine_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    alice, bob = Keypair.create_from_uri("//Alice"), Keypair.create_from_uri("//Bob")
-    registered = {alice.ss58_address}
+    registered = {ALICE.ss58_address}
     chain_down = False
 
     def is_registered(hotkey: str) -> bool:
@@ -114,41 +196,22 @@ def test_only_registered_hotkeys_submit_code_or_store_keys(tmp_path: Path) -> No
             raise ConnectionError("no chain")
         return hotkey in registered
 
-    svc = TestClient(
-        create_app(
-            tmp_path / "svc",
-            images=[IMAGE],
-            attestation_keys=StaticKeys(machine_key.public_key()),
-            is_registered=is_registered,
-        )
-    )
-    keys, machine = KeyService("http://svc", svc), DevelopmentAttestor(machine_key, IMAGE)
-    (tmp_path / "agent").mkdir()
-    (tmp_path / "agent" / "entry.py").write_text("print('agent')\n")
-    blob = package(tmp_path / "agent")
-
-    def submit(hotkey: Any) -> httpx.Response:
-        sig = bytes(hotkey.sign(submit_message(sha256_hex(blob), hotkey.ss58_address).encode())).hex()
-        body = {"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": sig}
-        response: httpx.Response = svc.post("/agents", json=body)
-        return response
-
-    refused = submit(bob)  # signed by its hotkey, but not registered
+    w = make_world(tmp_path, is_registered=is_registered)
+    refused = submit(w["svc"], BOB, tmp_path)  # signed by its hotkey, but not registered
     assert refused.status_code == 403 and "not registered" in refused.json()["detail"]
-    assert submit(alice).status_code == 200
     master = Account.create()
     with pytest.raises(httpx.HTTPStatusError) as unregistered:
-        account_key(keys, machine, SECRET, master.address, bob.ss58_address, None)
+        start(w, master, hotkey=BOB)  # Bob's own permission, but Bob is not registered
     assert unregistered.value.response.status_code == 403
-    key = account_key(keys, machine, SECRET, master.address, alice.ss58_address, None)
+    key = start(w, master)
     address = Account.from_key(key).address.lower()
     registered.clear()  # alice loses her registration: her account still comes back, and out
-    assert account_key(keys, machine, SECRET, master.address, alice.ss58_address, address) == key
+    assert start(w, master, address) == key
     t = int(time.time() * 1000)
     signed = master.sign_message(encode_defunct(text=release_message(address, t)))
-    assert decrypt_key(keys.release(address, t, "0x" + bytes(signed.signature).hex()), address, SECRET) == key
+    assert decrypt_key(w["keys"].release(address, t, "0x" + bytes(signed.signature).hex()), address, SECRET) == key
     chain_down = True
-    assert submit(alice).status_code == 503
+    assert submit(w["svc"], ALICE, tmp_path / "again").status_code == 503
 
 
 def test_the_registered_list_is_read_again_when_old_or_on_an_unknown_hotkey() -> None:
@@ -178,17 +241,21 @@ def test_the_registered_list_is_read_again_when_old_or_on_an_unknown_hotkey() ->
 def test_the_service_adds_its_own_layer_and_a_stolen_database_alone_opens_nothing(tmp_path: Path) -> None:
     import sqlite3
 
-    machine_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     wrap = bytes(range(100, 132))
+    w = make_world(tmp_path, wrap_key=wrap)
 
     def service(key: bytes | None) -> KeyService:
         app = create_app(
-            tmp_path / "svc", images=[IMAGE], attestation_keys=StaticKeys(machine_key.public_key()), wrap_key=key
+            tmp_path / "svc",
+            images=[IMAGE],
+            attestation_keys=StaticKeys(w["machine_key"].public_key()),
+            wrap_key=key,
+            netuid=NETUID,
         )
         return KeyService("http://svc", TestClient(app))
 
-    machine, master = DevelopmentAttestor(machine_key, IMAGE), Account.create()
-    key = account_key(service(wrap), machine, SECRET, master.address, "5Hk", None)
+    master = Account.create()
+    key = start(w, master)
     address = Account.from_key(key).address.lower()
     with sqlite3.connect(tmp_path / "svc" / "agents.sqlite") as db:
         (stored,) = db.execute("select blob from agent_keys where address = ?", (address,)).fetchone()
@@ -196,10 +263,10 @@ def test_the_service_adds_its_own_layer_and_a_stolen_database_alone_opens_nothin
     assert raw.startswith(b"KSW1")
     with pytest.raises(ValueError):
         decrypt_key(raw, address, SECRET)  # the database copy is not the machine's copy: the service's key is needed
-    assert account_key(service(wrap), machine, SECRET, master.address, "5Hk", address) == key
+    assert start(w, master, address, keys=service(wrap)) == key
     # a service started with another key file opens nothing and records nothing
     with pytest.raises(httpx.HTTPStatusError) as wrong:
-        account_key(service(bytes(32)), machine, SECRET, master.address, "5Hk", address)
+        start(w, master, address, keys=service(bytes(32)))
     assert wrong.value.response.status_code == 500
     t = int(time.time() * 1000)
     signed = master.sign_message(encode_defunct(text=release_message(address, t)))
@@ -212,17 +279,26 @@ def test_the_service_adds_its_own_layer_and_a_stolen_database_alone_opens_nothin
 
 def test_made_up_requests_leave_nothing_behind_and_touch_no_real_copy(world: dict[str, Any]) -> None:
     svc: TestClient = world["svc"]
-    keys: KeyService = world["keys"]
     master = Account.create()
-    key = account_key(keys, world["machine"], SECRET, master.address, "5Hk", None)
+    key = start(world, master)
     address = Account.from_key(key).address.lower()
     stranger = "0x" + "12" * 20
     assert svc.get(f"/key-store/{stranger}/challenge").status_code == 404  # no copy kept: no challenge
-    fake = {"blob": base64.b64encode(b"KAK1" + bytes(60)).decode(), "master": master.address, "hotkey": "5Hk"}
+    p = permit(world["submission"], master.address)
+    fake = {
+        "blob": base64.b64encode(b"KAK1" + bytes(60)).decode(),
+        "master": master.address,
+        "hotkey": ALICE.ss58_address,
+        "netuid": NETUID,
+        "submission": world["submission"],
+        "permit": p,
+    }
     assert svc.put(f"/key-store/{stranger}", json={**fake, "token": "made-up"}).status_code == 403
     assert svc.put(f"/key-store/{stranger}", json={**fake, "blob": "A" * 4096, "token": "x"}).status_code == 413
-    # even a genuine machine cannot replace a kept copy
+    # even a genuine machine with a valid permission cannot replace a kept copy
     other = base64.b64decode(fake["blob"])
-    token = world["machine"].token([store_digest(address, master.address, other)])
+    token = world["machine"].token(
+        [store_digest(address, master.address, other, ALICE.ss58_address, fake["submission"], p)]
+    )
     assert svc.put(f"/key-store/{address}", json={**fake, "token": token}).status_code == 409
-    assert account_key(keys, world["machine"], SECRET, master.address, "5Hk", address) == key
+    assert start(world, master, address) == key

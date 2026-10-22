@@ -439,7 +439,10 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   that is clearly not random. The service adds its own AES-256-GCM layer over every stored copy with a key kept
   out of its backups, so a stolen database or backup opens nothing by itself. The service
   (`https://api.kokoah.com/miners`) takes submissions and stored copies only from hotkeys registered on the subnet;
-  restores and releases never depend on the registration.
+  restores and releases never depend on the registration. **A copy is filed only with the miner's start
+  permission:** the hotkey's signature (made on the miner's computer, `agent authorize`) of the subnet, hotkey,
+  master address, submission and time, at most 7 days old, used once, at most 50 kept copies per hotkey; the
+  machine's attested store nonce covers the permission, so a copy can be filed under a hotkey only by its owner.
 - **Runs the miner's agent code in a sandbox**: a separate user, no new privileges, no core dumps, memory and
   process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and other
   processes' memory. The agent's only way out is the harness's Unix socket.

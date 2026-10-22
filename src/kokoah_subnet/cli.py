@@ -103,6 +103,16 @@ def build_parser() -> argparse.ArgumentParser:
     asec.add_argument("--generate", action="store_true", help="a random secret instead of one made from a password")
     asec.add_argument("--hotkey", default="", help="your hotkey, so the password check refuses passwords built on it")
     asec.add_argument("--password-stdin", action="store_true", help="read the password from stdin (scripts)")
+    aauth = asub.add_parser(
+        "authorize", help="sign the start permission for one sealed machine with your hotkey (one per machine start)"
+    )
+    aauth.add_argument("--netuid", required=True, type=int)
+    aauth.add_argument("--master", required=True, help="your own Hyperliquid address (the machine's master)")
+    aauth.add_argument("--submission", required=True, help="the submission id the machine runs")
+    aauth.add_argument("--out", required=True, type=Path, help="where to write the permission (created)")
+    aauth.add_argument("--wallet", required=True)
+    aauth.add_argument("--wallet-hotkey", default="default")
+    aauth.add_argument("--wallet-path", default=None)
     akey = asub.add_parser("service-key", help="owner: create the agent service's own encryption key (once)")
     akey.add_argument("--out", required=True, type=Path, help="the key file (created, mode 600); keep a copy offline")
     aserv = asub.add_parser("service", help="run the owner's agent service")
@@ -569,6 +579,28 @@ def _agent(args: argparse.Namespace) -> int:
         return 0
     if args.agent_command == "secret":
         return _agent_secret(args)
+    if args.agent_command == "authorize":
+        import time
+
+        from kokoah_subnet.agent.keystore import PERMIT_DAYS, start_message
+
+        wallet = _wallet(args)
+        hotkey = wallet.hotkey.ss58_address
+        t = int(time.time() * 1000)
+        message = start_message(args.netuid, hotkey, args.master, args.submission, t)
+        permit = f"{t}:{bytes(wallet.hotkey.sign(message.encode())).hex()}"
+        try:
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            print(f"{args.out} already exists: a permission is good for one machine start, write a new file")
+            return 1
+        with os.fdopen(fd, "w") as f:
+            f.write(permit)
+        print(
+            f"start permission for hotkey {hotkey} in {args.out}: good for one machine start within {PERMIT_DAYS} days"
+        )
+        print(f"start the machine with --metadata-from-file=tee-env-KOKOAH_AGENT_PERMIT={args.out}")
+        return 0
     if args.agent_command == "service-key":
         fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -617,6 +649,7 @@ def _agent(args: argparse.Namespace) -> int:
             images=[*APPROVED_HARNESS_IMAGES, *args.image],
             is_registered=registered.check,
             wrap_key=wrap_key,
+            netuid=netuid,
             accept_unverified_machines=args.dev_accept_any_machine,
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
