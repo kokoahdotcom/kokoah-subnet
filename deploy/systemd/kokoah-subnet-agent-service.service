@@ -1,0 +1,17 @@
+[Unit]
+Description=Kokoah subnet agent service (miners' agent code, sealed machines' key copies; 127.0.0.1:48130, public at https://api.kokoah.com/subnet)
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/kokoah/kokoah-subnet
+# KOKOAH_SUBNET_AGENT_DB_URL (the service's database) and KOKOAH_SUBNET_AGENT_ARGS (--netuid N --network NET)
+EnvironmentFile=%h/.local/share/kokoah/subnet-agent-service.env
+ExecStart=/kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli agent service --data-dir %h/kokoah-subnet-agents --host 127.0.0.1 --port 48130 $KOKOAH_SUBNET_AGENT_ARGS
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.local/share/kokoah/subnet-agent-service.log
+StandardError=append:%h/.local/share/kokoah/subnet-agent-service.log
+
+[Install]
+WantedBy=multi-user.target

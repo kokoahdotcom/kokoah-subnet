@@ -66,11 +66,11 @@ def test_the_service_checks_plain_bundles_and_records_their_fingerprint(tmp_path
 
     svc = TestClient(create_app(tmp_path / "svc", verify=lambda m, s, h: True, images=["sha256:aa"]))
     plain = package(agent_dir(tmp_path))
-    r = svc.post("/v1/agents", json={"hotkey": "h1", "bundle": base64.b64encode(plain).decode(), "signature": "00"})
+    r = svc.post("/agents", json={"hotkey": "h1", "bundle": base64.b64encode(plain).decode(), "signature": "00"})
     assert r.status_code == 200 and r.json()["code_sha256"] == sha256_hex(plain)
-    assert svc.get(f"/v1/agents/{sha256_hex(plain)}/bundle").content == plain
-    assert svc.get("/v1/images").json() == {"images": ["sha256:aa"]}
+    assert svc.get(f"/agents/{sha256_hex(plain)}/bundle").content == plain
+    assert svc.get("/images").json() == {"images": ["sha256:aa"]}
     bad = base64.b64encode(b"not a zip").decode()
-    assert svc.post("/v1/agents", json={"hotkey": "h2", "bundle": bad, "signature": "00"}).status_code == 400
-    assert svc.get("/v1/agents/" + "0" * 64 + "/bundle").status_code == 404
-    assert svc.get("/v1/agents/../../etc/bundle").status_code in (400, 404)
+    assert svc.post("/agents", json={"hotkey": "h2", "bundle": bad, "signature": "00"}).status_code == 400
+    assert svc.get("/agents/" + "0" * 64 + "/bundle").status_code == 404
+    assert svc.get("/agents/../../etc/bundle").status_code in (400, 404)

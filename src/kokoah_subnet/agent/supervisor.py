@@ -11,7 +11,8 @@ Start settings (environment, passed by the miner when they start the machine):
   KOKOAH_AGENT_NETUID, KOKOAH_AGENT_HOTKEY   the subnet and hotkey the account is bound to
   KOKOAH_AGENT_MASTER       the miner's own address: the only withdrawal destination, and the only one that can
                             take the key out (which ends the agent bonus for the account)
-  KOKOAH_AGENT_SECRET       hex, at least 32 bytes, kept by the miner: encrypts the stored copy of the key
+  KOKOAH_AGENT_SECRET       hex, 32 bytes, kept by the miner (made with `kokoah-subnet agent secret`): encrypts the
+                            stored copy of the key; a secret that is clearly not random is refused
   KOKOAH_AGENT_RESTORE      after the machine stopped: the account address to resume on this new machine
   KOKOAH_AGENT_NETWORK      mainnet (default) or testnet
 
@@ -48,7 +49,7 @@ from . import sandbox
 from .attest import ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
-from .keystore import KeyService, decrypt_key, encrypt_key, restore_digest, store_digest
+from .keystore import KeyService, check_secret, decrypt_key, encrypt_key, restore_digest, store_digest
 
 log = logging.getLogger("kokoah_subnet.agent")
 IMAGE_SETTINGS = Path("/etc/kokoah-agent/image.json")
@@ -83,7 +84,7 @@ def env(name: str, default: str | None = None) -> str:
 
 def fetch_code(service: str, submission: str, bundle_key: str | None, http: httpx.Client) -> tuple[bytes, str]:
     """The submitted bundle, checked against its id and decrypted; returns (plain zip, code fingerprint)."""
-    r = http.get(f"{service.rstrip('/')}/v1/agents/{submission}/bundle")
+    r = http.get(f"{service.rstrip('/')}/agents/{submission}/bundle")
     r.raise_for_status()
     blob = r.content
     if sha256_hex(blob) != submission:
@@ -214,10 +215,15 @@ def main() -> int:
         attestor = ConfidentialSpaceAttestor()
     hotkey = env("KOKOAH_AGENT_HOTKEY")
     master = env("KOKOAH_AGENT_MASTER").lower()
+    try:
+        secret = bytes.fromhex(env("KOKOAH_AGENT_SECRET"))
+        check_secret(secret)
+    except ValueError as exc:
+        raise SystemExit(f"KOKOAH_AGENT_SECRET: {exc}") from None
     key = account_key(
         KeyService(service, http),
         attestor,
-        bytes.fromhex(env("KOKOAH_AGENT_SECRET")),
+        secret,
         master,
         hotkey,
         os.environ.get("KOKOAH_AGENT_RESTORE") or None,

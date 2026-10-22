@@ -27,6 +27,22 @@ from eth_account import Account
 
 KEY_MAGIC = b"KAK1"
 MIN_SECRET_BYTES = 32
+MIN_DISTINCT_BYTES = 20  # 32 random bytes hold about 30 different values; fewer than 20 means a made-up secret
+
+
+def check_secret(secret: bytes) -> None:
+    """Refuse a secret that is clearly not random: the stored copy of the key is only as safe as the secret, so it
+    must come from `kokoah-subnet agent secret` (a strong password, stretched; or random bytes)."""
+    if len(secret) < MIN_SECRET_BYTES:
+        raise ValueError(f"the miner's secret must be at least {MIN_SECRET_BYTES} bytes")
+    head = secret[:MIN_SECRET_BYTES]
+    steps = {(b - a) % 256 for a, b in zip(head, head[1:], strict=False)}
+    if (
+        len(set(head)) < MIN_DISTINCT_BYTES
+        or len(steps) == 1  # a counting pattern
+        or all(0x20 <= b < 0x7F for b in head)  # typed text written as hex: 32 random bytes are never all text
+    ):
+        raise ValueError("the miner's secret is too weak: make it with `kokoah-subnet agent secret`")
 
 
 def _derive(secret: bytes, address: str) -> bytes:
@@ -76,7 +92,7 @@ class KeyService:
         self.http = http or httpx.Client(timeout=30)
 
     def _url(self, address: str, tail: str = "") -> str:
-        return f"{self.service}/v1/keys/{address.lower()}{tail}"
+        return f"{self.service}/key-store/{address.lower()}{tail}"
 
     def store(self, address: str, master: str, hotkey: str, blob: bytes, token: str) -> None:
         body = {"blob": base64.b64encode(blob).decode(), "master": master.lower(), "hotkey": hotkey, "token": token}
@@ -98,6 +114,6 @@ class KeyService:
         return base64.b64decode(r.json()["blob"])
 
     def released(self) -> list[dict[str, Any]]:
-        r = self.http.get(f"{self.service}/v1/released")
+        r = self.http.get(f"{self.service}/key-store/released")
         r.raise_for_status()
         return list(r.json()["released"])

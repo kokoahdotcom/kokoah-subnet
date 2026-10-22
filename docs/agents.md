@@ -31,7 +31,7 @@ transfers, approvals. Main perpetuals only.
 ```bash
 uv run kokoah-subnet agent package ./my-agent --out my-agent.bundle --encrypt
 # prints the code fingerprint (commit this), the submission id, and for --encrypt the bundle key (keep it secret)
-uv run kokoah-subnet agent submit --service <agent service URL> --bundle my-agent.bundle --wallet <wallet> --wallet-hotkey <hotkey>
+uv run kokoah-subnet agent submit --service https://api.kokoah.com/miners --bundle my-agent.bundle --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
 The same files always give the same fingerprint. Without `--encrypt` the code is public: anyone can download it
@@ -39,7 +39,28 @@ from the service and check the fingerprint. One submission per hotkey per 12 hou
 registered on the subnet (the service also stores key copies only for registered hotkeys; getting an account back
 or taking its key out works even after the hotkey lost its registration).
 
-## 3. Start the sealed machine
+Kokoah's agent service is `https://api.kokoah.com/miners`: `/agents` (submissions and their code), `/images` (the
+approved harness images), `/key-store/<account>` (the machines' encrypted key copies) and `/key-store/released`
+(every account whose key was taken out).
+
+## 3. Make your secret
+
+The machine keeps a copy of the account key with Kokoah, encrypted with a secret only you hold. Whoever had both
+the copy and your secret could take the account's money, so make the secret with the tool:
+
+```bash
+uv run kokoah-subnet agent secret --master <your own Hyperliquid address> --hotkey <your hotkey ss58> --out secret.hex
+```
+
+It asks for a password and refuses a weak one: at least 16 characters and hard to guess (five or more random words
+work well; your hotkey, your address and words like "kokoah" count against it). The secret is made from the
+password with scrypt (slow and memory-hard on purpose, so guessing is expensive) and salted with your address; the
+same password always makes it again, and the password itself never leaves your computer. `--generate` makes a
+random secret instead: the strongest, but it exists only in the file, so keep a copy offline. The machine refuses a
+secret that is clearly not random. Kokoah adds its own encryption over every stored copy, so its database alone
+opens nothing either.
+
+## 4. Start the sealed machine
 
 On your own Google Cloud project (you pay for the machine; Kokoah runs nothing for you). The harness image is
 published as `docker.io/kokoahdotcom/kokoah-subnet-agent`; its digest must be one of the approved images
@@ -57,13 +78,13 @@ gcloud compute instances create kokoah-agent \
   --image-project=confidential-space-images --image-family=confidential-space \
   --service-account=<service account with the Confidential Computing Workload User role> --scopes=cloud-platform \
   --metadata="^~^tee-image-reference=docker.io/kokoahdotcom/kokoah-subnet-agent@sha256:<approved digest>\
-~tee-env-KOKOAH_AGENT_SERVICE=<agent service URL>\
+~tee-env-KOKOAH_AGENT_SERVICE=https://api.kokoah.com/miners\
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
 ~tee-env-KOKOAH_AGENT_BUNDLE_KEY=<bundle key, for an encrypted bundle>\
 ~tee-env-KOKOAH_AGENT_NETUID=<netuid>\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
-~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>\
-~tee-env-KOKOAH_AGENT_SECRET=<64 or more hex characters that only you keep>"
+~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>" \
+  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=secret.hex
 gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080   # validators reach the machine here
 ```
 
@@ -73,18 +94,20 @@ by every validator.
 **If the machine stops.** The machine stores a copy of the account key encrypted with your secret (Kokoah cannot
 read it). Start a new machine with the same settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it
 proves to the service that it is a genuine sealed machine, gets the copy back, and the same account carries on as an
-agent. Keep your secret safe: without it the copy cannot be opened, and nobody can recover it for you.
+agent. Keep your password (or the generated file) safe: without it the copy cannot be opened, and nobody can
+recover it for you.
 
 **Taking the key out yourself** (for example to trade the account by hand) ends the agent bonus for that account for
 good, and the release is public:
 
 ```bash
 uv run kokoah-subnet agent message release --account <account>   # sign the printed message with your MASTER address
-uv run kokoah-subnet agent release --service <agent service URL> --account <account> --time-ms <time_ms> \
-  --signature <0x signature> --secret-file <file with your secret> --out key.txt
+uv run kokoah-subnet agent release --service https://api.kokoah.com/miners --account <account> --time-ms <time_ms> \
+  --signature <0x signature> --master <your master address> --out key.txt   # asks for your password
+# or --secret-file secret.hex instead of --master, for a generated secret
 ```
 
-## 4. Bind and fund
+## 5. Bind and fund
 
 ```bash
 curl http://<machine>:8080/status          # the account address, the code fingerprint, the hotkey
@@ -97,7 +120,7 @@ Hyperliquid (at least $10,000 for the account to be eligible). USDC that lands i
 does with Hyperliquid's "send") is moved to its perpetuals balance within a minute; the harness approves Kokoah's
 builder fee as soon as the account is funded, and your agent starts trading.
 
-## 5. Withdraw or stop
+## 6. Withdraw or stop
 
 ```bash
 uv run kokoah-subnet agent message withdraw --account <account> --amount 100

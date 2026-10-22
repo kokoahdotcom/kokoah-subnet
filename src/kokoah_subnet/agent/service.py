@@ -1,15 +1,15 @@
 """The subnet owner's agent service (specification v6, section 16): where miners submit agent code, where the
 sealed machines fetch it, and where they keep their account key encrypted with the miner's secret.
 
-    POST /v1/agents            submit a bundle, signed by the miner's hotkey
-    GET  /v1/agents/{id}       a submission's record      GET /v1/agents/{id}/bundle   its exact bytes
-    GET  /v1/images            the approved harness images
-    PUT  /v1/keys/{address}                 store an encrypted account key (a sealed machine's attestation required)
-    GET  /v1/keys/{address}/challenge       a fresh challenge for a restore
-    POST /v1/keys/{address}/restore         the encrypted key back to a new sealed machine (attestation required)
-    POST /v1/keys/{address}/release         the encrypted key to the miner (signed by the master address): public,
+    POST /agents            submit a bundle, signed by the miner's hotkey
+    GET  /agents/{id}       a submission's record      GET /agents/{id}/bundle   its exact bytes
+    GET  /images            the approved harness images
+    PUT  /key-store/{address}                 store an encrypted account key (a sealed machine's attestation required)
+    GET  /key-store/{address}/challenge       a fresh challenge for a restore
+    POST /key-store/{address}/restore         the encrypted key back to a new sealed machine (attestation required)
+    POST /key-store/{address}/release         the encrypted key to the miner (signed by the master address): public,
                                             and the account never earns the agent bonus again
-    GET  /v1/released                       every released account
+    GET  /key-store/released                       every released account
 
 A submission's id is the sha256 of the stored bytes (encrypted or not), so a machine can check it fetched exactly
 what was submitted. A plain bundle is checked here (a zip with an entry.py, safe paths, within the size limits) and
@@ -23,12 +23,15 @@ The hotkey signs `kokoah-agent-submit-1 sha256=<id> hotkey=<ss58>`. One submissi
 from __future__ import annotations
 
 import base64
+import os
 import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi import FastAPI, HTTPException, Response
@@ -72,6 +75,27 @@ key_events = Table(  # every store, restore and release, for the record
     Column("detail", Text),
 )
 CHALLENGE_TTL_S = 300
+WRAP_MAGIC = b"KSW1"
+
+
+def wrap_blob(wrap_key: bytes, blob: bytes, address: str) -> bytes:
+    """The service's own layer over a stored copy (already encrypted with the miner's secret): a stolen database
+    or backup alone is not enough, the service's key is needed too. That key never goes into the backups."""
+    nonce = os.urandom(12)
+    return WRAP_MAGIC + nonce + AESGCM(wrap_key).encrypt(nonce, blob, b"kokoah-agent-wrap-1 " + address.encode())
+
+
+def unwrap_blob(wrap_key: bytes | None, stored: bytes, address: str) -> bytes:
+    if not stored.startswith(WRAP_MAGIC):
+        return stored  # stored before the service had its own key
+    if wrap_key is None:
+        raise ValueError("this copy is wrapped with the service's key, and the service has none")
+    try:
+        return AESGCM(wrap_key).decrypt(stored[4:16], stored[16:], b"kokoah-agent-wrap-1 " + address.encode())
+    except InvalidTag as exc:
+        raise ValueError("the service's key does not open this copy (a different key file?)") from exc
+
+
 SIGNED_REQUEST_WINDOW_MS = 300_000
 
 
@@ -116,11 +140,15 @@ def create_app(
     clock: Callable[[], float] = time.time,
     attestation_keys: Any = None,
     accept_unverified_machines: bool = False,
+    wrap_key: bytes | None = None,
 ) -> FastAPI:
     """`attestation_keys`: the token keys (Google's when None). `is_registered` (hotkey -> registered on the subnet;
     the public service always sets it) gates submissions and stored keys; restores and releases never depend on it,
-    so a miner who lost their registration still gets their account back. `accept_unverified_machines` is for local
+    so a miner who lost their registration still gets their account back. `wrap_key` (32 bytes, kept out of the
+    backups) adds the service's own encryption over every stored copy. `accept_unverified_machines` is for local
     development only: any token is accepted for storing and restoring keys."""
+    if wrap_key is not None and len(wrap_key) != 32:
+        raise ValueError("the service's key must be 32 bytes")
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "bundles").mkdir(exist_ok=True)
     engine = create_engine(db_url or f"sqlite:///{data_dir / 'agents.sqlite'}", future=True)
@@ -137,7 +165,7 @@ def create_app(
         if not ok:
             raise HTTPException(status_code=403, detail="the hotkey is not registered on the subnet")
 
-    @app.post("/v1/agents")
+    @app.post("/agents")
     def submit(body: Submission) -> dict[str, Any]:
         try:
             blob = base64.b64decode(body.bundle, validate=True)
@@ -181,7 +209,7 @@ def create_app(
             )
         return {"id": blob_id, "encrypted": encrypted, "code_sha256": code, "existing": False}
 
-    @app.get("/v1/agents/{blob_id}")
+    @app.get("/agents/{blob_id}")
     def record(blob_id: str) -> dict[str, Any]:
         with engine.connect() as c:
             row = c.execute(select(submissions).where(submissions.c.id == blob_id)).mappings().first()
@@ -189,7 +217,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such submission")
         return dict(row)
 
-    @app.get("/v1/agents/{blob_id}/bundle")
+    @app.get("/agents/{blob_id}/bundle")
     def bundle(blob_id: str) -> Response:
         if len(blob_id) != 64 or any(ch not in "0123456789abcdef" for ch in blob_id):
             raise HTTPException(status_code=400, detail="bad id")
@@ -198,7 +226,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no such submission")
         return Response(path.read_bytes(), media_type="application/octet-stream")
 
-    @app.get("/v1/images")
+    @app.get("/images")
     def approved_images() -> dict[str, list[str]]:
         return {"images": list(images or [])}
 
@@ -226,7 +254,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="bad address")
         return a
 
-    @app.put("/v1/keys/{address}")
+    @app.put("/key-store/{address}")
     def store_key(address: str, body: StoredKey) -> dict[str, Any]:
         a = check_address(address)
         try:
@@ -235,12 +263,13 @@ def create_app(
             raise HTTPException(status_code=400, detail="blob must be base64") from exc
         require_registered(body.hotkey)
         machine_proof(body.token, store_digest(a, body.master, blob))
+        stored = base64.b64encode(blob if wrap_key is None else wrap_blob(wrap_key, blob, a)).decode()
         with engine.begin() as c:
             if c.execute(select(keys.c.address).where(keys.c.address == a)).first():
                 raise HTTPException(status_code=409, detail="a key is already kept for this address")
             c.execute(
                 insert(keys).values(
-                    address=a, hotkey=body.hotkey, master=body.master.lower(), blob=body.blob, stored_at=clock()
+                    address=a, hotkey=body.hotkey, master=body.master.lower(), blob=stored, stored_at=clock()
                 )
             )
             event(c, a, "store", f"hotkey {body.hotkey}")
@@ -252,14 +281,21 @@ def create_app(
             raise HTTPException(status_code=404, detail="no key kept for this address")
         return row
 
-    @app.get("/v1/keys/{address}/challenge")
+    def opened(row: Any) -> str:
+        """The copy as the machine sent it (the service's own layer removed), base64."""
+        try:
+            return base64.b64encode(unwrap_blob(wrap_key, base64.b64decode(row["blob"]), row["address"])).decode()
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/key-store/{address}/challenge")
     def challenge(address: str) -> dict[str, str]:
         a = check_address(address)
         value = secrets.token_hex(32)
         challenges[a] = (value, clock() + CHALLENGE_TTL_S)
         return {"challenge": value}
 
-    @app.post("/v1/keys/{address}/restore")
+    @app.post("/key-store/{address}/restore")
     def restore(address: str, body: Restore) -> dict[str, Any]:
         a = check_address(address)
         outstanding = challenges.pop(a, None)
@@ -270,10 +306,11 @@ def create_app(
             row = kept(c, a)
             if row["released_at"] is not None:
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
+            blob = opened(row)  # before anything is recorded: a copy the service cannot open changes nothing
             event(c, a, "restore")
-        return {"address": a, "blob": row["blob"]}
+        return {"address": a, "blob": blob}
 
-    @app.post("/v1/keys/{address}/release")
+    @app.post("/key-store/{address}/release")
     def release(address: str, body: Release) -> dict[str, Any]:
         a = check_address(address)
         if abs(clock() * 1000 - body.time_ms) > SIGNED_REQUEST_WINDOW_MS:
@@ -289,12 +326,13 @@ def create_app(
                 raise HTTPException(status_code=403, detail="bad signature") from exc
             if str(signer).lower() != row["master"]:
                 raise HTTPException(status_code=403, detail="not signed by the account's master address")
+            blob = opened(row)
             if row["released_at"] is None:
                 c.execute(keys.update().where(keys.c.address == a).values(released_at=clock()))
             event(c, a, "release")
-        return {"address": a, "blob": row["blob"]}
+        return {"address": a, "blob": blob}
 
-    @app.get("/v1/released")
+    @app.get("/key-store/released")
     def released() -> dict[str, list[dict[str, Any]]]:
         with engine.connect() as c:
             rows = c.execute(

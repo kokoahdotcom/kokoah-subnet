@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -84,17 +86,44 @@ def build_parser() -> argparse.ArgumentParser:
     arel.add_argument("--account", required=True)
     arel.add_argument("--time-ms", required=True, type=int, help="from `agent message release`")
     arel.add_argument("--signature", required=True, help="the master address's signature of that message")
-    arel.add_argument("--secret-file", required=True, type=Path, help="a file holding the secret given at start (hex)")
+    arel_secret = arel.add_mutually_exclusive_group(required=True)
+    arel_secret.add_argument(
+        "--secret-file", type=Path, help="the file `agent secret` wrote (the secret given at start)"
+    )
+    arel_secret.add_argument(
+        "--master", help="your master address: asks for the password the secret was made from (`agent secret`)"
+    )
     arel.add_argument("--out", required=True, type=Path, help="where to write the private key (created, mode 600)")
+    asec = asub.add_parser(
+        "secret",
+        help="make the secret for a sealed machine: from a strong password (checked) or at random (--generate)",
+    )
+    asec.add_argument("--master", required=True, help="your own Hyperliquid address (the machine's master)")
+    asec.add_argument("--out", required=True, type=Path, help="where to write the secret (created, mode 600)")
+    asec.add_argument("--generate", action="store_true", help="a random secret instead of one made from a password")
+    asec.add_argument("--hotkey", default="", help="your hotkey, so the password check refuses passwords built on it")
+    asec.add_argument("--password-stdin", action="store_true", help="read the password from stdin (scripts)")
+    akey = asub.add_parser("service-key", help="owner: create the agent service's own encryption key (once)")
+    akey.add_argument("--out", required=True, type=Path, help="the key file (created, mode 600); keep a copy offline")
     aserv = asub.add_parser("service", help="run the owner's agent service")
     aserv.add_argument("--data-dir", type=Path, required=True)
-    aserv.add_argument("--db-url", default="")
+    aserv.add_argument(
+        "--db-url",
+        default=os.environ.get("KOKOAH_SUBNET_AGENT_DB_URL", ""),
+        help="the service's database (SQLAlchemy URL); default $KOKOAH_SUBNET_AGENT_DB_URL, else SQLite in --data-dir",
+    )
     aserv.add_argument("--host", default="127.0.0.1")
     aserv.add_argument("--port", type=int, default=48130)
     aserv.add_argument(
         "--netuid", type=int, required=True, help="accept submissions and keys only from hotkeys registered here"
     )
     aserv.add_argument("--network", default="finney", help="the chain to read registrations from")
+    aserv.add_argument(
+        "--wrap-key-file",
+        type=Path,
+        default=None,
+        help="the service's own key (`agent service-key`): a second encryption over every stored key copy",
+    )
     aserv.add_argument(
         "--dev-accept-any-machine",
         action="store_true",
@@ -186,6 +215,43 @@ def build_parser() -> argparse.ArgumentParser:
     vserve.add_argument("--host", default="127.0.0.1")
     vserve.add_argument("--port", type=int, default=48100)
     return parser
+
+
+def _agent_secret(args: argparse.Namespace) -> int:
+    """`agent secret`: the machine secret, from a password that passes the strength check, or at random."""
+    from kokoah_subnet.miner_secret import derive_secret, password_problems, random_secret
+
+    if args.generate:
+        secret = random_secret()
+        how = "random: it exists only in this file, so keep a copy offline"
+    else:
+        if args.password_stdin:
+            password = sys.stdin.readline().rstrip("\n")
+        else:
+            password = getpass.getpass("password for the agent's key copy: ")
+            if getpass.getpass("the same password again: ") != password:
+                print("the two passwords differ")
+                return 1
+        context = tuple(x for x in (args.hotkey, args.master, args.master.lower().removeprefix("0x")) if x)
+        problems = password_problems(password, context)
+        if problems:
+            print("this password is too weak to protect the account's money:")
+            for p in problems:
+                print(f"  - {p}")
+            return 1
+        secret = derive_secret(password, args.master)
+        how = "made from your password and your master address: the same password makes it again any time"
+    try:
+        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print(f"{args.out} already exists: choose another --out (an existing secret is never overwritten)")
+        return 1
+    with os.fdopen(fd, "w") as f:
+        f.write(secret.hex())  # no newline: the file is passed as is to the machine's start settings
+    print(f"the secret is in {args.out} (mode 600), {how}.")
+    print(f"start the machine with --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET={args.out}")
+    print("anyone with this secret and the stored copy could take the account: never share it or commit it")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -448,7 +514,7 @@ def _agent(args: argparse.Namespace) -> int:
         hotkey = wallet.hotkey.ss58_address
         signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
         r = httpx.post(
-            f"{args.service.rstrip('/')}/v1/agents",
+            f"{args.service.rstrip('/')}/agents",
             json={"hotkey": hotkey, "bundle": base64.b64encode(blob).decode(), "signature": signature},
             timeout=120,
         )
@@ -501,10 +567,24 @@ def _agent(args: argparse.Namespace) -> int:
         print(f"sign the message with your own address (EIP-191) and POST {{{fields}}} to <endpoint>/{args.kind}")
         print("within 5 minutes")
         return 0
+    if args.agent_command == "secret":
+        return _agent_secret(args)
+    if args.agent_command == "service-key":
+        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(os.urandom(32).hex() + "\n")
+        print(f"the agent service's key is in {args.out} (mode 600). Keep a copy offline, away from the backups:")
+        print("without it no stored key copy can be restored or released, and with the backups it opens one layer.")
+        return 0
     if args.agent_command == "release":
         from kokoah_subnet.agent.keystore import KeyService, decrypt_key
 
-        secret = bytes.fromhex(args.secret_file.read_text().strip())
+        if args.secret_file is not None:
+            secret = bytes.fromhex(args.secret_file.read_text().strip())
+        else:
+            from kokoah_subnet.miner_secret import derive_secret
+
+            secret = derive_secret(getpass.getpass("password the secret was made from: "), args.master)
         blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
         key = decrypt_key(blob, args.account, secret)
         fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -525,11 +605,18 @@ def _agent(args: argparse.Namespace) -> int:
         network, netuid = args.network, args.netuid
         registered = RegisteredHotkeys(lambda: registered_hotkeys(network, netuid))
         print(f"submissions and keys only from hotkeys registered on subnet {netuid} ({network})")
+        wrap_key = None
+        if args.wrap_key_file is not None:
+            wrap_key = bytes.fromhex(args.wrap_key_file.read_text().strip())
+            print("stored key copies get the service's own encryption too")
+        else:
+            print("no --wrap-key-file: stored key copies have only the miners' encryption")
         app = create_app(
             args.data_dir,
             args.db_url,
             images=[*APPROVED_HARNESS_IMAGES, *args.image],
             is_registered=registered.check,
+            wrap_key=wrap_key,
             accept_unverified_machines=args.dev_accept_any_machine,
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")

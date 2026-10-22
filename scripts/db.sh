@@ -6,7 +6,8 @@
 #   scripts/db.sh status     container state
 #   scripts/db.sh psql       open psql on the database
 #   scripts/db.sh url        print the connection URL (from the env file)
-#   scripts/db.sh backup F   pg_dump (custom format) to file F
+#   scripts/db.sh backup F [DB]   pg_dump (custom format) of the database (default kokoah_subnet) to file F
+#   scripts/db.sh create-db DB    create another database in the same container (same user), if missing
 #
 # Listens on 127.0.0.1:48110 only. The password is generated once and kept in the env file (outside the repo):
 # $KOKOAH_SUBNET_DB_ENV, default ~/.local/share/kokoah/subnet-db.env, as KOKOAH_SUBNET_DB_URL=... for the validator.
@@ -52,6 +53,14 @@ case "${1:-status}" in
   status) docker ps -a --filter "name=^$NAME$" --format '{{.Names}} {{.Status}}' ;;
   psql) ensure_env; docker exec -it "$NAME" psql -U "$USER" -d "$DB" ;;
   url) ensure_env; echo "$KOKOAH_SUBNET_DB_URL" ;;
-  backup) ensure_env; docker exec "$NAME" pg_dump -U "$USER" -d "$DB" -Fc > "${2:?output file}"; echo "wrote $2" >&2 ;;
+  backup) ensure_env; docker exec "$NAME" pg_dump -U "$USER" -d "${3:-$DB}" -Fc > "${2:?output file}"; echo "wrote $2" >&2 ;;
+  create-db)
+    ensure_env; new="${2:?database name}"
+    [[ "$new" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "bad database name" >&2; exit 1; }
+    if docker exec "$NAME" psql -U "$USER" -d "$DB" -tAc "SELECT 1 FROM pg_database WHERE datname = '$new'" | grep -q 1; then
+      echo "$new exists" >&2
+    else
+      docker exec "$NAME" psql -U "$USER" -d "$DB" -qc "CREATE DATABASE $new" && echo "created $new" >&2
+    fi ;;
   *) sed -n 2,12p "$0" ;;
 esac

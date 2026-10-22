@@ -82,10 +82,10 @@ def test_a_restore_needs_a_fresh_challenge(world: dict[str, Any]) -> None:
     key = account_key(keys, world["machine"], SECRET, Account.create().address, "5Hk", None)
     address = Account.from_key(key).address.lower()
     replayed = world["machine"].token(["00" * 32])
-    r = world["svc"].post(f"/v1/keys/{address}/restore", json={"token": replayed})
+    r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
     assert r.status_code == 409  # no challenge asked
     keys.challenge(address)
-    r = world["svc"].post(f"/v1/keys/{address}/restore", json={"token": replayed})
+    r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
     assert r.status_code == 403  # the token does not answer the challenge
 
 
@@ -130,7 +130,7 @@ def test_only_registered_hotkeys_submit_code_or_store_keys(tmp_path: Path) -> No
     def submit(hotkey: Any) -> httpx.Response:
         sig = bytes(hotkey.sign(submit_message(sha256_hex(blob), hotkey.ss58_address).encode())).hex()
         body = {"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": sig}
-        response: httpx.Response = svc.post("/v1/agents", json=body)
+        response: httpx.Response = svc.post("/agents", json=body)
         return response
 
     refused = submit(bob)  # signed by its hotkey, but not registered
@@ -173,3 +173,38 @@ def test_the_registered_list_is_read_again_when_old_or_on_an_unknown_hotkey() ->
     now[0] = 700 + 6 * 600 + 1
     with pytest.raises(ConnectionError):
         hk.check("b")  # too old to stand on
+
+
+def test_the_service_adds_its_own_layer_and_a_stolen_database_alone_opens_nothing(tmp_path: Path) -> None:
+    import sqlite3
+
+    machine_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    wrap = bytes(range(100, 132))
+
+    def service(key: bytes | None) -> KeyService:
+        app = create_app(
+            tmp_path / "svc", images=[IMAGE], attestation_keys=StaticKeys(machine_key.public_key()), wrap_key=key
+        )
+        return KeyService("http://svc", TestClient(app))
+
+    machine, master = DevelopmentAttestor(machine_key, IMAGE), Account.create()
+    key = account_key(service(wrap), machine, SECRET, master.address, "5Hk", None)
+    address = Account.from_key(key).address.lower()
+    with sqlite3.connect(tmp_path / "svc" / "agents.sqlite") as db:
+        (stored,) = db.execute("select blob from agent_keys where address = ?", (address,)).fetchone()
+    raw = base64.b64decode(stored)
+    assert raw.startswith(b"KSW1")
+    with pytest.raises(ValueError):
+        decrypt_key(raw, address, SECRET)  # the database copy is not the machine's copy: the service's key is needed
+    assert account_key(service(wrap), machine, SECRET, master.address, "5Hk", address) == key
+    # a service started with another key file opens nothing and records nothing
+    with pytest.raises(httpx.HTTPStatusError) as wrong:
+        account_key(service(bytes(32)), machine, SECRET, master.address, "5Hk", address)
+    assert wrong.value.response.status_code == 500
+    t = int(time.time() * 1000)
+    signed = master.sign_message(encode_defunct(text=release_message(address, t)))
+    with pytest.raises(httpx.HTTPStatusError):
+        service(bytes(32)).release(address, t, "0x" + bytes(signed.signature).hex())
+    assert service(wrap).released() == []
+    blob = service(wrap).release(address, t, "0x" + bytes(signed.signature).hex())
+    assert decrypt_key(blob, address, SECRET) == key

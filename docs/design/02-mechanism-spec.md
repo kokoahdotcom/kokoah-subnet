@@ -430,9 +430,16 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
   service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
   and the account stays an agent account. **Release:** the miner can take the copy themselves with a request
-  signed by the machine's master address (`agent release`); the service records it publicly (`GET /v1/released`),
+  signed by the machine's master address (`agent release`); the service records it publicly (`GET /key-store/released`),
   and from then on the account never earns the agent bonus again, whatever its machine says. The operator cannot
-  read the copy (it lacks the secret); the miner cannot get it without a public release.
+  read the copy (it lacks the secret); the miner cannot get it without a public release. **The secret** is 32 bytes
+  made by `kokoah-subnet agent secret`: random, or from a password the tool accepts only when strong (at least 16
+  characters, an estimated 10^18 guesses or more, the miner's own hotkey and address counting against it),
+  stretched with scrypt (N = 2^17, r = 8, p = 1) and salted with the master address; the machine refuses a secret
+  that is clearly not random. The service adds its own AES-256-GCM layer over every stored copy with a key kept
+  out of its backups, so a stolen database or backup opens nothing by itself. The service
+  (`https://api.kokoah.com/miners`) takes submissions and stored copies only from hotkeys registered on the subnet;
+  restores and releases never depend on the registration.
 - **Runs the miner's agent code in a sandbox**: a separate user, no new privileges, no core dumps, memory and
   process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and other
   processes' memory. The agent's only way out is the harness's Unix socket.

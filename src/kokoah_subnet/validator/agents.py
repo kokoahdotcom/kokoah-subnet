@@ -99,8 +99,8 @@ async def check_agent(
 
 
 async def released_accounts(http: httpx.AsyncClient, service: str) -> set[str]:
-    """The accounts whose key the owner's service released to their miner (`GET /v1/released`)."""
-    r = await http.get(f"{service.rstrip('/')}/v1/released", timeout=20)
+    """The accounts whose key the owner's service released to their miner (`GET /key-store/released`)."""
+    r = await http.get(f"{service.rstrip('/')}/key-store/released", timeout=20)
     r.raise_for_status()
     return {str(x["address"]).lower() for x in r.json()["released"]}
 
