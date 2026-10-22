@@ -10,8 +10,9 @@ validator/schema.py`; the tables, by what they answer:
 | What ran, with what settings? | `runs` (one row per validator start: network, netuid, hotkeys, versions, config) |
 | What happened each scored day? | `days` (headline figures, file hash, whether it matched the operator's commitment, the full published artifact as JSON), `builder_files` (hash at scoring and at the later re-check) |
 | Every trade, counted or not, and why not | `fills` (every row of the builder file: address, hotkey if bound, coin, side, price, size, notional, taker flag, builder fee, total fee, counterparty, closed PnL, `excluded` = spot / unbound / cluster / bound_counterparty / mark_clip / NULL) |
-| Every miner's figures and the parts behind them | `miner_days` (credit, fees, notional, PnL, smoothed credit and fees, confidence, quality, raw and smoothed skill, holding with its inputs, gates with their counts, mirror shares, multiplier, share, caps in USD and alpha, pay in alpha and USD, exchange fee rates) |
-| The smoothed state over time | `state_history` (per day), `states` (latest) |
+| Every miner's figures and the parts behind them | `miner_days` (credit, fees, notional, PnL, smoothed credit and fees, confidence, quality, raw and smoothed skill, holding with its inputs, gates with their counts, mirror shares, multiplier, share, caps in USD and alpha, pay in alpha and USD, exchange fee rates; eligibility: eligible, the reason when not, the day's average account value and its point count, qualification progress and the trade that completed it, the credited part of the day, an identity reset and its reason, the registration block) |
+| The smoothed state over time | `state_history` (per day, with the full state as JSON), `states` (latest), `hotkey_swaps` (same UID and coldkey, new hotkey: history follows, credit does not) |
+| The equity floor | `equity_points` (the exchange's recorded account values per address, kept as read; the live and window-edge points are not kept), `equity_daily` (the day's time-weighted average, its point count, when the account's history begins, and why it is unknown when it is) |
 | The trader's account | `equity` (account value, flows and off-market transfers per day, with the raw margin summary), `ledger_updates` (every deposit, withdrawal and transfer), `positions` (end-of-day positions per coin with size, entry, unrealized PnL, leverage), `activity` (round trips, fills, notional per day), `fee_rates` (the exchange's fee schedule for the address) |
 | Who is who | `miners` (per hotkey: coldkey, uid, registration block and estimated time, first and last seen, bound address and when, first and last pay, total emission from the chain and total pay from the scoring, role), `neurons` (the metagraph at scoring time), `commitments` (every commitment seen each day), `bindings` (accepted now), `binding_events` (accepted / migrated / refused with the reason), `penalties` (a mirror report by address, until which day), `clusters`, `cluster_edges` (coldkey, sub-account, transfer links) |
 | What the chain paid, tempo by tempo | `epochs`, `epoch_neurons` (per UID per epoch: incentive, emission = alpha paid that epoch, dividends, rank, trust, consensus, stake, registration block) |
@@ -41,6 +42,8 @@ SELECT day, miners, miners_with_fills, volume_usd, builder_fee_usd, paid_alpha, 
 SELECT day, notional, builder_fee, confidence, quality, skill, holding, multiplier, cap_alpha, pay_alpha FROM miner_days WHERE hotkey = '...' ORDER BY day;
 -- what the chain actually paid each UID per epoch
 SELECT e.at, n.uid, n.hotkey, n.emission, n.incentive FROM epoch_neurons n JOIN epochs e ON e.block = n.block ORDER BY e.at, n.uid;
+-- who was not eligible, and why
+SELECT day, hotkey, ineligible_reason, avg_equity_usd, equity_points, qual_trades, qual_notional FROM miner_days WHERE NOT eligible ORDER BY day;
 -- why fills were not counted
 SELECT day, excluded, count(*), sum(notional) FROM fills GROUP BY day, excluded ORDER BY day;
 -- the holding effect: did traders at holding 1 keep more of their pay than traders at holding 0?

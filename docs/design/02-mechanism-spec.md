@@ -1,6 +1,10 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.8, 2026-10-20)
+# Kokoah subnet incentive mechanism: complete specification (v5.9, 2026-10-22)
 
-Self-contained. Every symbol is defined here. v5.8 (2026-10-20, found by the adversarial replay through the real
+Self-contained. Every symbol is defined here. v5.9 (2026-10-22): eligibility (§9a). A miner earns on a day only
+when its account's time-weighted average value that day is at least $10,000 and it has qualified with its first
+three trades worth $1,000 together; ineligible days earn no credit and no pay, the smoothed credit decays, and
+nothing is owed later. Credit and qualification belong to one identity: a migration to a new address, a hotkey
+swap or a new registration starts them from zero (pay history, skill and penalties stay). v5.8 (2026-10-20, found by the adversarial replay through the real
 code): the 60-second timing heuristic for mirrored fills is gone. It flagged honest high-frequency traders against
 each other by coincidence (same coin, opposite sides within a minute, similar sizes happen all day in a crowded
 market). Its replacement is exact: the builder file names each fill's counterparty, so fills between two bound
@@ -211,6 +215,57 @@ measured (§15), not assumed.
 Over the last 30 days: at least 10 completed round trips, at least 7 days with a builder-code fill, mean account
 value at least $500. A miner failing a gate is paid at `M = 0.85`.
 
+## 9a. Eligibility (v5.9): the equity floor and the qualifying trades
+
+A miner is **eligible** on day `d` when both hold; otherwise it is paid nothing that day.
+
+**Equity floor.** The day's average account value of the bound address is at least `E_min = $10,000`:
+
+```
+Ē_d = (1 / T) × ∫_{start of d}^{end of d} E(t) dt          T = 24 h
+```
+
+`E(t)` comes from the exchange's own recorded history of the account (the `portfolio` endpoint, window
+`perpWeek`: the perps account value, recorded about every two hours), never from a single snapshot. Between
+recorded points the value is a straight line; the day's two edges are interpolated from the points around them.
+The window's live last point and the made-up point at its far edge are dropped, so every validator that asks
+while the day is inside the window reads the same points, and each validator keeps the points it read
+(`equity_points`). Fewer than 4 recorded points inside the day, or a history that does not reach back to the day's
+start, make `Ē_d` **unknown**, and unknown is ineligible (recorded as an error, raised by the health check). An
+account whose history begins during the day had nothing before its first point. A failed read of the history does
+not make a trader ineligible: the day is not scored and is retried within the hour. A drop below the floor costs
+that day only; there is no permanent disqualification, and rewards resume on the next day at or above it.
+
+**Qualifying trades.** A new identity must first make `n_q = 3` qualifying trades with at least `N_q = $1,000` of
+eligible notional together. A trade is one execution: the eligible fills (§3, after the exclusions and the mark
+clip) of one coin and side at one millisecond, so an order that crosses several resting orders is one trade. Trades
+are walked in time order; the counts carry from day to day; there is no waiting period. The first two trades earn
+no credit; the trade that completes both counts, and every later one, earn credit. Trades on a day below the
+equity floor still count toward qualification (they earn nothing that day). Qualification is kept for as long as
+the identity lasts.
+
+**An ineligible day.**
+
+```
+Φ_i,d = 0 and Σ fee_f = 0 for the smoothing        Φ̂ and F̂ decay by 0.7, nothing is added
+miner i is left out of Σ_j score_j                 it takes no share, so it dilutes nobody
+pay_i,d = 0                                        its slice of the pool goes to the burn hotkey
+```
+
+Volume, fills, account value and the skill smoothing are recorded as on any day. Credit from before the
+ineligible days stays in `Φ̂` (decaying) because it was earned while eligible; credit is never added for
+ineligible days, and nothing is paid for them later.
+
+**Identity.** Credit (`Φ̂`, `F̂`) and qualification belong to one identity: one hotkey, one bound address, one
+registration. They start from zero when the bound address changes (migration), when the hotkey is swapped on
+chain, when the hotkey registers again after leaving, and naturally for a new hotkey. What a fresh identity must
+not escape is kept: the pay history behind the holding target, the skill record and any mirror penalty (which
+follows the address and its cluster, §3).
+
+Effect on the rest: every formula of §4 to §9 is unchanged for eligible miners. The one law (§11) is unaffected
+(an ineligible day pays nothing and costs the same), and sybil splitting now needs $10,000 of capital in every
+account on top of the registration, collateral and gates.
+
 ## 10. Revenue and buyback
 
 ```
@@ -275,9 +330,10 @@ to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
 | return cap | ±10% a day |
 | holding target | alpha paid in the last 60 calendar days (floor 1 alpha); stake read as the day's minimum, collateral excluded |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days) |
+| eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
 | mark clip | 0.5% |
-| migration | once per 60 days, signed by old address, new address and hotkey; credit, skill and target carry over |
+| migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero (v5.9) |
 | emission split | miner 41%, owner 18% (locked), validators 41% (owner, 2026-10-20; the chain's default) |
 
 ## 13. Worked examples
@@ -295,8 +351,9 @@ nothing is burned, the pool is a volume rebate paying about 18% of fees back, sh
 ## 14. Account switching and migration
 
 A miner's smoothed credit, skill and holding target belong to the binding. Migration to a new address is allowed
-once per 60 days by a message signed by the old address, the new address and the hotkey; everything carries over.
-A fresh binding starts from zero with `staked = collateral`. Clusters (§3) cover linked addresses. The chain keeps
+once per 60 days by a message signed by the old address, the new address and the hotkey; skill, pay history and
+penalties carry over, while credit and qualification start from zero (v5.9, §9a). A fresh binding starts from zero
+with `staked = collateral`. Clusters (§3) cover linked addresses. The chain keeps
 only a hotkey's latest commitment, so a validator enforces the 60-day limit from the bindings it has accepted; a
 validator that starts fresh accepts the current commitment on its signatures alone and converges with the others
 after 60 days.
@@ -304,7 +361,8 @@ after 60 days.
 ### 14a. Leaving, returning, switching (v5.8)
 
 - **Deregistered or pruned, same hotkey comes back.** Records are kept by hotkey and pause while the hotkey is
-  off the subnet (nothing can be paid to it); they resume when it is registered again. The holding target counts
+  off the subnet (nothing can be paid to it); they resume when it is registered again, as a fresh identity for
+  credit and qualification (v5.9, §9a): the new registration must qualify again. The holding target counts
   calendar days, so pay from before a long gap no longer weighs on it.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
   new hotkey starts fresh (no credit tail, no skill history, gates to pass again). The unpaid credit tail of the old
@@ -314,9 +372,14 @@ after 60 days.
 - **A mirror report follows the address and its cluster**, not the hotkey: binding a penalized address to a new
   hotkey keeps the penalty; a new address plus a new hotkey costs registration, collateral, the week of gates and
   the credit tail, for a penalty worth at most 15% of pay for 30 days.
-- **Hotkey swap on chain** (same UID and coldkey, new hotkey): the smoothed state follows the new hotkey; the
-  binding must be published again because the signed line names the hotkey.
-- **Trading before joining.** Fills before the binding are recorded as unbound and never pay. The account's own
+- **Hotkey swap on chain** (same UID and coldkey, new hotkey): the pay history, skill and penalties follow the new
+  hotkey, the credit and qualification do not (v5.9; the swap is recorded in `hotkey_swaps` and applied when the
+  day is scored, so a re-score applies it again); the binding must be published again because the signed line
+  names the hotkey.
+- **Trading before joining.** Fills of a day scored before the binding was accepted are recorded as unbound and
+  never pay. The bindings are read when a day is scored and the day's file is scored as a whole, so a binding
+  accepted before a day is scored covers that whole day, including its earlier fills (they also count toward
+  qualification). The account's own
   history does count for skill: on the first day an address is scored, the exchange's portfolio history (perps
   window) backfills daily account values, so a trader with a real record is recognized within days instead of
   starting from nothing.
@@ -327,7 +390,9 @@ after 60 days.
 
 - An exchange API failure never costs a trader the day's fee credit: credit always advances from the builder file;
   only the figures that depend on the failed read (account value, flows, positions, fee rates, stake) fall back,
-  and the failure is recorded.
+  and the failure is recorded. The one exception is the account's recorded history behind the equity floor
+  (§9a): a failed read fails the day's scoring, which is retried within the hour, so a trader is never made
+  ineligible by an API failure.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is

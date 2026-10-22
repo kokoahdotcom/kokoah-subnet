@@ -2,7 +2,7 @@
 
 ## Verified trading activity as a Bittensor subnet
 
-Whitepaper, version 1.1, October 2026. Mechanism specification v5.8.
+Whitepaper, version 1.2, October 2026. Mechanism specification v5.9.
 
 ### Summary
 
@@ -23,6 +23,9 @@ unawarded is destroyed.
   trader's public account history and the chain; every validator reaches the same weights from the same inputs.
 - **Pay follows fees paid.** Equal activity, equal pay, within a 15% band set by skill and holding. Twice the
   activity, about twice the pay.
+- **Real traders with real capital.** A trader earns on a day when the account's average value that day is at
+  least $10,000, after three first trades worth $1,000 together. A day below the line simply earns nothing; the
+  next day at or above it earns again.
 - **Nobody is paid more than a fraction of what the trade cost them.** At most twice the builder fee, and at most
   three quarters of the exchange's fee and the builder fee together. Every fake-volume strategy loses at every fee
   tier of the exchange; checked, not hoped for.
@@ -114,10 +117,12 @@ leave over is destroyed.
 it as the hotkey's commitment, then trade perpetuals through the Kokoah application. That is all. No software to
 run, no keys to share, no reporting. Pay arrives as alpha on the hotkey every tempo; keeping it earns the holding
 part of the rate; a consistent track record earns the skill part, and the exchange's own account history counts from the first day, so a
-trader with a real record is recognized within days. A trader can move to a new address once per 60 days and keep
-their records. Leaving and coming back with the same hotkey resumes the records; coming back with a new identity
-starts from zero and forfeits the unpaid part of the old credit, and a mirror report follows the address, not the
-hotkey.
+trader with a real record is recognized within days. To earn, a trader keeps an account averaging at least
+$10,000 over the day and, once at the start, completes three trades worth $1,000 together; there is no waiting
+period, so a trader can qualify on the day they register. A trader can move to a new address once per 60 days and
+keep their track record, pay history and skill; the fee credit and the qualification start again with the new
+address, as they do after a hotkey swap or a new registration. Coming back with a new identity starts from zero and
+forfeits the unpaid part of the old credit, and a mirror report follows the address, not the hotkey.
 
 **Validators.** Run the open-source validator with a hotkey and a database. It fetches public data, scores the
 day, sets weights every tempo, keeps the record and serves the daily artifacts and the leaderboard over a
@@ -134,7 +139,15 @@ process, and publishes the code, the parameters and every change. What the opera
 
 ## 4. The pay rule
 
-Every number below is a parameter of specification v5.8; the complete formulas are in appendix A.
+Every number below is a parameter of specification v5.9; the complete formulas are in appendix A.
+
+**Eligibility.** A trader earns on a day when two things hold. The account's average value over that day is at
+least $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a
+balance at one moment. And the trader has qualified: a new identity's first three trades, worth $1,000 together,
+qualify it; the trade that completes both earns credit, the two before it do not. On a day that falls short, the
+trader's activity, account value and skill are recorded as usual, but the day's trades earn no credit, the earlier
+credit fades as it would on a quiet day, the trader takes no share of the pool and nothing is owed later. There is
+no permanent exclusion: the first day back at $10,000 earns again.
 
 **Fee credit.** A trader's credit for the day is the builder fee paid on their fills, 0.025% of notional on every
 order, maker and taker alike. The credit is smoothed: 30% of today's fees count today, 21% tomorrow, 15% the day
@@ -190,7 +203,8 @@ lose their rate bonus for 30 days and are reported.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; rate 0.85 + 0.05 skill + 0.10 holding; caps 2× the fee
 credit and 0.75× the total fees on the builder leg; skill windows 60 and 30 days; holding window 60 days; gates
-10 round trips, 7 days, $500; mirror thresholds 25% and 50%; migration once per 60 days; emission split miner 41%,
+10 round trips, 7 days, $500; eligibility $10,000 average account value a day and three qualifying trades worth
+$1,000; mirror thresholds 25% and 50%; migration once per 60 days; emission split miner 41%,
 owner 18% (locked), validators 41%. Changes follow section 7.
 
 ## 5. Why fake volume loses
@@ -418,6 +432,13 @@ alpha paid in the last 60 calendar days.
 
 Gates, over 30 days: at least 10 round trips, 7 active days, $500 mean account value; otherwise `M = 0.85`.
 
+Eligibility, each day: `Ē_i,d = (1/24 h) × ∫ E_i(t) dt` over the day, from the exchange's recorded account values
+joined by straight lines (at least 4 recorded points in the day; otherwise unknown, and unknown is not eligible),
+and qualification: the first 3 trades (executions of one coin and side at one instant) with at least $1,000 of
+eligible notional together, the first two uncredited. A miner with `Ē_i,d < $10,000` or not yet qualified has
+`Φ_i,d = 0` and no fees added to `F̂`, is left out of `Σ_j`, and has `pay_i,d = 0`. Credit and qualification
+restart with a new address, a hotkey swap or a new registration.
+
 Exclusions: fills against the same cluster and against other bound addresses removed; fills more than 0.5% from
 the mark valued at the mark; daily net positions per coin correlated below −0.8 with another bound address on at
 least 10 of the last 30 days count as mirrored; mirrored notional above 25% removed from credit, above 50% the rate
@@ -446,7 +467,8 @@ pool works as a volume rebate returning about 18% of fees, with shares within 15
    exchange's minute candles, account value and ledger for returns and flows, positions, the fee schedule,
    sub-accounts and transfer partners for clusters; read the day's minimum own stake and the pool rate from the
    chain at blocks anchored to the day. A failed read never costs the trader the day's credit.
-4. Update smoothed credit, total fees and skill; compute holding, gates, the rate; compute shares, caps in alpha at
+4. Read the account's recorded history and compute each trader's average account value for the day; walk the
+   day's trades for qualification; update smoothed credit (eligible trades only), total fees and skill; compute holding, gates, the rate; compute shares, caps in alpha at
    the day's mean rate, pay, and the remainder.
 5. Write everything to the record; publish the per-miner artifact; set weights (miners by pay, the remainder to the
    burn hotkey) every tempo until the next run.
@@ -476,6 +498,10 @@ leaderboard page).
 
 ### Appendix F. Changelog
 
+- **1.2 (2026-10-22).** Mechanism v5.9: eligibility. A trader earns on days the account averages at least
+  $10,000, after three qualifying trades worth $1,000 together; ineligible days earn no credit and no pay and
+  nothing is owed later; credit and qualification restart with a new address, a hotkey swap or a new
+  registration, while the track record, pay history and penalties stay.
 - **1.1 (2026-10-21).** Off-market fills valued at the exchange's minute marks and their transfers removed from
   the returns; the day's TAO/USD from hourly candles; chain samples anchored to the scored day; vault transfers as
   flows; a failed exchange read never costs the day's credit; re-scores start from the state before the day; the

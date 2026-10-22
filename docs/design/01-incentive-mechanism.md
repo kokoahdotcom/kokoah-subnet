@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v5.8, 2026-10-20)
+# Incentive mechanism in plain words (v5.9, 2026-10-22)
 
 The formulas are in `02-mechanism-spec.md`; this page says what they do. The public, polished version is the
 whitepaper (`docs/whitepaper.md`).
@@ -9,6 +9,21 @@ Miners are traders. A miner links one Hyperliquid address to a subnet hotkey and
 so every scored trade carries Kokoah's builder code and pays Kokoah a small fee (0.025% of the trade). Validators
 read the public Hyperliquid data of the linked addresses and share the day's miner emission among them. Kokoah
 uses the fees to buy back and burn the subnet's token. Miners run nothing: register, link, trade.
+
+## Who can earn on a day
+
+Two simple conditions, checked every day:
+
+- **Real capital.** The account must hold at least $10,000 on average over the day. The average comes from the
+  exchange's own record of the account through the day, not from one balance at one moment, so a deposit just
+  before midnight does not count as a full day.
+- **A real start.** A new miner first makes three trades worth $1,000 together. The first two only count toward
+  this; the trade that completes it, and every trade after, earn. There is no waiting period: you can qualify the
+  day you register.
+
+On a day that falls short, everything is still recorded, but that day's trades earn nothing, you are paid nothing,
+and nothing is owed to you later. Your earlier credit fades as it would on a quiet day. The next day at or above
+$10,000 you earn again; nobody is ever excluded for good.
 
 ## How a miner's daily pay is decided
 
@@ -58,10 +73,12 @@ deposit, and the credit is valued at the market price.
 
 ## Leaving and coming back
 
-Come back with the same hotkey and your records resume. Come back as a new identity and you start from zero, lose
-the unpaid part of your old credit, and a mirror report still follows your address. Collateral never counts as
+Come back with the same hotkey and your records resume, but as a new registration you qualify again with three
+trades. Moving to a new address, or swapping the hotkey, keeps your track record, your pay history and any
+penalty, but your fee credit and your qualification start again. Come back as a new identity and you start from
+zero, lose the unpaid part of your old credit, and a mirror report still follows your address. Collateral never counts as
 holding, so a seller gains nothing by re-registering. Your Hyperliquid account history counts for skill from the
-first day you are bound; trades before binding never pay.
+first day you are bound; trades of days scored before your binding never pay.
 
 ## Still open
 

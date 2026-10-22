@@ -42,7 +42,8 @@ uv run kokoah-subnet score-day --fills 20261020.csv.lz4 --miners miners.json --s
 ```
 
 `--fills` is Hyperliquid's per-builder daily file (or a plain CSV with the same header); `miners.json` is a list of
-`{hotkey, address, returns, mean_equity_usd, staked_min_alpha, collateral_min_alpha}`; the state file carries the
+`{hotkey, address, returns, mean_equity_usd, avg_equity_usd, staked_min_alpha, collateral_min_alpha}` (a miner
+without `avg_equity_usd`, the day's average account value, is not eligible that day); the state file carries the
 smoothed values from day to day. The result lists every miner's credit, factors, multiplier, share, cap and pay, the
 burn, and the weight fractions (miners by pay, the burn to the owner hotkey). The same code path runs in the
 validator against live data.

@@ -35,7 +35,8 @@ The command checks the signature against the line before publishing, so a wrong 
 
 ## Migration
 
-To move the records to a new Hyperliquid address (once per 60 days): the new address signs the line (with the new
+To move to a new Hyperliquid address (once per 60 days; the track record, pay history and skill move with it, the
+fee credit and the qualification start again): the new address signs the line (with the new
 address in it), and the old address signs the same line. Both signatures go on the command as `--signature` and
 `--previous-address`/`--previous-signature`.
 
