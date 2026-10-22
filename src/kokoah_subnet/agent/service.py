@@ -117,13 +117,25 @@ def create_app(
     attestation_keys: Any = None,
     accept_unverified_machines: bool = False,
 ) -> FastAPI:
-    """`attestation_keys`: the token keys (Google's when None). `accept_unverified_machines` is for local
+    """`attestation_keys`: the token keys (Google's when None). `is_registered` (hotkey -> registered on the subnet;
+    the public service always sets it) gates submissions and stored keys; restores and releases never depend on it,
+    so a miner who lost their registration still gets their account back. `accept_unverified_machines` is for local
     development only: any token is accepted for storing and restoring keys."""
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "bundles").mkdir(exist_ok=True)
     engine = create_engine(db_url or f"sqlite:///{data_dir / 'agents.sqlite'}", future=True)
     metadata.create_all(engine)
     app = FastAPI(title="Kokoah subnet agent service")
+
+    def require_registered(hotkey: str) -> None:
+        if is_registered is None:
+            return
+        try:
+            ok = is_registered(hotkey)
+        except Exception as exc:  # noqa: BLE001 - the chain could not be read
+            raise HTTPException(status_code=503, detail="the subnet's registrations cannot be read now") from exc
+        if not ok:
+            raise HTTPException(status_code=403, detail="the hotkey is not registered on the subnet")
 
     @app.post("/v1/agents")
     def submit(body: Submission) -> dict[str, Any]:
@@ -136,8 +148,7 @@ def create_app(
         blob_id = sha256_hex(blob)
         if not verify(submit_message(blob_id, body.hotkey), body.signature, body.hotkey):
             raise HTTPException(status_code=403, detail="not signed by the hotkey")
-        if is_registered is not None and not is_registered(body.hotkey):
-            raise HTTPException(status_code=403, detail="the hotkey is not registered on the subnet")
+        require_registered(body.hotkey)
         encrypted = is_encrypted(blob)
         code = None
         if not encrypted:
@@ -222,6 +233,7 @@ def create_app(
             blob = base64.b64decode(body.blob, validate=True)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="blob must be base64") from exc
+        require_registered(body.hotkey)
         machine_proof(body.token, store_digest(a, body.master, blob))
         with engine.begin() as c:
             if c.execute(select(keys.c.address).where(keys.c.address == a)).first():

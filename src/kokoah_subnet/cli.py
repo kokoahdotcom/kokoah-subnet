@@ -92,6 +92,10 @@ def build_parser() -> argparse.ArgumentParser:
     aserv.add_argument("--host", default="127.0.0.1")
     aserv.add_argument("--port", type=int, default=48130)
     aserv.add_argument(
+        "--netuid", type=int, required=True, help="accept submissions and keys only from hotkeys registered here"
+    )
+    aserv.add_argument("--network", default="finney", help="the chain to read registrations from")
+    aserv.add_argument(
         "--dev-accept-any-machine",
         action="store_true",
         help="local development only: accept keys from machines without checking their attestation",
@@ -516,10 +520,16 @@ def _agent(args: argparse.Namespace) -> int:
 
         if args.dev_accept_any_machine:
             print("development mode: keys are accepted from any machine (never use this in production)")
+        from kokoah_subnet.chain import RegisteredHotkeys, registered_hotkeys
+
+        network, netuid = args.network, args.netuid
+        registered = RegisteredHotkeys(lambda: registered_hotkeys(network, netuid))
+        print(f"submissions and keys only from hotkeys registered on subnet {netuid} ({network})")
         app = create_app(
             args.data_dir,
             args.db_url,
             images=[*APPROVED_HARNESS_IMAGES, *args.image],
+            is_registered=registered.check,
             accept_unverified_machines=args.dev_accept_any_machine,
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")

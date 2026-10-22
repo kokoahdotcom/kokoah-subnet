@@ -6,7 +6,12 @@ that is explicit about the network and the wallet.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from typing import Any
 
 import bittensor as bt
 
@@ -40,3 +45,48 @@ async def chain_info(network: str = "local") -> ChainInfo:
         subnet_count=len(subnets),
         subnet_registration_cost_tao=str(cost),
     )
+
+
+async def registered_hotkeys(network: str, netuid: int) -> set[str]:
+    """The hotkeys registered on the subnet now."""
+    async with bt.Subtensor(network) as client:
+        mg = await client.subnets.metagraph(netuid, commitments=False)
+    if mg is None:
+        raise RuntimeError(f"subnet {netuid} has no metagraph")
+    return {str(n.hotkey) for n in mg.neurons}
+
+
+class RegisteredHotkeys:
+    """`check(hotkey)`: whether the hotkey is registered on the subnet. The list is read again when it is older than
+    `max_age_s`, or on an unknown hotkey once `refresh_s` has passed (a just-registered miner waits at most that)."""
+
+    def __init__(
+        self,
+        fetch: Callable[[], Coroutine[Any, Any, set[str]]],
+        max_age_s: float = 600.0,
+        refresh_s: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.fetch = fetch
+        self.max_age_s = max_age_s
+        self.refresh_s = refresh_s
+        self.clock = clock
+        self._hotkeys: set[str] = set()
+        self._read_at: float | None = None
+        self._lock = threading.Lock()
+
+    def _read(self) -> None:
+        try:
+            self._hotkeys = asyncio.run(self.fetch())
+        except Exception:
+            if self._read_at is None or self.clock() - self._read_at > 6 * self.max_age_s:
+                raise  # nothing recent enough to fall back on
+            return  # keep the last list; read again on the next unknown hotkey
+        self._read_at = self.clock()
+
+    def check(self, hotkey: str) -> bool:
+        with self._lock:
+            age = None if self._read_at is None else self.clock() - self._read_at
+            if age is None or age > self.max_age_s or (hotkey not in self._hotkeys and age > self.refresh_s):
+                self._read()
+            return hotkey in self._hotkeys
