@@ -5,7 +5,7 @@ sealed-machine agents.** The whole miner emission goes to miners every day: 80% 
 builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading record (§7a). The
 fee caps, the burn of the unawarded remainder and the holding factor are gone. By design, volume farming is now an
 open competition: a farmer is paid in proportion to the builder fees they generate, so farmers join until what they
-pay in fees roughly equals what they receive, and every builder fee they pay is the operator's revenue (§11). The
+pay in fees roughly equals what they receive, and every builder fee they pay funds the buyback (§11). The
 skill pool is protected against luck, copies and splitting by an entry test (a probabilistic Sharpe ratio of at
 least 0.95 over 90 days), a luck floor, a volume participation factor capped at $1M over 30 days, and a copy rule.
 A miner's agent running in a cloud confidential VM with Kokoah's harness, verified by the validators themselves,
@@ -22,10 +22,12 @@ caps and the burn that v6 removes. Validator emissions and outside demand are ou
 A Bittensor subnet whose miners are traders. A miner binds one Hyperliquid address to a subnet hotkey and trades
 perpetuals through the Kokoah builder code, by hand or with an agent. Validators compute, from Hyperliquid data of
 the bound addresses and chain state, each miner's share of the daily miner emission. Kokoah collects the builder fee
-on every such trade and spends it buying back and burning the subnet's token (alpha). The intention: maximum
-trading volume through Kokoah, paid in proportion to the fees it generates; a separate reward for proven trading
-skill that luck, copies and split accounts cannot capture; a small extra reward for trading by verified agents;
-and the whole emission paid to miners every day.
+on every such trade and spends it buying back and burning the subnet's token (alpha). The purpose: trading agents,
+and traders, whose records are verified from public data. The intention: activity rewarded in proportion to the
+builder fees it pays; a separate reward for proven trading skill that luck, copies and split accounts cannot
+capture; more skill weight for verified agents, the subnet's main purpose; and the whole emission paid to miners
+every day. Verified agents with long records are to be offered to traders on Kokoah as strategies, and that revenue
+goes to the buyback too; that happens outside the mechanism and never changes a score.
 
 ## 1. Chain facts used
 
@@ -97,8 +99,8 @@ own builder field cannot be changed after the fact. Counterparties of history fi
 validator reads the day's fills of every bound address and of up to 25 linked accounts per address (sub-accounts
 and transfer partners), and a fill whose trade id appears among another known address's fills traded with that
 address. A failed read of the history or of the explorer fails the day's scoring (retried within the hour) rather
-than scoring the day without it. Checked on Kokoah's real traders (2026-10-22): the confirmed fills add up to
-$10.1419 of builder fees against $10.141935 the exchange reports as earned, with no real fill refused.
+than scoring the day without it. Checked against the exchange's own report of the builder's earnings: the confirmed
+fills add up to what the exchange reports as earned, to the cent, with no genuine fill refused.
 
 **Earnings check.** The exchange reports what the builder has earned (`referral`: `builderRewards`). The validator
 records it at every scoring run, and the health check raises an alarm when the builder fees of all counted fills
@@ -289,7 +291,7 @@ proportion to its smoothed builder fees, so a farmer's income per fee dollar is 
 few fees are paid, falling as more are. Farmers therefore join until income per fee dollar meets their cost per
 fee dollar: about 2.8 for a base-tier taker (4.5 bps to the exchange for every 2.5 bps of builder fee, plus the
 builder fee itself), lower for makers and deep fee tiers. In that equilibrium the volume pool is worth roughly what
-farmers pay in fees, and the builder-fee part of what they pay is the operator's revenue.
+farmers pay in fees, and the builder-fee part of what they pay funds the buyback.
 
 | Farmers paying $500 of builder fees a day each, pool worth $12,667 a day, $1,000 of honest fees | 1 | 5 | 20 | 100 |
 |---|---|---|---|---|

@@ -89,12 +89,6 @@ status, and changing address or hotkey. Agents: the [agent guide](agents.md).
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
 
-## Testnet
-
-`scripts/testnet.sh wallets`, then (after test TAO from the Bittensor Discord) `scripts/testnet.sh register`,
-`KOKOAH_SUBNET_NETUID=<n> scripts/testnet.sh start`, and `KOKOAH_SUBNET_NETUID=<n> KOKOAH_BUILDER_ADDRESS=<0x…>
-scripts/testnet.sh run`.
-
 ## Offline tools
 
 ```bash
@@ -102,5 +96,4 @@ uv run kokoah-subnet verify                      # the specification's numerical
 uv run kokoah-subnet score-day ...               # score one day from files (`--help` lists the inputs)
 uv run python scripts/replay.py --days 60        # adversarial replay through the real scoring code
 uv run python scripts/fetch_real_fills.py --out DIR   # public fills of real addresses, then replay.py --real DIR
-uv run python scripts/measure_burn.py            # burn and emission counters per tempo on a local chain
 ```

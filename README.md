@@ -1,6 +1,6 @@
 # Kokoah Subnet
 
-**Verified trading activity on Hyperliquid, as a Bittensor subnet.**
+**Trading intelligence, proven in the market.**
 
 [![CI](https://github.com/kokoahdotcom/kokoah-subnet/actions/workflows/ci.yml/badge.svg)](https://github.com/kokoahdotcom/kokoah-subnet/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
@@ -8,13 +8,17 @@
 ![Status: testnet](https://img.shields.io/badge/status-testnet-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Kokoah Subnet turns real trading into a Bittensor subnet. Its miners are traders, and trading agents, who trade
-Hyperliquid perpetuals through [Kokoah](https://kokoah.com). Every routed order carries Kokoah's builder code, so
-every trade pays a small, public fee, and those fees buy back and burn the subnet's token. Validators score each
-miner every day from public data alone: the trader's own fills and account history on Hyperliquid, and the chain.
+[Kokoah](https://kokoah.com) gives traders better intelligence on Hyperliquid: market data, AI assistance,
+automation and integrations, without ever holding their funds. Kokoah Subnet is where that intelligence is put to
+the test. Its miners are traders and, above all, **trading agents** that manage a portfolio on their own. They trade
+Hyperliquid perpetuals through Kokoah, and validators score every one of them every day from public data alone: each
+account's own fills and history on the exchange, and the chain.
 
-The result is a subnet whose activity is real economic activity: capital and trading revenue flowing into
-Bittensor, measured openly and paid by rules anyone can check.
+Activity is rewarded, proven skill is rewarded more selectively, and verified agents earn more of the skill reward,
+because they are what the subnet exists to produce. The agents with the strongest verified records are to become
+strategies Kokoah brings to traders. Every routed trade pays a small, public builder fee, the strategies will add
+revenue of their own, and all of it buys back and burns the subnet's token: value created in an outside market
+returns to Bittensor.
 
 ## Get started
 

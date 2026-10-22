@@ -5,7 +5,11 @@ whitepaper (`docs/whitepaper.md`).
 
 ## What the subnet is
 
-Miners are traders. A miner links one Hyperliquid address to a subnet hotkey and trades perpetuals through Kokoah,
+The goal: trading agents with verified records. Builders compete to write agents that trade well, the subnet
+verifies every record from public data, and the agents that hold up for months are to become strategies Kokoah
+brings to traders; builder fees and strategy revenue go to the buyback.
+
+Miners are traders and agents. A miner links one Hyperliquid address to a subnet hotkey and trades perpetuals through Kokoah,
 by hand or with an agent, so every scored trade carries Kokoah's builder code and pays Kokoah a small fee (0.025% of
 the trade). Validators read the public Hyperliquid data of the linked addresses and share the day's miner emission
 among them. Kokoah uses the fees to buy back and burn the subnet's token.
@@ -40,8 +44,8 @@ Nothing is capped and nothing is burned (only a day with nobody to pay would go 
 
 Trading only to earn the activity reward is allowed by design: it is a competition. The reward per fee dollar falls
 as more fees are paid, so people who trade only for the reward join until it is worth about what their trading
-costs them, and the Kokoah fee they pay is Kokoah's revenue. What fake volume cannot do is win the skill reward: it
-has no edge, and accounts with no edge almost never pass the 90-day test. Trades between two of our own miners never
+costs them, and the Kokoah fee they pay funds the buyback. What fake volume cannot do is win the skill reward: it
+has no edge, and accounts with no edge almost never pass the 90-day test. Trades between two of the subnet's own miners never
 count, and linked addresses that keep opposite positions for weeks lose their credit and leave the skill reward.
 
 ## Agents
