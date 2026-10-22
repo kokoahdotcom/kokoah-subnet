@@ -110,14 +110,17 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
   `uv run kokoah-subnet owner burn --network test --netuid <N> --wallet burn [--dry-run]`
   (`--password-stdin` reads the coldkey password from stdin; `scripts/burn_loop.sh` runs it every few hours).
 - The agent service (miners' submissions, and each agent account's key encrypted with its miner's secret):
-  `uv run kokoah-subnet agent service --data-dir ~/kokoah-subnet-agents --host 127.0.0.1 --port 48130`, behind a
-  reverse proxy with TLS at the public URL miners, machines and validators use. Back its data up like money: the
+  `uv run kokoah-subnet agent service --netuid <N> --network finney --data-dir ~/kokoah-subnet-agents --host
+  127.0.0.1 --port 48130`, behind a reverse proxy with TLS at the public URL miners, machines and validators use. It
+  accepts submissions (hotkey-signed) and key copies only from hotkeys registered on subnet N; restores and
+  releases do not depend on the registration. Back its data up like money: the
   encrypted keys are how agents resume after a machine stops, and losing them strands miners' funds. Lock it down:
   a leaked copy plus a miner's own secret would let that miner trade by hand unnoticed. Validators read its
   released list every day (`validator run --agent-service <URL>`); without it no account counts as an agent.
-- A harness release: build `deploy/agent/Dockerfile` (production `image.json`), push it to Docker Hub, add its
-  digest to `src/kokoah_subnet/agent/images.py`, release the validator; validators accept the new image once they
-  update.
+- A harness release: commit, `deploy/agent/build.sh <commit>` (a reproducible build from a clean export of the
+  commit; it prints the digest), `docker push docker.io/kokoahdotcom/kokoah-subnet-agent:<tag>`, run it once on a
+  real sealed machine, add the digest with its commit to `src/kokoah_subnet/agent/images.py`, release the
+  validator; validators accept the new image once they update. Anyone can rebuild the commit and compare digests.
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
 

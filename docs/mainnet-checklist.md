@@ -10,11 +10,12 @@ Costs are read live (`btcli query subnet-registration-cost --network finney`) an
 - [ ] Owner coldkey custody decided (hardware or multisig; an operations proxy for day-to-day owner calls).
 - [ ] The burn wallet created on its own coldkey (v6: only a day with no miner weight goes to it; without it such a
       day goes to the owner hotkey).
-- [ ] Agents: the harness image built and pushed (Docker Hub), its digest added to
-      `src/kokoah_subnet/agent/images.py`; the agent service hosted (`kokoah-subnet agent service`) at a public URL.
+- [x] Agents: the harness image built reproducibly and pushed (Docker Hub), tested on a real sealed Intel TDX
+      machine, its digest added to `src/kokoah_subnet/agent/images.py` (harness 1.0.0, 2026-10-22).
+- [ ] The agent service hosted (`kokoah-subnet agent service --netuid <N>`) at a public URL.
 - [ ] Validator hosts decided (this server, the node servers, or rented machines), each with the record database.
 - [x] The builder fee switched on in the application (0.025%, live since 2026-10-20); the subnet pays nothing while it is zero.
-- [ ] The test-network period's measurements published: an agent on a real sealed machine, both pools with real traders,
+- [ ] The test-network period's measurements published: an agent on a real sealed machine (run 2026-10-22), both pools with real traders,
       real-trader replays, total-fee matching.
 - [ ] The whitepaper's parameters frozen for launch (specification version noted in every artifact).
 

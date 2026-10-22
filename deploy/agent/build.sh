@@ -19,7 +19,7 @@ git -C "$root" archive "$commit" deploy/agent src/kokoah_subnet/__init__.py src/
 rm -f "$ctx/src/kokoah_subnet/agent/images.py"  # the approved list stays out of the image it approves
 docker buildx build --no-cache --pull=false --provenance=false --sbom=false \
   --build-arg SOURCE_DATE_EPOCH="$epoch" \
-  --output "type=image,name=$name:$tag,rewrite-timestamp=true,oci-mediatypes=true" \
+  --output "type=image,name=$name:$tag,rewrite-timestamp=true,oci-mediatypes=true,unpack=false" \
   -f "$ctx/deploy/agent/Dockerfile" "$ctx" >&2
 echo "$name:$tag"
 docker image inspect --format '{{.Id}}' "$name:$tag"

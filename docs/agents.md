@@ -35,7 +35,9 @@ uv run kokoah-subnet agent submit --service <agent service URL> --bundle my-agen
 ```
 
 The same files always give the same fingerprint. Without `--encrypt` the code is public: anyone can download it
-from the service and check the fingerprint. One submission per hotkey per 12 hours.
+from the service and check the fingerprint. One submission per hotkey per 12 hours, and only from a hotkey that is
+registered on the subnet (the service also stores key copies only for registered hotkeys; getting an account back
+or taking its key out works even after the hotkey lost its registration).
 
 ## 3. Start the sealed machine
 
@@ -43,6 +45,10 @@ On your own Google Cloud project (you pay for the machine; Kokoah runs nothing f
 published as `docker.io/kokoahdotcom/kokoah-subnet-agent`; its digest must be one of the approved images
 (`src/kokoah_subnet/agent/images.py`). The machine runs as a service account with the Confidential Computing Workload
 User role (the default compute account lacks it, and without it the machine cannot get its proof).
+
+The image is reproducible: `deploy/agent/build.sh <commit>` (the commit listed next to the digest in `images.py`)
+rebuilds it from the repository and prints its digest, which must equal the approved one. Check it before you trust
+a harness with your money.
 
 ```bash
 gcloud compute instances create kokoah-agent \
