@@ -1,0 +1,10 @@
+# The sealed machine image takes only these files from the repository, never local caches or other files.
+*
+!deploy/agent/requirements.txt
+!deploy/agent/image.json
+!deploy/agent/image.dev.json
+!src/kokoah_subnet/__init__.py
+!src/kokoah_subnet/agent
+src/kokoah_subnet/agent/images.py
+**/__pycache__
+**/*.pyc
