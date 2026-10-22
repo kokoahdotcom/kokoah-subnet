@@ -21,6 +21,9 @@ from kokoah_subnet.validator.store import Store
 HK_A, HK_B, OWNER, BURN = "hkA", "hkB", "hkOwner", "hkBurn"
 EQUITY: dict[str, float] = {}  # address -> recorded account value in the fake history (default $25,000)
 PORTFOLIO_FAILS: set[str] = set()  # addresses whose history read fails
+HISTORY: dict[str, list[dict[str, Any]]] = {}  # address -> extra fills in its own history (not in the builder file)
+APPROVED: dict[str, list[str]] = {}  # address -> approved builders (default: only the scored builder)
+EARNED = {"builderRewards": "100000"}
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -111,6 +114,12 @@ def _csv(addr_a: str, addr_b: str) -> str:
 def _info_handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     t = body["type"]
+    if t == "approvedBuilders":
+        return httpx.Response(200, json=APPROVED.get(body["user"].lower(), ["0xbuilder"]))
+    if t == "referral":
+        return httpx.Response(200, json=dict(EARNED))
+    if t == "userFillsByTime" and body["user"].lower() in HISTORY and body.get("startTime") == DAY_MS:
+        return httpx.Response(200, json=HISTORY[body["user"].lower()])
     if t == "userFillsByTime":
         if body["user"].lower().endswith(body["user"].lower()[-4:]) and body.get("startTime") == DAY_MS:
             return httpx.Response(
@@ -172,6 +181,9 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _FakeChain, str, str]:
     EQUITY.clear()
     PORTFOLIO_FAILS.clear()
+    HISTORY.clear()
+    APPROVED.clear()
+    EARNED["builderRewards"] = "100000"
     a, b = Account.create(), Account.create()
     cfg = ValidatorConfig(
         network="fake",
@@ -390,4 +402,116 @@ async def test_a_failed_history_read_fails_the_day_instead_of_zeroing_the_trader
     with pytest.raises(RuntimeError, match="portfolio history"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert store.day(DAY) is None  # not scored: the loop retries within the hour
+    await hl.close()
+
+
+KO = "0x6b6f0101" + "cd" * 12
+
+
+def _history_of_file_fills(offset_ms: int = 321) -> list[dict[str, Any]]:
+    """Trader A's own history: the 20 fills the file lists (to the millisecond) and four more after midday."""
+    out = []
+    for i in range(20):
+        side = "B" if i % 2 == 0 else "A"
+        t = DAY_MS + i * 60000 + offset_ms
+        out.append(
+            {
+                "time": t,
+                "coin": "BTC",
+                "side": side,
+                "px": "100000",
+                "sz": "0.5",
+                "crossed": True,
+                "fee": "35",
+                "builderFee": "12.5",
+                "tid": 1 + i,
+                "cloid": KO,
+                "closedPnl": "0",
+            }
+        )
+    for i in range(4):
+        side = "B" if i % 2 == 0 else "A"
+        t = DAY_MS + 15 * 3_600_000 + i * 60000 + offset_ms
+        out.append(
+            {
+                "time": t,
+                "coin": "BTC",
+                "side": side,
+                "px": "100000",
+                "sz": "0.5",
+                "crossed": True,
+                "fee": "35",
+                "builderFee": "12.5",
+                "tid": 1000 + i,
+                "cloid": KO,
+                "closedPnl": "0",
+            }
+        )
+    return out
+
+
+async def test_fills_after_midday_count_from_the_traders_own_history(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    ra = next(r for r in result.records if r.hotkey == HK_A)
+    assert ra.fees.fills == 24 and ra.fees.builder_fee == pytest.approx(300.0)
+    assert ra.fees.total_fee == pytest.approx(24 * 35.0)  # exact total fees, matched on the second
+    assert ra.credited.fills == 22  # the first two trades qualify but earn nothing
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        rows = c.execute(S.fills.select().where(S.fills.c.address == addr_a)).all()
+        earned = c.execute(S.builder_rewards.select()).all()
+    sources = sorted(r.source for r in rows)
+    assert sources.count("both") == 20 and sources.count("history") == 4
+    assert all(r.tid is not None and r.cloid == KO for r in rows)
+    assert len(earned) == 1 and earned[0].builder_rewards == 100000.0
+    await hl.close()
+
+
+async def test_a_missing_file_waits_until_the_deadline_then_the_histories_score_the_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import collect as collect_module
+    from kokoah_subnet.validator.builder_feed import NotPublished
+
+    async def not_published(cfg: Any, day: str) -> Any:
+        raise NotPublished(day)
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
+    HISTORY[addr_a] = _history_of_file_fills()
+    end_s = DAY_MS / 1000 + 86_400
+    with pytest.raises(NotPublished):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 3_600)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 13 * 3_600)
+    ra = next(r for r in result.records if r.hotkey == HK_A)
+    assert ra.fees.fills == 24 and ra.fees.builder_fee == pytest.approx(300.0)
+    assert store.file(DAY) == ("", 0)
+    await hl.close()
+
+
+async def test_credited_fees_beyond_what_the_builder_earned_raise_the_alarm(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.health import check
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    EARNED["builderRewards"] = "1"  # the exchange says the builder earned $1; the day credits $300
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    report = check(store)
+    assert report["builder_earned_usd"] == 1.0 and report["credited_builder_fees_usd"] > 1.0
+    assert any("did not reach the builder" in p for p in report["problems"])
+    await hl.close()
+
+
+async def test_another_approved_builder_needs_our_order_marker(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    hist = _history_of_file_fills()
+    for r in hist[20:22]:
+        r["cloid"] = None  # two afternoon fills from another app
+    HISTORY[addr_a] = hist
+    APPROVED[addr_a] = ["0xbuilder", "0xother"]
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    ra = next(r for r in result.records if r.hotkey == HK_A)
+    assert ra.fees.fills == 22  # the 20 the file confirms and the 2 with our marker at our rate
     await hl.close()

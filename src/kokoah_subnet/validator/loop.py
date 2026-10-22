@@ -70,7 +70,7 @@ async def step(
         if clock - last_try >= cfg.retry_missing_s:
             store.set_meta(f"attempt:{target}", str(clock))
             try:
-                result = await collect_and_score(cfg, target, store, hl, client, params)
+                result = await collect_and_score(cfg, target, store, hl, client, params, now_ts=clock)
                 report["scored"] = {
                     "day": target,
                     "paid": result.allocation.paid_alpha,

@@ -79,8 +79,17 @@ def check(
             f"an address shows a maker rebate of {float(deepest):.2f} bps, deeper than the {BEST_REBATE_BPS} bps the "
             "one law assumes: re-check the caps"
         )
+    # the fees credited to traders must all have reached the builder: never more than the exchange says it earned
+    credited, earned = store.credited_builder_fees(), store.latest_builder_rewards()
+    if earned is not None and credited > earned + 0.01:
+        problems.append(
+            f"traders were credited ${credited:,.2f} of builder fees but the exchange shows the builder earned "
+            f"${earned:,.2f}: some credited fees did not reach the builder"
+        )
     return {
         "ok": not problems,
+        "credited_builder_fees_usd": credited,
+        "builder_earned_usd": earned,
         "checked_at": now.isoformat(),
         "latest_day": latest[0] if latest else None,
         "last_weights_ok": bool(last_weights[1]) if last_weights else None,

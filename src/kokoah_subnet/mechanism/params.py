@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "5.9"
+SPEC_VERSION = "5.10"
 
 # The best maker rebate anywhere on Hyperliquid, bps a side (fee schedule read 2026-10-19). It bounds the smallest
 # total fee a round trip through the builder can carry, and with it the safe range of `c_tot` (spec section 11).
@@ -52,6 +52,9 @@ class Params:
     equity_min_points: int = 4  # fewer recorded points inside the day: the average is unknown (never estimated)
     qualify_trades: int = 3  # a new identity's first trades: qualifying trades needed
     qualify_notional_usd: float = 1_000.0  # and their eligible notional
+    # data plane (section 3): the builder file is incomplete, the address's own history is the primary source
+    file_deadline_hours: float = 12.0  # after the day ends: no file by then, the day is scored from the histories
+    max_linked_accounts: int = 25  # linked accounts per address whose trades are read to name counterparties
     # exclusions (section 3)
     mark_clip: float = 0.005
     mirror_window_s: float = 60.0

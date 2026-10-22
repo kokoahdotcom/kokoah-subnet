@@ -525,6 +525,39 @@ class Store:
             c.execute(delete(S.days).where(S.days.c.day == day))
             c.execute(delete(S.meta).where(S.meta.c.key.in_([f"attempt:{day}", "weights:day", "weights:block"])))
 
+    def put_builder_rewards(self, builder: str, rewards: Mapping[str, float]) -> None:
+        with self._engine.begin() as c:
+            c.execute(
+                insert(S.builder_rewards).values(
+                    at=_now(),
+                    builder=builder.lower(),
+                    builder_rewards=rewards.get("builderRewards"),
+                    claimed_rewards=rewards.get("claimedRewards"),
+                    unclaimed_rewards=rewards.get("unclaimedRewards"),
+                )
+            )
+
+    def latest_builder_rewards(self) -> float | None:
+        """The builder's total earnings as the exchange last reported them (the larger of its total and claimed plus
+        unclaimed, whichever way the exchange counts)."""
+        with self._engine.connect() as c:
+            query = select(S.builder_rewards).order_by(S.builder_rewards.c.id.desc()).limit(1)
+            row = c.execute(query).mappings().first()
+        if row is None:
+            return None
+        parts = (row["claimed_rewards"] or 0.0) + (row["unclaimed_rewards"] or 0.0)
+        return max(float(row["builder_rewards"] or 0.0), float(parts))
+
+    def credited_builder_fees(self) -> float:
+        """Builder fees of every counted fill of every bound address over all scored days, USD."""
+        with self._engine.connect() as c:
+            total = c.execute(
+                select(func.coalesce(func.sum(S.fills.c.builder_fee), 0.0)).where(
+                    S.fills.c.hotkey.is_not(None), S.fills.c.excluded.is_(None)
+                )
+            ).scalar()
+        return float(total or 0.0)
+
     def put_file(self, day: str, sha256: str, fills: int, **fields: Any) -> None:
         with self._engine.begin() as c:
             c.execute(delete(S.builder_files).where(S.builder_files.c.day == day))

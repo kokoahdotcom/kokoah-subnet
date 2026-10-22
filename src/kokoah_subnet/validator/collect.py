@@ -23,15 +23,15 @@ from kokoah_subnet.mechanism import (
     Params,
     by_user,
     is_perp,
-    match_total_fees,
     parse_builder_csv,
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
 from kokoah_subnet.mechanism.eligibility import daily_average_equity, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
+from kokoah_subnet.mechanism.fills import assign_counterparties, merge_sources
 
-from .builder_feed import BASE_URL, decompress, download, file_url, sha256
+from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
 from .clusters import clusters, coldkey_edges
 from .hyperliquid import (
@@ -154,16 +154,49 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
         "twap_id": f.twap_id,
         "mark_px": f.mark_px,
         "excluded": excluded,
+        "source": f.source,
+        "tid": f.tid,
+        "cloid": f.cloid,
     }
 
 
+async def approved_builders(hl: HyperliquidInfo, user: str) -> set[str]:
+    """The builders the address has approved to charge it a fee (`approvedBuilders`), lowercase."""
+    result = await hl.post({"type": "approvedBuilders", "user": user})
+    return {str(b).lower() for b in (result or [])}
+
+
+async def builder_rewards(hl: HyperliquidInfo, builder: str) -> dict[str, float]:
+    """What the exchange says the builder has earned (`referral`: builderRewards, claimed, unclaimed), USD."""
+    r = await hl.post({"type": "referral", "user": builder})
+    return {k: float(r.get(k) or 0.0) for k in ("builderRewards", "claimedRewards", "unclaimedRewards")}
+
+
 async def collect_and_score(
-    cfg: ValidatorConfig, day: str, store: Store, hl: HyperliquidInfo, client: Any, params: Params
+    cfg: ValidatorConfig,
+    day: str,
+    store: Store,
+    hl: HyperliquidInfo,
+    client: Any,
+    params: Params,
+    now_ts: float | None = None,
 ) -> DayResult:
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
-    data, downloaded = await fetch_builder_file(cfg, day)
-    fills = parse_builder_csv(decompress(data))
-    digest = sha256(data)
+    start_ms, end_ms = day_bounds_ms(day)
+    clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
+    try:
+        data, downloaded = await fetch_builder_file(cfg, day)
+    except NotPublished:
+        # the exchange writes a day's file about an hour after the day ends, and writes none when its part of the
+        # day had no fills; past the deadline the day is scored from the bound addresses' own histories
+        if clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
+            raise
+        data, downloaded = b"", False
+    fills = parse_builder_csv(decompress(data)) if data else []
+    digest = sha256(data) if data else ""
+    if not data:
+        log.info("no builder file for %s past the deadline: scoring from the addresses' histories", day)
+        store.put_error(day, None, None, "builder file", "not published by the deadline; scored from histories")
     store.put_file(
         day,
         digest,
@@ -172,22 +205,6 @@ async def collect_and_score(
         users=len({f.user for f in fills}),
         url=file_url(cfg.builder, day, cfg.builder_base_url) if downloaded else None,
     )
-
-    # the one law needs the builder fee above a floor set by the caps: measure what the file actually charged
-    taker_notional = sum(f.notional for f in fills if f.crossed and is_perp(f.coin))
-    taker_fees = sum(f.builder_fee for f in fills if f.crossed and is_perp(f.coin))
-    effective_bps = taker_fees / taker_notional * 1e4 if taker_notional > 0 else None
-    if effective_bps is not None and 0 < effective_bps < params.min_safe_fee_bps:
-        log.error(
-            "effective builder fee %.3f bps is below the safe floor %.3f bps", effective_bps, params.min_safe_fee_bps
-        )
-        store.put_error(
-            day,
-            None,
-            None,
-            "fee floor",
-            f"effective builder fee {effective_bps:.3f} bps < {params.min_safe_fee_bps:.3f}",
-        )
 
     snap = await snapshot(client, cfg.netuid)
     now = datetime.now(tz=UTC)
@@ -264,7 +281,6 @@ async def collect_and_score(
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
     collateral_locked = {n.hotkey: n.collateral_locked_alpha for n in snap.neurons}
     registered_block = {n.hotkey: n.block_at_registration or None for n in snap.neurons}
-    start_ms, end_ms = day_bounds_ms(day)
     blocks = day_sample_blocks(snap.block, now.timestamp(), start_ms / 1000, snap.tempo, params.price_samples)
     samples = await price_samples(client, cfg.netuid, blocks)
     store.put_price_samples(day, samples)
@@ -284,6 +300,8 @@ async def collect_and_score(
     rates_of: dict[str, tuple[float, float]] = {}
     edge_lists: dict[str, list[tuple[str, str, str]]] = {}
     avg_equity: dict[str, tuple[float | None, int]] = {}
+    tid_owners: dict[int, set[str]] = {}  # trade id -> addresses with a fill in that trade (bound and linked)
+    builder = cfg.builder.lower()
 
     marks_cache: dict[str, dict[int, float]] = {}
     marks_lock = asyncio.Lock()
@@ -334,12 +352,34 @@ async def collect_and_score(
                 if h_day < day:
                     store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
             log.info("backfilled %d days of account value for %s", len(history), address)
+        # the address's own fill history is the primary source of its builder fills (the daily file holds only part
+        # of the day); without it the day cannot be scored correctly, so a failed read fails the day (retried hourly)
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
-            own = match_total_fees(own, public)
-        except Exception as exc:  # noqa: BLE001 - total fees fall back to the builder fee (a lower cap)
-            errors[hk] = f"public fills: {str(exc)[:160]}"
-            store.put_error(day, hk, address, "public fills", str(exc))
+            approved = await approved_builders(hl, address)
+        except Exception as exc:
+            store.put_error(day, hk, address, "fill history", str(exc))
+            raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
+        only_ours = approved == {builder}
+        merged = merge_sources(own, public, only_ours, params.builder_fee_rate)
+        history_only = [f for f in merged if f.source == "history"]
+        file_only = [f for f in merged if f.source == "file"]
+        if file_only:
+            store.put_error(
+                day, hk, address, "fill history", f"{len(file_only)} file fills not in the history (beyond its reach)"
+            )
+        log.info(
+            "%s: %d builder fills (%d from the history only, %d from the file only), approved builders %s",
+            address,
+            len(merged),
+            len(history_only),
+            len(file_only),
+            sorted(approved),
+        )
+        own = merged
+        for f in public:
+            if f.tid is not None:
+                tid_owners.setdefault(f.tid, set()).add(address)
         # marks: the 0.5% clip for credit, and money moved in through off-market fills (removed from the return)
         offmarket = 0.0
         marked: list[Fill] = []
@@ -401,6 +441,11 @@ async def collect_and_score(
             edge_lists[address] = [(address, o, "subaccount") for o in subs] + [
                 (address, o, "transfer") for o in partners - subs
             ]
+            # the linked accounts' trades of the day name the counterparty of history fills by trade id
+            for other in sorted(subs | partners)[: params.max_linked_accounts]:
+                for f in await hl.fills_by_time(other, start_ms, end_ms):
+                    if f.tid is not None:
+                        tid_owners.setdefault(f.tid, set()).add(other)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "clusters", str(exc))
         staked = 0.0
@@ -430,6 +475,31 @@ async def collect_and_score(
 
     await asyncio.gather(*(one(hk, a) for hk, a in address_of_hotkey.items()))
     miners.sort(key=lambda m: m.hotkey)
+    for a in address_of_hotkey.values():
+        fills_by_address[a] = assign_counterparties(fills_by_address.get(a, []), tid_owners)
+    # the one law needs the builder fee above a floor set by the caps: measure what the day's builder fills
+    # actually charged (the file's and the bound addresses' histories)
+    taker_notional = sum(f.notional for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
+    taker_fees = sum(f.builder_fee for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
+    effective_bps = taker_fees / taker_notional * 1e4 if taker_notional > 0 else None
+    if effective_bps is not None and 0 < effective_bps < params.min_safe_fee_bps:
+        log.error(
+            "effective builder fee %.3f bps is below the safe floor %.3f bps", effective_bps, params.min_safe_fee_bps
+        )
+        store.put_error(
+            day,
+            None,
+            None,
+            "fee floor",
+            f"effective builder fee {effective_bps:.3f} bps < {params.min_safe_fee_bps:.3f}",
+        )
+
+    # what the exchange says the builder has earned: the fees credited to traders can never exceed it
+    try:
+        rewards = await builder_rewards(hl, builder)
+        store.put_builder_rewards(builder, rewards)
+    except Exception as exc:  # noqa: BLE001 - a record and a check, not an input
+        store.put_error(day, None, None, "builder rewards", str(exc))
     for lst in edge_lists.values():
         edges.extend(lst)
     addresses = list(address_of_hotkey.values())
@@ -463,7 +533,7 @@ async def collect_and_score(
     bound = set(addresses)
     against = bound_counterparty_notional({a: f for a, f in fills_by_address.items() if a in bound})
     rows = []
-    for f in all_fills:
+    for f in sorted(all_fills, key=lambda x: (x.time_ms, x.user, x.coin, x.side, x.px, x.sz)):
         fill_hk = hotkey_of_address.get(f.user)
         excluded: str | None
         if not is_perp(f.coin):

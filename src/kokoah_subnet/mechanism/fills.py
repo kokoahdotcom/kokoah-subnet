@@ -36,6 +36,9 @@ class Fill:
     total_fee: float | None = None  # the fill's total fee field: exchange fee (rebate negative) plus builder fee
     mark_px: float | None = None  # mark price at the fill, when known (for the 0.5% clip)
     twap_id: int | None = None
+    tid: int | None = None  # the exchange's trade id, shared by both sides of a trade (history fills only)
+    cloid: str | None = None  # the client order id (history fills only)
+    source: str = "file"  # "file" (builder file only), "history" (the address's own history only), "both"
 
     @property
     def notional(self) -> float:
@@ -51,7 +54,8 @@ class Fill:
         return datetime.fromtimestamp(self.time_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
 
     def match_key(self) -> tuple[str, str, int, float, float, str]:
-        return (self.user, self.coin, self.time_ms, self.px, self.sz, self.side)
+        """The builder file gives whole seconds and the history milliseconds, so fills are matched on the second."""
+        return (self.user, self.coin, self.time_ms // 1000, self.px, self.sz, self.side)
 
 
 def is_perp(coin: str) -> bool:
@@ -126,6 +130,8 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
     out: list[Fill] = []
     for r in records:
         builder = float(r.get("builderFee") or 0.0)
+        tid = r.get("tid")
+        cloid = r.get("cloid")
         out.append(
             Fill(
                 time_ms=int(r["time"]),
@@ -138,17 +144,87 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
                 builder_fee=builder,
                 closed_pnl=float(r.get("closedPnl") or 0.0),
                 total_fee=float(r["fee"]),
+                twap_id=int(r["twapId"]) if r.get("twapId") else None,
+                tid=int(tid) if tid is not None else None,
+                cloid=str(cloid).lower() if cloid else None,
+                source="history",
             )
         )
     return out
 
 
 def match_total_fees(builder_fills: Sequence[Fill], user_fills: Sequence[Fill]) -> list[Fill]:
-    """Copy the total fee of each matching public fill onto the builder fill (same user, coin, time, price, size,
-    side). Builder fills without a match keep `total_fee = None`; the credit code then counts the builder fee only,
-    which can only lower the cap."""
-    by_key = {f.match_key(): f.total_fee for f in user_fills if f.total_fee is not None}
-    return [replace(f, total_fee=by_key.get(f.match_key(), f.total_fee)) for f in builder_fills]
+    """Copy the total fee of each matching public fill onto the builder fill (same user, coin, second, price, size,
+    side; identical rows are matched one to one). Builder fills without a match keep `total_fee = None`; the credit
+    code then counts the builder fee only, which can only lower the cap."""
+    pool: dict[tuple[str, str, int, float, float, str], list[float]] = {}
+    for f in user_fills:
+        if f.total_fee is not None:
+            pool.setdefault(f.match_key(), []).append(f.total_fee)
+    out = []
+    for f in builder_fills:
+        fees = pool.get(f.match_key())
+        out.append(replace(f, total_fee=fees.pop(0)) if fees else f)
+    return out
+
+
+KOKOAH_CLOID_MARKER = "0x6b6f"  # Kokoah's order ids start with ASCII "ko" (kokoah-shared, actions/cloid.ts)
+
+
+def is_builder_rate(f: Fill, rate: float) -> bool:
+    """The fill's builder fee is the configured rate of its notional (the exchange rounds fees to 6 decimals)."""
+    expected = f.notional * rate
+    return f.builder_fee > 0 and abs(f.builder_fee - expected) <= 2e-6 + 1e-4 * expected
+
+
+def history_counts(f: Fill, only_builder_approved: bool, rate: float) -> bool:
+    """Whether a fill seen only in the address's own history is a fill through the builder. The history carries the
+    builder fee but not the builder's address. The exchange charges a builder fee only for a builder the user has
+    approved, so when the scored builder is the only approved one, every builder fee is its own (at no more than
+    the configured rate). Otherwise the fill must also carry Kokoah's order marker and exactly the configured rate."""
+    if f.builder_fee <= 0:
+        return False
+    if only_builder_approved:
+        return f.builder_fee <= f.notional * rate * (1 + 1e-4) + 2e-6
+    return bool(f.cloid and f.cloid.startswith(KOKOAH_CLOID_MARKER)) and is_builder_rate(f, rate)
+
+
+def merge_sources(
+    file_fills: Sequence[Fill], history: Sequence[Fill], only_builder_approved: bool, rate: float
+) -> list[Fill]:
+    """One address's builder fills for a day from both sources (specification section 3).
+
+    The exchange's per-builder daily file is incomplete (it has held about the first twelve hours of each UTC day),
+    so the address's own fill history is the primary source. A fill in both is taken from the history (exact time,
+    total fee, trade id) with the file's counterparty and builder fee; a fill only in the file is kept as it is
+    (beyond the history's 10,000-fill reach); a fill only in the history counts when `history_counts` says so."""
+    pool: dict[tuple[str, str, int, float, float, str], list[Fill]] = {}
+    for f in file_fills:
+        pool.setdefault(f.match_key(), []).append(f)
+    out: list[Fill] = []
+    for h in sorted(history, key=lambda x: (x.time_ms, x.tid or 0)):
+        matches = pool.get(h.match_key())
+        if matches:
+            fl = matches.pop(0)
+            out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
+        elif history_counts(h, only_builder_approved, rate):
+            out.append(h)
+    out.extend(f for fs in pool.values() for f in fs)
+    return sorted(out, key=lambda x: (x.time_ms, x.coin, x.side, x.px, x.sz))
+
+
+def assign_counterparties(fills: Sequence[Fill], tid_owners: Mapping[int, set[str]]) -> list[Fill]:
+    """Name the counterparty of history fills from the trade id: both sides of a trade carry the same id, so a
+    fill whose id also appears among another known address's fills (a bound address or a linked account) traded
+    with that address."""
+    out = []
+    for f in fills:
+        if not f.counterparty and f.tid is not None:
+            others = sorted(a for a in tid_owners.get(f.tid, set()) if a != f.user)
+            if others:
+                f = replace(f, counterparty=others[0])
+        out.append(f)
+    return out
 
 
 def by_user(fills: Iterable[Fill]) -> dict[str, list[Fill]]:

@@ -64,6 +64,15 @@ STEPS: list[tuple[int, str, Step]] = [
             "ALTER TABLE state_history ADD COLUMN IF NOT EXISTS json text"
         ),
     ),
+    (
+        7,
+        "fills: source, trade id and client order id",
+        _pg(
+            "ALTER TABLE fills ADD COLUMN IF NOT EXISTS source varchar(8); "
+            "ALTER TABLE fills ADD COLUMN IF NOT EXISTS tid bigint; "
+            "ALTER TABLE fills ADD COLUMN IF NOT EXISTS cloid varchar(34)"
+        ),
+    ),
 ]
 
 

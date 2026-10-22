@@ -69,6 +69,17 @@ days = Table(
     Column("result_json", Text),
 )
 
+builder_rewards = Table(  # what the exchange says the builder has earned, at each scoring run (a check)
+    "builder_rewards",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("at", DateTime(timezone=True), nullable=False),
+    Column("builder", String(42), nullable=False),
+    Column("builder_rewards", Float),
+    Column("claimed_rewards", Float),
+    Column("unclaimed_rewards", Float),
+)
+
 builder_files = Table(
     "builder_files",
     metadata,
@@ -105,6 +116,9 @@ fills = Table(
     Column("twap_id", BigInteger),
     Column("mark_px", Float),
     Column("excluded", String(32)),  # spot | unbound | cluster | bound_counterparty | mark_clip, NULL when counted
+    Column("source", String(8)),  # file | history | both (spec section 3: the file is incomplete)
+    Column("tid", BigInteger),  # the exchange's trade id (history fills)
+    Column("cloid", String(34)),  # the client order id (history fills)
     Index("ix_fills_day_address", "day", "address"),
 )  # no uniqueness: the file can hold identical rows (partial fills of one order in the same second)
 
