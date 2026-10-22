@@ -1,5 +1,5 @@
 # The sealed machine image (specification v6, section 16): the trusted harness, the sandbox and nothing else.
-# Build from the repository root:  docker build -f deploy/agent/Dockerfile -t kokoah-agent .
+# Build from the repository root:  docker build -f deploy/agent/Dockerfile -t kokoahdotcom/kokoah-subnet-agent .
 # Its content digest is what validators approve (src/kokoah_subnet/agent/images.py). Everything that affects the
 # guarantees is in the image: the code, the pinned packages, and image.json (builder, fee). Only the start settings listed in the launch policy below can be passed in.
 FROM python@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70

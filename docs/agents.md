@@ -39,16 +39,18 @@ from the service and check the fingerprint. One submission per hotkey per 12 hou
 
 ## 3. Start the sealed machine
 
-On your own Google Cloud project (you pay for the machine; Kokoah runs nothing for you). The harness image digest
-must be one of the approved images (`src/kokoah_subnet/agent/images.py`).
+On your own Google Cloud project (you pay for the machine; Kokoah runs nothing for you). The harness image is
+published as `docker.io/kokoahdotcom/kokoah-subnet-agent`; its digest must be one of the approved images
+(`src/kokoah_subnet/agent/images.py`). The machine runs as a service account with the Confidential Computing Workload
+User role (the default compute account lacks it, and without it the machine cannot get its proof).
 
 ```bash
 gcloud compute instances create kokoah-agent \
   --zone=us-central1-a --machine-type=c3-standard-4 \
   --confidential-compute-type=TDX --maintenance-policy=TERMINATE --shielded-secure-boot \
   --image-project=confidential-space-images --image-family=confidential-space \
-  --scopes=cloud-platform \
-  --metadata="^~^tee-image-reference=<registry>/kokoah-agent@sha256:<approved digest>\
+  --service-account=<service account with the Confidential Computing Workload User role> --scopes=cloud-platform \
+  --metadata="^~^tee-image-reference=docker.io/kokoahdotcom/kokoah-subnet-agent@sha256:<approved digest>\
 ~tee-env-KOKOAH_AGENT_SERVICE=<agent service URL>\
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
 ~tee-env-KOKOAH_AGENT_BUNDLE_KEY=<bundle key, for an encrypted bundle>\
