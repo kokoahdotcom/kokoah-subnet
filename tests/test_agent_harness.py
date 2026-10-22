@@ -9,13 +9,14 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from eth_account import Account
-from eth_account.messages import encode_defunct
+from eth_account.messages import encode_defunct, encode_typed_data
 from fastapi.testclient import TestClient
 
 from kokoah_subnet.agent import harness as harness_module
+from kokoah_subnet.agent import hlsign
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys, binding_digest, verify_token
 from kokoah_subnet.agent.harness import Harness, HarnessConfig, agent_app, public_app, stop_message, withdraw_message
-from kokoah_subnet.agent.hlsign import recover_l1_signer
+from kokoah_subnet.agent.hlsign import USD_CLASS_TRANSFER_TYPES, recover_l1_signer
 from kokoah_subnet.binding import binding_message, recover_signer
 
 BUILDER = "0x43ccc0618e4358494f87a4b8699230203dc4ab67"
@@ -27,6 +28,7 @@ class FakeExchange:
     def __init__(self) -> None:
         self.posted: list[dict[str, Any]] = []
         self.info_requests: list[dict[str, Any]] = []
+        self.spot: list[dict[str, str]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -39,6 +41,8 @@ class FakeExchange:
                 return httpx.Response(200, json={"BTC": "100000", "ETH": "4000"})
             if t == "openOrders":
                 return httpx.Response(200, json=[{"coin": "BTC", "oid": 7}])
+            if t == "spotClearinghouseState":
+                return httpx.Response(200, json={"balances": self.spot})
             return httpx.Response(200, json={"echo": body})
         self.posted.append(body)
         return httpx.Response(200, json={"status": "ok", "response": {"type": "default"}})
@@ -160,3 +164,20 @@ def test_an_order_first_approves_the_builder_fee(setup: Any) -> None:
     approval, order = fake.posted[-2]["action"], fake.posted[-1]["action"]
     assert approval["type"] == "approveBuilderFee" and approval["builder"] == BUILDER
     assert approval["maxFeeRate"] == "0.025%" and order["type"] == "order"
+
+
+def test_spot_usdc_is_moved_to_perpetuals_within_the_account(setup: Any) -> None:
+    h, fake, _, _ = setup
+    fake.spot = [{"coin": "USDC", "total": "250.456", "hold": "0.4"}]
+    h.fund_perps()
+    sent = fake.posted[-1]
+    action, sig = sent["action"], sent["signature"]
+    assert action["type"] == "usdClassTransfer" and action["toPerp"] is True and action["amount"] == "250.05"
+    payload = hlsign._user_payload("HyperliquidTransaction:UsdClassTransfer", USD_CLASS_TRANSFER_TYPES, action)
+    vrs = (sig["v"], int(sig["r"], 16), int(sig["s"], 16))
+    assert str(Account.recover_message(encode_typed_data(full_message=payload), vrs=vrs)).lower() == h.address
+    fake.spot = [{"coin": "USDC", "total": "0.5", "hold": "0"}]
+    count = len(fake.posted)
+    assert h.fund_perps() is None and len(fake.posted) == count
+    with pytest.raises(ValueError, match="not offered"):
+        h.call("fund_perps", {})

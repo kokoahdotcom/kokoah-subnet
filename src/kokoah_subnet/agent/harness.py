@@ -21,6 +21,7 @@ To the world (TCP, `public_app`):
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -37,11 +38,13 @@ from pydantic import BaseModel
 from .attest import Attestor, binding_digest
 from .hlsign import (
     APPROVE_BUILDER_FEE_TYPES,
+    USD_CLASS_TRANSFER_TYPES,
     WITHDRAW_TYPES,
     approve_builder_fee_action,
     float_to_wire,
     sign_l1_action,
     sign_user_action,
+    usd_class_transfer_action,
     withdraw_action,
 )
 
@@ -166,6 +169,18 @@ class Harness:
         if isinstance(result, dict) and result.get("status") == "ok":
             self.builder_approved = True
         return result
+
+    def fund_perps(self) -> Any:
+        """Move the account's spot USDC to its perpetuals balance, where the agent can trade with it (USDC sent with
+        Hyperliquid's "send" lands in spot). The money stays in the account. None when there is under $1 to move."""
+        spot = self.info({"type": "spotClearinghouseState", "user": self.address})
+        usdc = next((b for b in spot.get("balances", []) if b.get("coin") == "USDC"), None)
+        free = float(usdc["total"]) - float(usdc.get("hold", 0) or 0) if usdc else 0.0
+        if free < 1:
+            return None
+        nonce = self._nonce()
+        action = usd_class_transfer_action(float_to_wire(math.floor(free * 100) / 100), True, nonce)
+        return self._user(action, USD_CLASS_TRANSFER_TYPES, "HyperliquidTransaction:UsdClassTransfer", nonce)
 
     # ----- what the agent may do -----------------------------------------------------------------------------
 

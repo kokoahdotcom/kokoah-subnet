@@ -37,6 +37,12 @@ APPROVE_BUILDER_FEE_TYPES = [
     {"name": "builder", "type": "address"},
     {"name": "nonce", "type": "uint64"},
 ]
+USD_CLASS_TRANSFER_TYPES = [
+    {"name": "hyperliquidChain", "type": "string"},
+    {"name": "amount", "type": "string"},
+    {"name": "toPerp", "type": "bool"},
+    {"name": "nonce", "type": "uint64"},
+]
 
 
 def float_to_wire(x: float) -> str:
@@ -137,3 +143,8 @@ def withdraw_action(destination: str, amount_usd: str, time_ms: int) -> dict[str
 
 def approve_builder_fee_action(builder: str, max_fee_rate: str, nonce: int) -> dict[str, Any]:
     return {"type": "approveBuilderFee", "maxFeeRate": max_fee_rate, "builder": builder.lower(), "nonce": nonce}
+
+
+def usd_class_transfer_action(amount_usd: str, to_perp: bool, nonce: int) -> dict[str, Any]:
+    """Moves USDC between the account's own spot and perpetuals balances."""
+    return {"type": "usdClassTransfer", "amount": amount_usd, "toPerp": to_perp, "nonce": nonce}

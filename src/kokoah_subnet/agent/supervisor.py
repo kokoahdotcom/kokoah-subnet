@@ -21,8 +21,8 @@ started with the same secret and `KOKOAH_AGENT_RESTORE` proves it is a genuine s
 
 Steps: fetch the submission and check its id; decrypt it inside the machine; compute the code fingerprint;
 unpack it for the agent user; create (and store) or restore the account key; start the harness (agent socket and public
-interface); approve Kokoah's builder fee once the account is funded; run the agent in the sandbox, restarting it
-when it exits (the agent restarts, the machine and its key do not).
+interface); move USDC that lands in spot to perpetuals and approve Kokoah's builder fee once the account is funded;
+run the agent in the sandbox, restarting it when it exits (the agent restarts, the machine and its key do not).
 """
 
 from __future__ import annotations
@@ -132,13 +132,20 @@ class AgentRunner:
             self.stopped.wait(pause)
 
 
-def approve_builder_loop(h: Harness, stop: threading.Event) -> None:
-    while not h.builder_approved and not stop.is_set():
+def funding_loop(h: Harness, stop: threading.Event) -> None:
+    """Every minute: move USDC that landed in spot to perpetuals, and approve Kokoah's builder fee until it is."""
+    while not stop.is_set():
         try:
-            result = h.approve_builder()
-            log.info("builder fee approval: %s", result)
-        except Exception as exc:  # noqa: BLE001 - an unfunded account cannot approve yet: retry
-            log.info("builder fee approval not possible yet: %s", exc)
+            moved = h.fund_perps()
+            if moved is not None:
+                log.info("spot USDC moved to perpetuals: %s", moved)
+        except Exception as exc:  # noqa: BLE001 - retried next minute
+            log.info("spot USDC not moved: %s", exc)
+        if not h.builder_approved:
+            try:
+                log.info("builder fee approval: %s", h.approve_builder())
+            except Exception as exc:  # noqa: BLE001 - an unfunded account cannot approve yet: retry
+                log.info("builder fee approval not possible yet: %s", exc)
         stop.wait(60)
 
 
@@ -238,7 +245,7 @@ def main() -> int:
     del key
     log.info("account %s, code %s, harness for netuid %d", harness.address, code, config.netuid)
     if writes:
-        threading.Thread(target=approve_builder_loop, args=(harness, runner.stopped), daemon=True).start()
+        threading.Thread(target=funding_loop, args=(harness, runner.stopped), daemon=True).start()
     threading.Thread(target=runner.run, daemon=True).start()
     asyncio.run(serve(harness, uid, gid))
     return 0
