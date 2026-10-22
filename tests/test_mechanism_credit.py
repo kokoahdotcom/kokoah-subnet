@@ -119,13 +119,13 @@ def test_fill_defaults() -> None:
 
 
 def test_parse_real_builder_file_conventions() -> None:
-    """The exchange's daily file writes ISO times, Bid/Ask sides, lowercase booleans, twap_id 0 and Na."""
+    """The exchange's daily file conventions: ISO times, Bid/Ask sides, lowercase booleans, twap_id 0 and Na."""
     text = (
         "time,user,coin,side,px,sz,crossed,special_trade_type,tif,is_trigger,counterparty,closed_pnl,twap_id,builder_fee\n"
-        "2026-10-19T00:07:04Z,0x97bb51ff48f0ad12bf789a62608c45da453e7d0a,BTC,Ask,82150,0.00073,false,Na,Gtc,false,"
-        "0x7e8eee5205878499b9d084fd174def20f7212425,0,0,0\n"
-        "2026-10-19T00:08:04Z,0x97bb51ff48f0ad12bf789a62608c45da453e7d0a,BTC,Bid,82100,0.00073,true,Na,Ioc,false,"
-        "0x7e8eee5205878499b9d084fd174def20f7212425,0.04,0,0.015\n"
+        "2026-10-19T00:07:04Z,0x1111111111111111111111111111111111111111,BTC,Ask,82150,0.00073,false,Na,Gtc,false,"
+        "0x2222222222222222222222222222222222222222,0,0,0\n"
+        "2026-10-19T00:08:04Z,0x1111111111111111111111111111111111111111,BTC,Bid,82100,0.00073,true,Na,Ioc,false,"
+        "0x2222222222222222222222222222222222222222,0.04,0,0.015\n"
     )
     a, b = parse_builder_csv(text)
     assert a.side == "A" and b.side == "B"
