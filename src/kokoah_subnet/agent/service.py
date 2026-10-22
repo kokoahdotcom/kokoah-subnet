@@ -1,10 +1,9 @@
 """The subnet owner's agent service (specification v6, section 16): where miners submit agent code and where the
-sealed machines fetch it and keep their wrapped keys.
+sealed machines fetch it.
 
     POST /v1/agents            submit a bundle, signed by the miner's hotkey
     GET  /v1/agents/{id}       a submission's record      GET /v1/agents/{id}/bundle   its exact bytes
     GET  /v1/images            the approved harness images
-    PUT  /v1/keys/{address}    keep a wrapped account key (write-once)      GET /v1/keys/{address}
 
 A submission's id is the sha256 of the stored bytes (encrypted or not), so a machine can check it fetched exactly
 what was submitted. A plain bundle is checked here (a zip with an entry.py, safe paths, within the size limits) and
@@ -25,7 +24,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import Boolean, Column, Float, MetaData, String, Table, Text, create_engine, insert, select
+from sqlalchemy import Boolean, Column, Float, MetaData, String, Table, create_engine, insert, select
 
 from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted, sha256_hex
 
@@ -40,14 +39,6 @@ submissions = Table(
     Column("code_sha256", String(64)),  # plain bundles only
     Column("bytes", Float, nullable=False),
     Column("submitted_at", Float, nullable=False),
-)
-keys = Table(
-    "agent_keys",
-    metadata,
-    Column("address", String(42), primary_key=True),
-    Column("hotkey", String(64), nullable=False),
-    Column("blob", Text, nullable=False),
-    Column("stored_at", Float, nullable=False),
 )
 
 
@@ -65,11 +56,6 @@ class Submission(BaseModel):
     hotkey: str
     bundle: str  # base64 of the bundle bytes (plain zip, or encrypted)
     signature: str  # hex sr25519 signature of `submit_message` by the hotkey
-
-
-class WrappedKey(BaseModel):
-    blob: str
-    hotkey: str
 
 
 def create_app(
@@ -151,24 +137,5 @@ def create_app(
     @app.get("/v1/images")
     def approved_images() -> dict[str, list[str]]:
         return {"images": list(images or [])}
-
-    @app.put("/v1/keys/{address}")
-    def put_key(address: str, body: WrappedKey) -> dict[str, Any]:
-        a = address.lower()
-        if len(a) != 42 or not a.startswith("0x"):
-            raise HTTPException(status_code=400, detail="bad address")
-        with engine.begin() as c:
-            if c.execute(select(keys.c.address).where(keys.c.address == a)).first():
-                raise HTTPException(status_code=409, detail="a key is already kept for this address")
-            c.execute(insert(keys).values(address=a, hotkey=body.hotkey, blob=body.blob, stored_at=clock()))
-        return {"stored": a}
-
-    @app.get("/v1/keys/{address}")
-    def get_key(address: str) -> dict[str, Any]:
-        with engine.connect() as c:
-            row = c.execute(select(keys).where(keys.c.address == address.lower())).mappings().first()
-        if row is None:
-            raise HTTPException(status_code=404, detail="no key kept for this address")
-        return {"address": row["address"], "hotkey": row["hotkey"], "blob": row["blob"]}
 
     return app

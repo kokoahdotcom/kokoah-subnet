@@ -2,8 +2,7 @@
 
 Image settings (`/etc/kokoah-agent/image.json`, part of the image and so of its attested digest; never taken
 from the environment, because changing them would change what the guarantees mean): Kokoah's builder address and
-fee, the Cloud KMS key and Workload Identity provider of the outer key layer, and whether this is a development
-image (development images are never approved by validators).
+fee, and whether this is a development image (development images are never approved by validators).
 
 Start settings (environment, passed by the miner when they start the machine):
   KOKOAH_AGENT_SERVICE      the owner's agent service URL
@@ -11,14 +10,15 @@ Start settings (environment, passed by the miner when they start the machine):
   KOKOAH_AGENT_BUNDLE_KEY   hex AES key for a private (encrypted) bundle
   KOKOAH_AGENT_NETUID, KOKOAH_AGENT_HOTKEY   the subnet and hotkey the account is bound to
   KOKOAH_AGENT_MASTER       the miner's own address: the only withdrawal destination
-  KOKOAH_AGENT_SEAL_SECRET  hex, at least 32 bytes: the miner's half of the key wrapping
-  KOKOAH_AGENT_RESTORE      after a restart: the account address to resume
   KOKOAH_AGENT_NETWORK      mainnet (default) or testnet
 
+The account key is created in memory when the machine starts and is never written anywhere: a machine that stops
+takes its key with it, and the account can no longer be used (withdraw before stopping).
+
 Steps: fetch the submission and check its id; decrypt it inside the machine; compute the code fingerprint;
-unpack it for the agent user; create (or restore) the account key, stored wrapped before use; start the
-harness (agent socket and public interface); approve Kokoah's builder fee once the account is funded; run the agent
-in the sandbox, restarting it when it exits.
+unpack it for the agent user; create the account key in memory; start the harness (agent socket and public
+interface); approve Kokoah's builder fee once the account is funded; run the agent in the sandbox, restarting it
+when it exits (the agent restarts, the machine and its key do not).
 """
 
 from __future__ import annotations
@@ -38,12 +38,12 @@ from typing import Any
 
 import httpx
 import uvicorn
+from eth_account import Account
 
 from . import sandbox
 from .attest import ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
-from .keystore import DevelopmentSealer, GcpKmsSealer, KeyVault, Sealer, load_or_create
 
 log = logging.getLogger("kokoah_subnet.agent")
 IMAGE_SETTINGS = Path("/etc/kokoah-agent/image.json")
@@ -57,8 +57,6 @@ PUBLIC_PORT = 8080
 class ImageSettings:
     builder: str
     builder_fee_tenths_bps: int
-    kms_key: str
-    wif_provider: str
     development: bool = False
 
     @staticmethod
@@ -67,8 +65,6 @@ class ImageSettings:
         return ImageSettings(
             builder=str(raw["builder"]).lower(),
             builder_fee_tenths_bps=int(raw.get("builder_fee_tenths_bps", 25)),
-            kms_key=str(raw.get("kms_key", "")),
-            wif_provider=str(raw.get("wif_provider", "")),
             development=bool(raw.get("development", False)),
         )
 
@@ -184,18 +180,10 @@ def main() -> int:
         from cryptography.hazmat.primitives.asymmetric import rsa
 
         attestor: Any = DevelopmentAttestor(rsa.generate_private_key(public_exponent=65537, key_size=2048), "dev")
-        sealer: Sealer = DevelopmentSealer()
     else:
         attestor = ConfidentialSpaceAttestor()
-        sealer = GcpKmsSealer(attestor, image.wif_provider, image.kms_key, http)
     hotkey = env("KOKOAH_AGENT_HOTKEY")
-    key, address = load_or_create(
-        KeyVault(service, http),
-        sealer,
-        bytes.fromhex(env("KOKOAH_AGENT_SEAL_SECRET")),
-        hotkey,
-        os.environ.get("KOKOAH_AGENT_RESTORE") or None,
-    )
+    key = bytes(Account.create().key)  # in memory only, never written anywhere
     config = HarnessConfig(
         netuid=int(env("KOKOAH_AGENT_NETUID")),
         hotkey=hotkey,
@@ -217,7 +205,7 @@ def main() -> int:
     writes = not (dev and os.environ.get("KOKOAH_AGENT_NO_WRITES") == "1")
     harness = Harness(config, key, attestor, http=httpx.Client(timeout=20), on_stop=runner.stop, allow_writes=writes)
     del key
-    log.info("account %s, code %s, harness for netuid %d", address, code, config.netuid)
+    log.info("account %s, code %s, harness for netuid %d", harness.address, code, config.netuid)
     if writes:
         threading.Thread(target=approve_builder_loop, args=(harness, runner.stopped), daemon=True).start()
     threading.Thread(target=runner.run, daemon=True).start()

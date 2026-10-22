@@ -400,7 +400,7 @@ Done for v6 (2026-10-22, `scripts/verify_mechanism.py`, `scripts/replay.py`, tes
 per account (luck under a tenth of a strong trader's); ten copies of one strategy earn one weight; the agent bonus
 is exactly 10% of the skill weight and nothing in the volume pool; a 150-day replay in which strategies without an
 edge take 0% of the skill pool. The sealed-machine path end to end on one machine (§16): submission, key creation
-and restore, the sandbox (no network, no other process's memory), orders through the harness with the builder
+in memory, the sandbox (no network, no other process's memory), orders through the harness with the builder
 code and the agent marker, and the validator's checks with each failure case; the image built and run with the
 example agent reading live testnet data through the harness. Earlier (v5): two independent validators on testnet
 385 produced identical weights; the data plane recovers every builder fee the exchange credits to the builder.
@@ -409,7 +409,7 @@ Before launch:
 
 1. **Agents on a real Confidential Space machine.** A Google-signed token from a production machine running the
    released image, verified by `verify_token` against Google's published keys (the claims checked are those Google
-   documents; a live token confirms them), and the Cloud KMS outer key layer with its Workload Identity condition.
+   documents; a live token confirms them).
 2. **Agents on testnet.** An agent trading the exchange's testnet through the harness: order, cancel and leverage
    accepted with the builder code; withdrawal to the miner.
 3. **A month of real traders on testnet 385**, both pools: who passes the entry test, the copy rule's groups, the
@@ -424,9 +424,9 @@ Agents run on the miner's own Google Cloud project, in a **Confidential Space** 
 started from Kokoah's published harness image. The harness (`src/kokoah_subnet/agent/`, `deploy/agent/`):
 
 - **Creates the account's key inside the machine** and never exports it. Nobody else can sign for the account, so
-  no person can trade it by hand: every action on it comes from the machine. To survive restarts the key is kept
-  wrapped twice (a key derived from a secret only the miner holds, and a Kokoah Cloud KMS key usable only by an
-  approved harness image through Workload Identity Federation), write-once in the owner's service.
+  no person can trade it by hand: every action on it comes from the machine. The key lives only in memory and is
+  never written anywhere, so it cannot be copied out of storage either; a machine that stops takes it with it, and
+  the miner withdraws before stopping (keeping a machine running is the miner's responsibility).
 - **Runs the miner's agent code in a sandbox**: a separate user, no new privileges, no core dumps, memory and
   process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and other
   processes' memory. The agent's only way out is the harness's Unix socket.
@@ -473,6 +473,5 @@ miner's own hardware is not accepted (the token must be Google's).
    confirmed by its own order's builder field, and the earnings check (§3). The public per-user API keeps 10,000 fills per address.
 3. The TAO/USD mark for `p_d`: the day's mean of the exchange's TAO perpetual; a configured value is the fallback.
 4. The buyback path (USDC on Hyperliquid → TAO → `add_stake_burn`) and its publication.
-5. Agents need the operator's Google Cloud resources (the KMS key and the Workload Identity pool with its
-   condition on the image digest) and a released harness image whose digest is added to the approved list.
+5. Agents need a released harness image (for example on Docker Hub) whose digest is added to the approved list.
 6. Legal review of paying tokens for trading (pending for the app).

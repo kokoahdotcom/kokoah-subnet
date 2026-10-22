@@ -54,14 +54,17 @@ gcloud compute instances create kokoah-agent \
 ~tee-env-KOKOAH_AGENT_BUNDLE_KEY=<bundle key, for an encrypted bundle>\
 ~tee-env-KOKOAH_AGENT_NETUID=<netuid>\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
-~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>\
-~tee-env-KOKOAH_AGENT_SEAL_SECRET=<64+ hex characters only you keep>"
+~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>"
 gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080   # validators reach the machine here
 ```
 
 Use the production `confidential-space` image family, never `confidential-space-debug`: a debug machine is refused
-by every validator. Keep the seal secret and the bundle key: after a restart, start the machine again with the same
-values plus `KOKOAH_AGENT_RESTORE=<account address>` and it resumes the same account.
+by every validator.
+
+**The account key exists only in the machine's memory.** It is never written anywhere, so nobody can copy it, and a
+machine that stops or restarts takes it with it: the account and anything left in it can no longer be used.
+Withdraw before you stop or change the machine (section 5); keeping the machine running is your responsibility. A
+new machine creates a new account, which you bind again.
 
 ## 4. Bind and fund
 

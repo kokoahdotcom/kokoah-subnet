@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import encrypt, new_key, package, sha256_hex
 from kokoah_subnet.agent.harness import Harness, HarnessConfig, agent_app, public_app
-from kokoah_subnet.agent.keystore import DevelopmentSealer, KeyVault, load_or_create
 from kokoah_subnet.agent.service import create_app, submit_message
 from kokoah_subnet.agent.supervisor import fetch_code
 from kokoah_subnet.binding import AgentRef, Binding
@@ -68,11 +67,10 @@ def world(tmp_path: Path) -> dict[str, Any]:
         "/v1/agents", json={"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": sig}
     )
     assert r.status_code == 200 and r.json()["encrypted"] and r.json()["code_sha256"] is None
-    # the sealed machine: fetch, check, decrypt, fingerprint, then a key stored wrapped before use
+    # the sealed machine: fetch, check, decrypt, fingerprint
     got, code = fetch_code("http://svc", blob_id, bundle_key.hex(), service)
     assert got == plain and code == sha256_hex(plain)
-    secret = bytes(range(32))
-    key, address = load_or_create(KeyVault("http://svc", service), DevelopmentSealer(), secret, hotkey.ss58_address)
+    key = bytes(Account.create().key)  # created in the machine's memory, never stored
     rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     exchange = Exchange()
     master = Account.create()
@@ -82,11 +80,6 @@ def world(tmp_path: Path) -> dict[str, Any]:
         DevelopmentAttestor(rsa_key, IMAGE),
         http=httpx.Client(transport=httpx.MockTransport(exchange), base_url="https://x"),
     )
-    # a restart resumes the same account from the wrapped key
-    key2, address2 = load_or_create(
-        KeyVault("http://svc", service), DevelopmentSealer(), secret, hotkey.ss58_address, restore=address
-    )
-    assert address2 == address == h.address and key2 == key
     return {"h": h, "code": code, "rsa": rsa_key, "exchange": exchange, "hotkey": hotkey.ss58_address, "svc": service}
 
 
@@ -101,7 +94,7 @@ def test_submission_rules(world: dict[str, Any], tmp_path: Path) -> None:
     bob = Keypair.create_from_uri("//Bob")
     forged = {**body, "hotkey": bob.ss58_address}
     assert svc.post("/v1/agents", json=forged).status_code == 403
-    assert svc.put("/v1/keys/" + world["h"].address, json={"blob": "eA==", "hotkey": "x"}).status_code == 409
+    assert svc.put("/v1/keys/" + world["h"].address, json={"blob": "eA==", "hotkey": "x"}).status_code in (404, 405)
 
 
 async def _check(world: dict[str, Any], binding: Binding, images: list[str], others: list[Any]) -> Any:

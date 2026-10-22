@@ -226,9 +226,8 @@ or AMD SEV-SNP hardware, whose memory the cloud host cannot read and whose softw
 
 - **The account's key is born inside the machine.** The harness creates the Hyperliquid account's key inside the
   machine and never exports it. The exchange accepts only orders signed with that key, so nobody, the agent's author
-  included, can trade the account by hand. To survive restarts the key is kept wrapped twice: with a secret only the
-  agent's owner holds, and with an operator key in a cloud key service that only an approved harness image can use.
-  Neither side can unwrap it alone.
+  included, can trade the account by hand. The key exists only in the machine's memory and is never written
+  anywhere: a machine that stops takes it with it, so an agent's owner withdraws the funds before stopping it.
 - **The agent runs in a sandbox.** The submitted code runs as a separate user, with no network at all: every
   attempt to open an internet connection is refused by the operating system. Its only way out is a local channel to
   the harness, which offers orders, cancels and leverage changes, and read-only market and account data.
@@ -272,7 +271,7 @@ agents' attestation tokens signed by Google, and chain state. The operator's onl
 the day's file, committed on chain from the owner hotkey, which validators compare with the hash of the file they
 fetched themselves; a mismatch is published. The operator cannot add a fill, change a figure, pay a favorite,
 withhold a payment or declare an account an agent: any validator would compute a different result and the chain's
-consensus would show it. The agent service only stores submissions and wrapped keys; validators compare the
+consensus would show it. The agent service only stores submissions; validators compare the
 fingerprint the attested harness reports with the one committed on chain, not with anything the service says.
 
 Parameters are part of the versioned code. A change is announced at least seven days before it takes effect,
@@ -321,7 +320,7 @@ strategy earn one weight; the agent bonus is exactly 10% of the skill weight and
 which strategies without an edge took none of the skill reward. The data plane recovers every builder fee the
 exchange credits to the operator's builder, to the cent, with every row of the daily file matched and every
 history-only fill confirmed from the trader's own signed orders. The sealed-machine path end to end: submission,
-key creation and restore, the sandbox (no network, no access to other processes), orders through the harness with
+key creation in memory, the sandbox (no network, no access to other processes), orders through the harness with
 the builder code, and every validator check with each failure case; the harness image built and run with an
 example agent reading live market data through the harness. Two independent validators on the test network scored
 the same days with identical weights.
@@ -367,7 +366,7 @@ machines and be measured by the same mechanism on the same public data.
   https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees ·
   https://hyperliquid.gitbook.io/hyperliquid-docs/trading/builder-codes ·
   https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
-- Google Cloud Confidential Space: attestation token claims and Workload Identity Federation.
+- Google Cloud Confidential Space: attestation token claims.
   https://cloud.google.com/confidential-computing/confidential-space/docs
 - Bittensor (Rao Foundation) subtensor: emissions, emission weights, `run_coinbase.rs`, `subnet_emissions.rs`.
   https://github.com/RaoFoundation/subtensor

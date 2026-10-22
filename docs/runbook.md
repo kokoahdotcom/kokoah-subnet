@@ -109,15 +109,12 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
   Burn what it received, as often as you like (one transaction per run):
   `uv run kokoah-subnet owner burn --network test --netuid <N> --wallet burn [--dry-run]`
   (`--password-stdin` reads the coldkey password from stdin; `scripts/burn_loop.sh` runs it every few hours).
-- The agent service (miners' submissions and the sealed machines' wrapped keys):
+- The agent service (miners' submissions):
   `uv run kokoah-subnet agent service --data-dir ~/kokoah-subnet-agents --host 127.0.0.1 --port 48130`, behind a
-  reverse proxy with TLS at the public URL miners and machines use. Back up its data directory: the wrapped keys
-  are how agents resume their accounts after a restart.
-- A harness release: build `deploy/agent/Dockerfile` with the production `image.json` (the operator's Cloud KMS key
-  and Workload Identity provider), push it, add its digest to `src/kokoah_subnet/agent/images.py`, release the
-  validator; validators accept the new image once they update. The Workload Identity provider's condition must
-  admit the same digests (`assertion.submods.container.image_digest`), production machines only
-  (`assertion.swname == 'CONFIDENTIAL_SPACE'`, `'STABLE' in assertion.submods.confidential_space.support_attributes`).
+  reverse proxy with TLS at the public URL miners and machines use.
+- A harness release: build `deploy/agent/Dockerfile` (production `image.json`), push it to Docker Hub, add its
+  digest to `src/kokoah_subnet/agent/images.py`, release the validator; validators accept the new image once they
+  update. Sealed machines keep their account keys in memory only: nothing about keys is stored by the operator.
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
 

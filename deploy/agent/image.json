@@ -1,7 +1,5 @@
 {
   "builder": "0x43ccc0618e4358494f87a4b8699230203dc4ab67",
   "builder_fee_tenths_bps": 25,
-  "kms_key": "",
-  "wif_provider": "",
   "development": false
 }
