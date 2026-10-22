@@ -8,10 +8,16 @@ Costs are read live (`btcli query subnet-registration-cost --network finney`) an
 
 - [ ] Legal review of paying tokens for trading activity, in the operator's jurisdictions.
 - [ ] Owner coldkey custody decided (hardware or multisig; an operations proxy for day-to-day owner calls).
-- [ ] The real burn wallet created on its own coldkey, its password known to the operator's burn process host.
+- [ ] The burn wallet created on its own coldkey (v6: only a day with no miner weight goes to it; without it such a
+      day goes to the owner hotkey).
+- [ ] Agents: a Google Cloud project for the operator's half of the key wrapping (a Cloud KMS key and a Workload
+      Identity pool whose provider admits only Confidential Space tokens of approved harness images, production
+      and confidential hardware), its names in `deploy/agent/image.json`; the harness image built, pushed, its
+      digest added to `src/kokoah_subnet/agent/images.py`; the agent service hosted (`kokoah-subnet agent service`)
+      at a public URL.
 - [ ] Validator hosts decided (this server, the node servers, or rented machines), each with the record database.
 - [x] The builder fee switched on in the application (0.025%, live since 2026-10-20); the subnet pays nothing while it is zero.
-- [ ] The test-network period's measurements published: a month of burns directed vs executed, the holding effect,
+- [ ] The test-network period's measurements published: an agent on a real sealed machine, both pools with real traders,
       real-trader replays, total-fee matching.
 - [ ] The whitepaper's parameters frozen for launch (specification version noted in every artifact).
 

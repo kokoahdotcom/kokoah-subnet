@@ -7,8 +7,10 @@ holds the whitepaper, the mechanism specification, the research behind it, and t
 - `docs/whitepaper.md`: the public description of the subnet and its incentive mechanism.
 - `docs/runbook.md`: how to run a validator, how a miner binds an address, what the operator does.
 - `docs/database.md`: the record every validator keeps (PostgreSQL via `scripts/db.sh`, SQLite for tests).
-- `docs/app-binding.md`: what the application does so a trader becomes a miner; `docs/mainnet-checklist.md`: the
-  owner's go-live steps.
+- `docs/app-binding.md`: what the application does so a trader becomes a miner; `docs/agents.md`: how to run a
+  trading agent in a sealed machine; `docs/mainnet-checklist.md`: the owner's go-live steps.
+- `src/kokoah_subnet/agent/` and `deploy/agent/`: the sealed-machine harness (trusted, holds the account key),
+  the agent sandbox, attestation, key wrapping and the owner's agent service (`kokoah-subnet agent ...`).
 - The validator's read-only interface (`kokoah-subnet validator serve`, port 48100) serves the daily artifacts,
   the bindings, a summary and the leaderboard page at `/`.
 - `docs/design/02-mechanism-spec.md`: the complete formal specification (every formula and parameter);

@@ -103,11 +103,21 @@ Then trade perpetuals through the Kokoah app. Nothing else runs on the miner's s
 - The buyback is one transaction per run: `btcli tx stake-burn --netuid <N> --amount-tao <amount> -w owner`
   (buys alpha with TAO and burns it, emitting `TokensBurned`).
 - Keep `owner_cut_auto_lock_enabled` on, so the owner's share is locked.
-- The burn hotkey: a wallet of its own (`btcli wallet create -w burn -H default`), its hotkey registered on the
-  subnet (`btcli tx burned-register --netuid <N> -w burn`), passed to every validator as `--burn-hotkey <ss58>`.
+- The burn hotkey (v6: only a day on which no miner has any weight goes to it): a wallet of its own
+  (`btcli wallet create -w burn -H default`), its hotkey registered on the subnet
+  (`btcli tx burned-register --netuid <N> -w burn`), passed to every validator as `--burn-hotkey <ss58>`.
   Burn what it received, as often as you like (one transaction per run):
   `uv run kokoah-subnet owner burn --network test --netuid <N> --wallet burn [--dry-run]`
   (`--password-stdin` reads the coldkey password from stdin; `scripts/burn_loop.sh` runs it every few hours).
+- The agent service (miners' submissions and the sealed machines' wrapped keys):
+  `uv run kokoah-subnet agent service --data-dir ~/kokoah-subnet-agents --host 127.0.0.1 --port 48130`, behind a
+  reverse proxy with TLS at the public URL miners and machines use. Back up its data directory: the wrapped keys
+  are how agents resume their accounts after a restart.
+- A harness release: build `deploy/agent/Dockerfile` with the production `image.json` (the operator's Cloud KMS key
+  and Workload Identity provider), push it, add its digest to `src/kokoah_subnet/agent/images.py`, release the
+  validator; validators accept the new image once they update. The Workload Identity provider's condition must
+  admit the same digests (`assertion.submods.container.image_digest`), production machines only
+  (`assertion.swname == 'CONFIDENTIAL_SPACE'`, `'STABLE' in assertion.submods.confidential_space.support_attributes`).
 - Parameter changes: edit `src/kokoah_subnet/mechanism/params.py`, bump `SPEC_VERSION`, update the spec and the
   whitepaper, announce at least seven days ahead, release.
 

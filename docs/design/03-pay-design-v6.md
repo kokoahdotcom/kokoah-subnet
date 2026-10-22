@@ -1,6 +1,6 @@
-# Pay design v6 (agreed 2026-10-22, not built yet)
+# Pay design v6 (agreed and built 2026-10-22)
 
-Agreed; to be built as specification v6. Replaces the caps, the burn and the holding factor.
+Built as specification v6.0 (`02-mechanism-spec.md`); this note is the decision record. Replaces the caps, the burn and the holding factor.
 
 - **No caps, no burn.** The whole miner pool (A = 0.41 × 7,200 = 2,952 α a day) goes to miners, even when it
   is worth more than the fees they paid. Burn only when no miner has any weight at all (then the burn hotkey).
@@ -25,8 +25,8 @@ Agreed; to be built as specification v6. Replaces the caps, the burn and the hol
      23%, 75%).
   2. **Copy rule:** bound accounts whose daily returns are almost identical (correlation above about 0.9 over 30
      or more common days) share one skill weight (also stops splitting above the $1M cap).
-  3. **Longer backfill:** the exchange's all-time portfolio history, not only the last month, so experienced
-     traders can pass the 90-day test soon after binding.
+  3. **Longer backfill:** dropped when built: the exchange keeps day-by-day account values for only about a month
+     (older points are one to seven days apart), so the backfill stays at about 30 days.
 - **Keep:** eligibility (v5.9), the data plane (v5.10), mirror and cluster rules, the counterparty rule.
 - **To redo with it:** the one-law section and attack table (fake volume no longer loses by design; the volume
   pool becomes a fee rebate competed for), whitepaper, simulator, verify script, replay.

@@ -1,50 +1,31 @@
-# Kokoah subnet incentive mechanism: complete specification (v5.10, 2026-10-22)
+# Kokoah subnet incentive mechanism: complete specification (v6.0, 2026-10-22)
 
-Self-contained. Every symbol is defined here. v5.10 (2026-10-22): the data plane (§3). Hyperliquid's per-builder
-daily file turned out to be incomplete: from 2026-10-01 to 2026-10-20 it held only the fills of about the first
-twelve hours of each UTC day (00:00 to 12:12, checked for Kokoah's builder and two large builders; one day was
-complete), and a day whose fills all fell after the cut has no file at all. The fills it leaves out did pay the
-fee: Kokoah's builder earnings on the exchange ($7.58 by 2026-10-22) equal the builder fees in its traders' own fill
-histories, while the files show $1.54. Each bound address's own fill history is therefore the primary source, the
-file a cross-check; the file's whole-second times are matched on the second (earlier matching on the millisecond
-never matched, so total fees fell back to fee rates); counterparties come from trade ids; a missing file no longer
-holds a day back past a deadline; and the fees credited to traders are checked against the builder's earnings. v5.9
-(2026-10-22): eligibility (§9a). A miner earns on a day only
-when its account's time-weighted average value that day is at least $10,000 and it has qualified with its first
-three trades worth $1,000 together; ineligible days earn no credit and no pay, the smoothed credit decays, and
-nothing is owed later. Credit and qualification belong to one identity: a migration to a new address, a hotkey
-swap or a new registration starts them from zero (pay history, skill and penalties stay). v5.8 (2026-10-20, found by the adversarial replay through the real
-code): the 60-second timing heuristic for mirrored fills is gone. It flagged honest high-frequency traders against
-each other by coincidence (same coin, opposite sides within a minute, similar sizes happen all day in a crowded
-market). Its replacement is exact: the builder file names each fill's counterparty, so fills between two bound
-addresses are removed before anything is computed, and an address whose volume against other bound addresses
-exceeds the thresholds is treated as mirrored. The position-correlation rule stays for persistent hedging through
-the market. v5.7 (owner, 2026-10-20): the builder fee is one rate on every order,
-0.025%, attached when the order is placed, so maker and taker fills pay it alike, and Hyperliquid charges it on
-both (confirmed from Kokoah's own fills and from other builders' daily files). Maker fills therefore earn their
-fee credit in full (`c_m = 1`); the maker discount of earlier versions is no longer needed, because the second cap
-already bounds every account by what it actually paid. v5.6 was the verified form of v5.5: `scripts/verify_mechanism.py` checks
-every claim below numerically, and the verification corrected four things. (1) The tightest zero-edge strategy is a
-rebated market maker (net −0.5 bps per round trip; it would need a hidden rebate of 0.55 bps a side to break even),
-not the maximal-tier taker hedge (net −1.37 at Hyperliquid's best rebate); the second cap is safe for any `c_tot`
-below 0.864. (2) The second cap is simply `c_tot` × the fill's total `fee` field, no floor; a maker rebate lowers
-it. (3) The alpha price used by the caps is the day's average, never a spot price. (4) The holding factor reads the
-day's minimum stake. It also records two chain facts: the owner's share is locked only when the owner enables the
-auto-lock hyperparameter (policy: enabled), and burning through the owner hotkey scales the subnet's TAO draw down
-by the burned share next tempo, which the design accepts rather than dodges.
+Self-contained. Every symbol is defined here. **v6.0 (2026-10-22): two pools, nothing capped or burned, and
+sealed-machine agents.** The whole miner emission goes to miners every day: 80% shared by the eligible smoothed
+builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading record (§7a). The
+fee caps, the burn of the unawarded remainder and the holding factor are gone. By design, volume farming is now an
+open competition: a farmer is paid in proportion to the builder fees they generate, so farmers join until what they
+pay in fees roughly equals what they receive, and every builder fee they pay is the operator's revenue (§11). The
+skill pool is protected against luck, copies and splitting by an entry test (a probabilistic Sharpe ratio of at
+least 0.95 over 90 days), a luck floor, a volume participation factor capped at $1M over 30 days, and a copy rule.
+A miner's agent running in a cloud confidential VM with Kokoah's harness, verified by the validators themselves,
+earns 10% more skill weight (§16).
 
-Earlier versions: v5.5 set `c_max = 2` with the tier-aware second cap; v5.3 put the buyback on the owner's cadence
-with cumulative backing; v5.1 replaced vesting with burning. Validator emissions and outside demand are out of scope.
+Earlier versions, in short: v5.10 made each bound address's own fill history the primary data source (the
+per-builder daily file holds only about the first half of each day); v5.9 added eligibility (a $10,000 daily
+average account value and three qualifying trades); v5.8 replaced a timing heuristic with the exact counterparty
+rule; v5.7 set one builder fee on every order (0.025%, maker and taker); v5.1 to v5.6 built and verified the fee
+caps and the burn that v6 removes. Validator emissions and outside demand are out of scope.
 
 ## 0. Purpose and intention
 
 A Bittensor subnet whose miners are traders. A miner binds one Hyperliquid address to a subnet hotkey and trades
-perpetuals through the Kokoah builder code. Validators compute, from Hyperliquid data of the bound addresses and
-chain state, each miner's share of the daily miner emission. Kokoah collects the builder fee on every such trade
-and spends it buying back and burning the subnet's token (alpha). The intention: maximum trading volume through
-Kokoah; similar volume, similar pay; skill and holding a small nudge (two traders with equal volume and fee tier
-differ by at most 15%, one perfect at both, the other worst at both); no miner ever paid more than the fee-backed
-amount, the rest burned; and no cheat that lets what miners can sell outrun what the fees can buy back.
+perpetuals through the Kokoah builder code, by hand or with an agent. Validators compute, from Hyperliquid data of
+the bound addresses and chain state, each miner's share of the daily miner emission. Kokoah collects the builder fee
+on every such trade and spends it buying back and burning the subnet's token (alpha). The intention: maximum
+trading volume through Kokoah, paid in proportion to the fees it generates; a separate reward for proven trading
+skill that luck, copies and split accounts cannot capture; a small extra reward for trading by verified agents;
+and the whole emission paid to miners every day.
 
 ## 1. Chain facts used
 
@@ -57,16 +38,13 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
   participants (`alpha_out`, up to 1 per block) does not depend on the subnet's TAO share; the TAO share only sets
   how much TAO (and matching alpha) is injected into the pool.
 - Registration: burn plus a minimum collateral in alpha locked on the hotkey (owner-set, `SetMinCollateral`).
-- **Burning (owner, 2026-10-20).** The unawarded remainder of the miner pool is directed to a **burn hotkey**: a
-  hotkey registered on the subnet by the operator on a coldkey of its own (not the owner's coldkey), bound to no
-  trader. A separate operator process (`kokoah-subnet owner burn`) destroys the alpha that lands there with
-  `burn_alpha(hotkey, amount, netuid)`, signed by that coldkey; each burn emits `TokensBurned`. The owner hotkey is
-  not used because the chain records incentive directed to owner hotkeys as `MinerBurned` and scales the subnet's
-  TAO emission share by that fraction next tempo (research note 05, section 9); the burn hotkey removes the alpha
-  without that scaling. The validator refuses to score until the configured burn hotkey is registered. Measured on a
-  local chain (`scripts/measure_burn.py`): directing 85% of the pool to one hotkey leaves alpha emission to the
-  other participants unchanged. Reconciliation: the daily artifact records the alpha directed to the burn hotkey;
-  the burn transactions are public.
+- **Fallback hotkey (v6).** Nothing is burned in normal operation: the whole pool goes to miners. Only a day on
+  which no miner has any weight at all (no eligible fees and no skill weight) goes to the **burn hotkey**, a hotkey
+  registered by the operator on a coldkey of its own and bound to no trader, whose alpha the operator's burn
+  process destroys with `burn_alpha(hotkey, amount, netuid)`; without a registered burn hotkey that day goes to the
+  owner hotkey. The owner hotkey is avoided where possible because the chain records incentive directed to owner
+  hotkeys as `MinerBurned` and scales the subnet's TAO emission share by that fraction next tempo (research note 05,
+  section 9).
 - **Buyback.** `add_stake_burn(hotkey, netuid, amount, limit)` buys alpha with TAO and burns it in one
   transaction, emitting `TokensBurned`; every buyback is one verifiable on-chain event.
 
@@ -81,10 +59,9 @@ amount, the rest burned; and no cheat that lets what miners can sell outrun what
 | `α` | daily smoothing weight of today's value, for credit, fees and skill | 0.3 |
 | `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
 | `p_d` | conversion rate for day `d`: the mean pool rate (TAO per alpha) at 20 blocks anchored to the scored day (the day's start block snapped to a tempo boundary, then one block per 1/20 of the day; identical for every validator) times the day's mean TAO/USD, the mean close of the exchange's hourly TAO-perpetual candles | |
-| `g'_i`, `h'_i` | skill and holding factors, both in [0, 1] | |
-| `c_max` | pay cap as a multiple of the multiplier-scaled Kokoah fee credit | 2.0 |
-| `c_tot` | second cap: share of the account's total fees on the Kokoah leg (`fee_f` summed) | 0.75 |
-| `w_s`, `w_h` | weights of skill and holding in the multiplier; `m_min = 1 − w_s − w_h` is its floor | 0.05, 0.10 |
+| `g'_i` | skill score in [0, 1] (§7) | |
+| `s_i`, `v_i`, `w_i` | skill above the luck floor, volume participation, skill weight (§7a) | |
+| `A_d`, `V_d`, `S_d` | the day's miner emission, volume pool, skill pool (§5) | 2,952; 80%; 20% |
 
 ## 3. What counts, and what never counts
 
@@ -109,21 +86,24 @@ Data plane (v5.10). Two public sources, for every bound address and day:
 The two are merged per address on (coin, side, price, size, second), identical rows one to one. A fill in both is
 taken from the history with the file's counterparty and builder fee. A fill only in the file is kept as it is (it
 lies beyond the history's reach of 10,000 fills; its total fee then comes from the address's fee rates, `userFees`,
-times notional). A fill only in the history counts as a builder fill when it paid a builder fee and either the
-scored builder is the only builder the address has approved (`approvedBuilders`: the exchange charges a builder
-fee only for an approved builder, so every builder fee is ours; at no more than the configured rate), or it carries
-Kokoah's order marker (a `cloid` starting `0x6b6f`) at exactly the configured rate. Counterparties of history fills
-come from trade ids: the validator reads the day's fills of every bound address and of up to 25 linked accounts per
-address (sub-accounts and transfer partners), and a fill whose trade id appears among another known address's fills
-traded with that address. A failed read of the history or of the approvals fails the day's scoring (retried within
-the hour) rather than scoring the day without it.
+times notional). A fill only in the history is a candidate when it paid a builder fee of at most the configured
+rate, and counts only once its **order is confirmed**: the address's own transactions on the exchange's explorer
+(`userDetails`) list every order it signed with its builder field and client order id, and a candidate counts when
+its client order id belongs to an order the address placed with Kokoah's builder (and was not modified afterwards,
+a modify carries no builder field), or, for a taker fill, when the transaction that placed and filled it
+(`txDetails` of the fill's hash) is such an order. Approvals are not used: an address could approve its own builder,
+trade with a look-alike order id at Kokoah's rate, and withdraw the approval before the day is scored; the order's
+own builder field cannot be changed after the fact. Counterparties of history fills come from trade ids: the
+validator reads the day's fills of every bound address and of up to 25 linked accounts per address (sub-accounts
+and transfer partners), and a fill whose trade id appears among another known address's fills traded with that
+address. A failed read of the history or of the explorer fails the day's scoring (retried within the hour) rather
+than scoring the day without it. Checked on Kokoah's real traders (2026-10-22): the confirmed fills add up to
+$10.1419 of builder fees against $10.141935 the exchange reports as earned, with no real fill refused.
 
 **Earnings check.** The exchange reports what the builder has earned (`referral`: `builderRewards`). The validator
 records it at every scoring run, and the health check raises an alarm when the builder fees of all counted fills
 of bound addresses, over all scored days, exceed it: every credited fee must have reached the builder. (Kokoah's
-other traders pay fees too, so earnings exceed the credited fees in normal operation.) This catches the one gap
-the attribution rule leaves: a trader who approves another builder and gives its orders Kokoah's marker pays that
-builder real fees (the one law still makes it a loss) while the subnet would credit them.
+other traders pay fees too, so earnings exceed the credited fees in normal operation.)
 
 Removed before anything is computed:
 
@@ -159,48 +139,26 @@ dollar of fees is counted exactly once. Scalpers and market makers earn credit o
 the fee is the same on every order, so a dollar of maker fees is worth exactly a dollar of taker fees to the
 subnet's revenue, and the credit says so.
 
-## 5. The share: by volume, within 0.85 to 1.0
+## 5. The two pools (v6)
 
 ```
-M_i,d     = m_min + w_s × g'_i,d + w_h × h'_i,d           the rate multiplier, in [m_min, 1]; 0.85 + 0.05 g' + 0.10 h'
-score_i,d = Φ̂_i,d × M_i,d
-share_i,d = A × score_i,d / Σ_j score_j,d                 the miner's proportional share of the day's pool
+A_d   = 0.41 × 7,200 = 2,952 alpha           the day's miner emission
+S_d   = 0.20 × A_d   (590.4 alpha)           skill pool, when anyone has skill weight; otherwise 0
+V_d   = A_d − S_d    (2,361.6 alpha)         volume pool
+volume_pay_i = V_d × Φ̂_i / Σ_j Φ̂_j            over eligible miners (§9a)
+skill_pay_i  = S_d × w_i / Σ_j w_j             over miners with skill weight (§7a)
+pay_i        = volume_pay_i + skill_pay_i
 ```
 
-Two miners with equal volume are within 15% of each other whatever their skill and holding; a miner with twice
-the volume gets about twice as much. The share is linear in fees with bounded multipliers.
+Nobody with skill weight: the skill pool joins the volume pool. Nobody with eligible fees but someone with skill
+weight: the skill pool takes the whole pool. Nobody with any weight: the day goes to the fallback hotkey (§1). The
+volume pool is linear in fees paid, so splitting an account or merging accounts changes nothing in it.
 
-## 6. The pay: capped per miner and per day, the rest burned
+## 6. No caps, no burn (v6)
 
-```
-F̂_i,d     = (1 − α) × F̂_i,d−1 + α × Σ_f fee_f              smoothed total fees on the Kokoah leg (Hyperliquid's plus ours)
-cap_i,d   = M_i,d × min( c_max × Φ̂_i,d ,  c_tot × F̂_i,d ) / p_d
-pay_i,d   = min( share_i,d , cap_i,d )                    per-miner cap
-burn_d    = A − Σ_i pay_i,d                               weight to the burn hotkey, destroyed by the operator's burn process
-```
-
-The first term is the generous cap (200% of the fee credit). The second follows each account's real cost: an
-ordinary taker pays Hyperliquid 4.5 bps a side, so 75% of (4.5 + 2.5) = 5.25 bps a side, just above the first
-term's 5.0, and the first term binds; a tier-6 account with the Diamond staking discount pays 1.44 bps a side, so
-75% of (1.44 + 2.5) = 2.96 bps a side binds instead; a rebated market maker's `fee_f` is the builder fee minus the
-rebate, so its cap is lower still. Whatever the fee tier, an account is never paid more than three quarters of what
-it spent on the trade, so no fee tier makes farming pay (§11), whatever `c_max` is.
-
-What this does:
-
-- **Similar volume, similar pay, always.** Scarce pool (busy subnet): proportional shares, equal for equal volume
-  whatever the fee tier. Rich pool (young subnet): everyone gets their cap, which follows what the account spent,
-  so a tier-6 Diamond account is paid about 59% of what a tier-0 account with the same volume gets (it also paid
-  less). The 15% rule holds in both regimes (the second cap is also multiplied by `M`).
-- **Farms cannot profit at any pool size or fee tier.** Income per round trip is at most the smaller of 2 × the
-  credited builder fee and 75% of the total fees paid on the Kokoah leg; the unavoidable cost is those total fees
-  plus the other leg (§11).
-- **Pay stays within 2 × fees, cumulatively.** The caps sum to at most `c_max × Σ Φ̂`, and the smoothing weights
-  sum to 1, so up to any day the alpha paid (valued at the day's price) is worth at most 2 × the fees collected so
-  far. Fees cover everything ever paid when miners keep at least half of it; the holding factor pays them to.
-- **Nothing is hoarded.** The excess goes to the burn hotkey the same day and is destroyed on chain (§1).
-- **The price cannot be gamed.** The caps convert dollars to alpha at the day's average price; a 30% dip at the
-  scoring block would raise the alpha cap by 43% at a spot price and by 1.5% at the average.
+Pay is not capped by fees: a miner who paid one dollar of builder fees on a quiet day can take the whole volume
+pool. The economics this creates are in §11. `F̂` (smoothed total fees on the builder leg) is still computed and
+recorded; it no longer bounds pay.
 
 ## 7. Skill factor `g'` (windows 60 and 30 days, smoothed)
 
@@ -229,24 +187,40 @@ No drawdown anywhere. Calibration (mean `g_raw` after 60 days, 6,000 simulated a
 `scripts/sim_skill.py`, re-run 2026-10-20): zero-edge 0.05 to 0.10, martingale 0.08, low-volatility grinder 0.30,
 real edge 0.35, strong edge 0.56, real edge with one −20% day 0.20 (recovers to 0.36 after a quarter).
 
-## 8. Holding factor `h'`
+## 7a. The skill pool (v6)
 
 ```
-staked_i,d   = the day's minimum (over the 20 tempo samples) of alpha staked on i's own hotkey by its own coldkey
-kept_i,d     = staked_i,d − collateral locked on the hotkey
-target_i,d   = alpha paid to i in the last 60 calendar days
-h'_i,d       = min( 1 , kept_i,d / max(target_i,d, 1 alpha) )
+s_i = max(0, (g'_i − 0.25) / 0.75)                         skill above the luck floor
+v_i = min(1, V_i,30d / $1,000,000)                         participation: credited Kokoah notional, 30 days
+w_i = s_i × v_i × (1.1 if a verified agent account, §16)    skill weight
 ```
 
-Keep what you were paid and the factor is 1; sell it all and it is 0; buying alpha counts; staking for one block
-does not; the registration collateral does not count (v5.8: a fresh hotkey starts at 0, so re-registering to shed a
-selling record gains nothing). Its effect on pay is at most `w_h` = 10% by design; whether it reduces selling is
-measured (§15), not assumed.
+`V_i,30d` is the credited notional (eligible trades only, §9a) of the last 30 days, today included. A miner takes
+part only when all of these hold: eligible today (§9a); the activity gates pass (§9); no mirror penalty (§3); and
+the **entry test**: the probabilistic Sharpe ratio of the last 90 capped daily returns against the benchmark daily
+Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 days recorded: no entry). Then:
 
-## 9. Activity gates (for the multiplier's skill and holding parts, and the leaderboard)
+- **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
+  (joined transitively); the group's weights are scaled so they sum to the largest member's weight. The same
+  strategy in many accounts earns one weight, and splitting one account above the volume cap into several gains
+  nothing, because the parts trade alike.
+- **Why the entry test.** With the 0.25 floor alone, about 21% of zero-edge accounts entered after 90 days in
+  simulation and 5% scored near 1. With the entry test: zero edge 3%, lottery 0%, a strong edge (annual Sharpe 3.2)
+  51%, a modest edge (1.6) 17%; mean weight per account after 90 days: zero edge 0.017, strong edge 0.378
+  (`scripts/verify_mechanism.py`, 2026-10-22). Proving a modest edge from daily returns takes months; that is the
+  price of keeping luck out.
+- **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
+  back its records are one to seven days apart. The backfill therefore covers about 30 days, and the rest of the
+  90 days is the subnet's own daily record.
+
+## 8. Holding factor (removed in v6)
+
+The holding factor of v5 (a 10% nudge for keeping paid alpha staked) is gone. Stakes are still sampled and recorded.
+
+## 9. Activity gates (for the skill pool and the leaderboard)
 
 Over the last 30 days: at least 10 completed round trips, at least 7 days with a builder-code fill, mean account
-value at least $500. A miner failing a gate is paid at `M = 0.85`.
+value at least $500. A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
 
 ## 9a. Eligibility (v5.9): the equity floor and the qualifying trades
 
@@ -292,102 +266,81 @@ ineligible days, and nothing is paid for them later.
 **Identity.** Credit (`Φ̂`, `F̂`) and qualification belong to one identity: one hotkey, one bound address, one
 registration. They start from zero when the bound address changes (migration), when the hotkey is swapped on
 chain, when the hotkey registers again after leaving, and naturally for a new hotkey. What a fresh identity must
-not escape is kept: the pay history behind the holding target, the skill record and any mirror penalty (which
-follows the address and its cluster, §3).
+not escape is kept: the pay history, the skill record and any mirror penalty (which follows the address and its
+cluster, §3).
 
-Effect on the rest: every formula of §4 to §9 is unchanged for eligible miners. The one law (§11) is unaffected
-(an ineligible day pays nothing and costs the same), and sybil splitting now needs $10,000 of capital in every
+An ineligible miner takes no part in either pool that day. Sybil splitting needs $10,000 of capital in every
 account on top of the registration, collateral and gates.
 
 ## 10. Revenue and buyback
 
 ```
-R_d        = Σ_i Σ_f b_f                                   builder-fee revenue of the day (USD)
-Σ_{t ≤ d} paid_t  ≤  c_max × Σ_{t ≤ d} R_t                 cumulative backing, by construction (§6)
+R_d = Σ_i Σ_f b_f        builder-fee revenue of the day (USD), from bound and other Kokoah traders alike
 ```
 
-The owner buys back and burns alpha with the collected fees on a cadence of their choosing (every two or three
-weeks is fine), each time as one `add_stake_burn` transaction. At `c_max = 2` the alpha paid out up to any date is
-worth at most 2 × the fees collected, so the fees absorb everything paid as long as miners keep half of it; at
-`c_max = 1` they absorb it all unconditionally. A coverage figure `coverage = cumulative buyback / cumulative alpha
-sold by miner hotkeys` is published for information.
+The owner buys back and burns alpha with the collected fees on a cadence of their choosing, each time as one
+`add_stake_burn` transaction. v6 no longer bounds the alpha paid by the fees collected (§11).
 
-## 11. Attack accounting (per round trip of notional, bps, builder fee 2.5 a side, c_max = 2, c_tot = 0.75)
+## 11. Volume farming is a competition (v6)
 
-The general bound. Let `C` be the total fees paid on the Kokoah leg (Hyperliquid's plus ours, both sides) and `H`
-the cost of the other leg. Income is at most `c_tot × C`, cost is `C + H`, so
+A zero-edge strategy that trades through the builder pays, per dollar of builder fee, its exchange fee and any
+hedge cost on top. In v5 the caps made every such strategy lose. In v6 the volume pool pays each miner in
+proportion to its smoothed builder fees, so a farmer's income per fee dollar is `V_d × p_d / Σ_j Φ̂_j`: large when
+few fees are paid, falling as more are. Farmers therefore join until income per fee dollar meets their cost per
+fee dollar: about 2.8 for a base-tier taker (4.5 bps to the exchange for every 2.5 bps of builder fee, plus the
+builder fee itself), lower for makers and deep fee tiers. In that equilibrium the volume pool is worth roughly what
+farmers pay in fees, and the builder-fee part of what they pay is the operator's revenue.
 
-```
-net  ≤  −(1 − c_tot) × C − H  ≤  −(1 − c_tot) × 4.4 + 0.6  =  −0.5 bps
-```
+| Farmers paying $500 of builder fees a day each, pool worth $12,667 a day, $1,000 of honest fees | 1 | 5 | 20 | 100 |
+|---|---|---|---|---|
+| income per farmer per day (80% pool) | $3,378 | $1,448 | $461 | $99 |
+| cost per farmer per day (base-tier taker) | $1,400 | $1,400 | $1,400 | $1,400 |
 
-because `C ≥ 2 × (2.5 − 0.3) = 4.4` (the best Hyperliquid maker rebate is 0.3 bps a side) and `H ≥ −0.6` for the
-same reason. Every zero-edge strategy loses for any `c_tot < 0.864`, at any pool size, whatever `c_max` is.
-Searched over 105 combinations of fee tier, staking discount and maker or taker on the Kokoah leg
-(`scripts/verify_mechanism.py`, 2026-10-20): worst net −0.5.
-
-| Strategy | Pays Hyperliquid (Kokoah leg) | Pays Kokoah | Other leg | Income at most | Net |
-|---|---|---|---|---|---|
-| Wash: taker through Kokoah vs own maker elsewhere (tier 0) | 9 | 5 | 3 | min(10, 0.75 × 14 = 10.5) = 10 | −7 |
-| Two bound accounts, taker vs maker, both through Kokoah | 9 + 3 | 5 + 5 | 0 | 10 + min(10, 0.75 × 8 = 6) = 16, and mirrored → 0 | −6 or worse |
-| Hedge, taker on Kokoah (tier 0), hidden leg maker elsewhere | 9 | 5 | 3 | 10 | −7 |
-| Hedge, taker on Kokoah, tier 6 + Diamond (1.44 a side), hidden leg at the best rebate | 2.88 | 5 | −0.6 | min(10, 0.75 × 7.88 = 5.91) = 5.91 | −1.37 (break-even needs a 0.99 bps rebate a side) |
-| **Top-tier market maker, maker both legs, one through Kokoah** | −0.6 | 5 | −0.6 | min(10, 0.75 × 4.4 = 3.3) = 3.3 | **−0.5 (the tightest; break-even needs 0.55 bps a side)** |
-| Instant round trips in one account (tier 0) | 9 | 5 | 0 | 10 | −4 |
-| Dust account, huge volume | 9 | 5 | 0 | 10 | −4 |
-| Lottery farm of small accounts | 9 | 5 | 0 | 10 | −4 per account |
-| Volume timed to alpha price moves | its fees | its fees | | the caps are in USD at the day's average price | nothing to extract |
-| Whale staking a lot, trading little | its fees | its fees | | pay ∝ its own volume; holding adds ≤ 10% | nothing to extract |
-| Sybil splitting or merging | same | same | | shares and caps linear in credit (verified for k = 1, 2, 5) | 0 gain, burn and gates lost |
-| Self-referral (10% of the exchange fee back) | its fees | its fees | −0.1 × exchange fee | at most 0.75 × C | −0.25 C + 0.1 HL < 0 at every tier (tier 0 taker: −2.6; tier 6: −1.7) |
-| Two accounts trading at off-market prices to fake profit | its fees | its fees | | skill only (≤ 5%) | the transfer is removed from the return; the credit is valued at the mark |
-
-Without the second cap, `c_max = 2` would pay the Diamond taker 10 against a cost of 7.28, a clear profit; the
-second cap is what makes any `c_max` above about 1.4 safe. Lowering `c_tot` to 0.6 would move the tightest case
-to −1.2 and is the knob to turn if a generous `c_max` worries anyone.
+What stays out of farmers' reach: the skill pool (wash and hedged volume has zero edge and fails the entry test;
+zero-edge accounts take under 5% of a strong trader's weight on average), volume between two bound accounts (the
+counterparty rule removes it), and self-matches inside a cluster. Splitting and merging change nothing in the volume
+pool (linear in fees) and nothing in the skill pool beyond the cap (the copy rule).
 
 ## 12. Parameters
 
 | Parameter | Value |
 |---|---|
-| builder fee | 0.025% per fill (owner) |
-| maker credit | 1.0 (the builder fee is charged on maker fills; the second cap makes a discount unnecessary) |
+| builder fee | 0.025% per fill |
+| maker credit | 1.0 (the builder fee is charged on maker fills) |
 | smoothing `α` | 0.3, for credit, total fees and skill |
-| multiplier | `0.85 + 0.05 g' + 0.10 h'` (floor `m_min`, weights `w_s`, `w_h`; the owner tunes the balance) |
-| pay caps | `M × min(2 × smoothed fee credit, 0.75 × smoothed total fees on the Kokoah leg)`, in alpha at the day's average price; `c_tot` must stay below 0.864 |
-| burn | the pool above the caps, same day, to the burn hotkey; destroyed with `burn_alpha` by the operator's process |
-| buyback | the collected fees, on the owner's cadence, by `add_stake_burn` |
-| owner share | `owner_cut_auto_lock_enabled` on |
-| skill windows | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days |
-| `g'` full score | g = 0.65 |
-| return cap | ±10% a day |
-| holding target | alpha paid in the last 60 calendar days (floor 1 alpha); stake read as the day's minimum, collateral excluded |
-| activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days) |
+| pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |
+| skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
+| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; copy rule: correlation > 0.9 over ≥ 30 common days; verified agents ×1.1 |
+| activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
 | mark clip | 0.5% |
-| data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when the builder is the only approved one, or with Kokoah's order marker at exactly the fee rate; no file 12 h after the day: scored from the histories |
-| migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero (v5.9) |
-| emission split | miner 41%, owner 18% (locked), validators 41% (owner, 2026-10-20; the chain's default) |
+| data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 12 h after the day: scored from the histories |
+| migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero |
+| agents | sealed machines on Google Cloud Confidential Space running an approved harness image; checked daily by each validator (§16) |
+| buyback | the collected fees, on the owner's cadence, by `add_stake_burn` |
+| owner share | `owner_cut_auto_lock_enabled` on |
+| emission split | miner 41%, owner 18% (locked), validators 41% (the chain's default) |
 
 ## 13. Worked examples
 
-**Young subnet.** `A = 2,952` alpha at $5.33 (pool $15,734); fees today $2,000 (volume $8M). Two miners, equal
-volume $4M, 100% taker at tier 0, `Φ̂ = $1,000` each, total fees on the leg $2,800 each. Miner A: strong skill and
-holds everything, `M = 1.0`; miner B: no skill, sold everything, `M = 0.85`. Shares: A 1,596 alpha, B 1,356.
-Caps: `min(2 × 1,000, 0.75 × 2,800) = min(2,000, 2,100) = $2,000` times `M`: A 2,000 / 5.33 = 375 alpha, B
-0.85 × 2,000 / 5.33 = 319. Pay: A 375 ($2,000), B 319 ($1,700); burned 2,258 alpha (76% of the pool). Same volume, pay within 15%, total pay $3,700 against $2,000 of
-fees collected: covered if the two keep at least 46% of it.
+**Two traders, one with a proven record.** Equal smoothed builder fees today. A has 90 days of strong returns and
+passes the entry test with `s × v` = 0.8; B has none. Volume pool: 1,180.8 alpha each. Skill pool: all 590.4 alpha
+to A. A is paid 1,771.2 alpha, B 1,180.8; nothing is burned.
 
-**Busy subnet.** Fees $87,700 a day (volume $350M). Σ caps ≈ 16,450 alpha > `A`: every share is below its cap,
-nothing is burned, the pool is a volume rebate paying about 18% of fees back, shares within 15% for equal volume.
+**An agent beside a human.** Two traders pass the entry test with the same `s × v`; one trades through a verified
+sealed-machine agent. Skill weights 1.1 and 1.0: the agent takes 52.4% of the skill pool, the human 47.6%; the
+volume pool is split by fees alone.
+
+**Ten copies.** One strategy run in ten accounts, each with `s × v` = 0.9: the copy rule groups them and their
+weights sum to 0.9, the same as a single account.
 
 ## 14. Account switching and migration
 
-A miner's smoothed credit, skill and holding target belong to the binding. Migration to a new address is allowed
+A miner's smoothed credit, skill and pay history belong to the binding. Migration to a new address is allowed
 once per 60 days by a message signed by the old address, the new address and the hotkey; skill, pay history and
-penalties carry over, while credit and qualification start from zero (v5.9, §9a). A fresh binding starts from zero
-with `staked = collateral`. Clusters (§3) cover linked addresses. The chain keeps
+penalties carry over, while credit and qualification start from zero (v5.9, §9a). A fresh binding starts from
+zero. Clusters (§3) cover linked addresses. The chain keeps
 only a hotkey's latest commitment, so a validator enforces the 60-day limit from the bindings it has accepted; a
 validator that starts fresh accepts the current commitment on its signatures alone and converges with the others
 after 60 days.
@@ -396,16 +349,15 @@ after 60 days.
 
 - **Deregistered or pruned, same hotkey comes back.** Records are kept by hotkey and pause while the hotkey is
   off the subnet (nothing can be paid to it); they resume when it is registered again, as a fresh identity for
-  credit and qualification (v5.9, §9a): the new registration must qualify again. The holding target counts
-  calendar days, so pay from before a long gap no longer weighs on it.
+  credit and qualification (v5.9, §9a): the new registration must qualify again.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
   new hotkey starts fresh (no credit tail, no skill history, gates to pass again). The unpaid credit tail of the old
   hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of that
-  day's credit, 49% of the day before, and so on. A new identity never gains on skill (the floor is 0.85; skill only
-  adds) and never gains on holding (collateral does not count).
+  day's credit, 49% of the day before, and so on. A new identity never gains on skill: it must pass the 90-day
+  entry test again, from its own record.
 - **A mirror report follows the address and its cluster**, not the hotkey: binding a penalized address to a new
   hotkey keeps the penalty; a new address plus a new hotkey costs registration, collateral, the week of gates and
-  the credit tail, for a penalty worth at most 15% of pay for 30 days.
+  the credit tail, for a penalty that keeps the address out of the skill pool for 30 days.
 - **Hotkey swap on chain** (same UID and coldkey, new hotkey): the pay history, skill and penalties follow the new
   hotkey, the credit and qualification do not (v5.9; the swap is recorded in `hotkey_swaps` and applied when the
   day is scored, so a re-score applies it again); the binding must be published again because the signed line
@@ -417,8 +369,6 @@ after 60 days.
   history does count for skill: on the first day an address is scored, the exchange's portfolio history (perps
   window) backfills daily account values, so a trader with a real record is recognized within days instead of
   starting from nothing.
-- **The burn hotkey always receives at least 0.1% of the pool**, so a full subnet never prunes it in the scarce
-  regime; the slice is burned like the rest.
 
 ### 14b. Robustness rules (v5.8)
 
@@ -431,63 +381,98 @@ after 60 days.
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
   recorded and flagged, the scored file stands.
-- External incentives on the exchange (referral rewards, points) are not the subnet's and do not change the bound:
-  the subnet alone never makes a zero-edge round trip profitable.
 - **Late or missing files.** The exchange writes a day's file about an hour after the day ends, and none when the
   part of the day it covers had no fills. The validator scores every unscored day in order, oldest first, waits
   for the file until 12 hours after the day ends (`file_deadline_hours`), and then scores the day from the bound
   addresses' histories alone (recorded as an error, so the health check shows it). A file published later is
   fetched by the re-check and its hash recorded; the scored day stands. `kokoah-subnet validator skip-day` remains
   for a day to be closed by announcement as a day with no fills (an outage of the exchange's history itself).
-- **Day zero** is a parameter of the mechanism (`Params.day_zero`), so every validator counts penalty and holding
-  windows from the same date.
-- **Fee floor.** The one law needs the builder fee above `rebate + rebate / (1 − c_tot)` = 1.5 bps a side at
-  `c_tot = 0.75`. The validator measures the effective fee in each day's file and records an error (raised by the
-  health check) if it falls into the unsafe band; the parameters refuse a `c_tot` that the configured fee cannot
-  support.
-- **Rebate guard.** The bound assumes the exchange's deepest maker rebate is 0.3 bps a side; the health check reads
-  the fee schedules of bound addresses and alarms on a deeper one, so the caps are re-checked before it matters.
+- **Day zero** is a parameter of the mechanism (`Params.day_zero`), so every validator counts penalty windows from
+  the same date.
 - **Limits accepted.** Addresses controlled by smart-contract wallets cannot sign the binding line (EIP-191 only).
   The subnet's UID capacity is the chain's; a full subnet admits new traders only as the lowest-paid are pruned.
 
 ## 15. Verification
 
-Done (2026-10-20, `scripts/verify_mechanism.py`, `scripts/sim_skill.py`, `scripts/measure_burn.py`): the one law
-over 105 fee cases and the closed-form bound; cumulative backing on 200 random paths (worst paid / fees 1.36 at
-`c_max = 2`); the 15% rule in both regimes; sybil neutrality for k = 1, 2, 5; the cap price under a 30% spot dip;
-the skill calibration; on the local chain, incentive aimed at the owner hotkey is withheld and alpha emission to
-the other participants is unchanged (§1); `scripts/replay.py --real` over a month of recorded public fills of four
-active accounts (one with 15,471 fills) beside the synthetic attackers: all cheats negative, real accounts paid
-proportionally; two independent validators on testnet 385 produced identical weights for the same day; the first
-full burn cycle ran on testnet 385 (weights to the burn hotkey → the chain paid it the epoch's unawarded pool,
-147.6 alpha → `burn_alpha` destroyed 147.59 alpha, leaving the dust floor).
+Done for v6 (2026-10-22, `scripts/verify_mechanism.py`, `scripts/replay.py`, tests): the whole pool is paid on
+2,000 random days; the 80/20 split and its fallbacks; the volume pool is unchanged by splitting one account into
+2, 5 or 20; entry-test pass rates (zero edge 3%, lottery 0%, modest edge 17%, strong edge 51%) and mean skill weight
+per account (luck under a tenth of a strong trader's); ten copies of one strategy earn one weight; the agent bonus
+is exactly 10% of the skill weight and nothing in the volume pool; a 150-day replay in which strategies without an
+edge take 0% of the skill pool. The sealed-machine path end to end on one machine (§16): submission, key creation
+and restore, the sandbox (no network, no other process's memory), orders through the harness with the builder
+code and the agent marker, and the validator's checks with each failure case; the image built and run with the
+example agent reading live testnet data through the harness. Earlier (v5): two independent validators on testnet
+385 produced identical weights; the data plane recovers every builder fee the exchange credits to the builder.
 
 Before launch:
 
-1. **Burn process on testnet.** A month of daily figures: alpha directed to the burn hotkey against alpha actually
-   burned (`TokensBurned` events), published side by side. The alpha side of the emission effect is done (§1).
-2. **Adversarial replay.** Replay real public Hyperliquid histories (scalpers, market makers, swing traders) and
-   simulated attackers side by side through the real scoring code: rebated market makers; cross-exchange hedges;
-   one trader on several wallets (checking collateral, gates, holding target and smoothing, which are not linear);
-   volume timed to alpha price moves; coordinated groups. Pass criterion: no strategy without a trading edge nets
-   positive at any pool size, and real high-volume traders are paid their proportional share.
-3. **Holding bonus.** Measure selling by miners with `h' = 1` against `h' = 0` on testnet; report; the weights
-   stay inside the 15% rule.
-4. **Data plane.** Done 2026-10-22: the builder file is fetchable by anyone for the real builder address but
-   incomplete (about the first twelve hours of each day); the merged sources recover every builder fee the
-   exchange credits to the builder ($7.584 found against $7.584466 reported), and every file row matched a history
-   fill on the second.
-5. **Leaderboard metrics** (no effect on pay): skill `g` with its parts, managed capital (mean equity), volume,
-   dollar profit, execution quality (realized slippage against the mark), holding, coverage figures.
+1. **Agents on a real Confidential Space machine.** A Google-signed token from a production machine running the
+   released image, verified by `verify_token` against Google's published keys (the claims checked are those Google
+   documents; a live token confirms them), and the Cloud KMS outer key layer with its Workload Identity condition.
+2. **Agents on testnet.** An agent trading the exchange's testnet through the harness: order, cancel and leverage
+   accepted with the builder code; withdrawal to the miner.
+3. **A month of real traders on testnet 385**, both pools: who passes the entry test, the copy rule's groups, the
+   volume competition.
+4. **Leaderboard metrics** (no effect on pay): skill `g` with its parts, entry test, skill weight, managed capital,
+   volume, dollar profit, agent status.
 
-## 16. Assumptions and open points
+## 16. Sealed-machine agents (v6)
 
-1. Resolved 2026-10-20: the builder fee is charged on maker fills as on taker fills (Kokoah attaches one rate,
-   0.025%, at order placement; other builders' daily files show maker fills paying it).
-2. Builder attribution: the address's own history (complete, but it does not name the builder) merged with the
-   per-builder daily file (names the builder, about half the day), with the approvals rule, the order marker and
-   the earnings check (§3). The public per-user API keeps 10,000 fills per address; an address beyond that within
-   a day keeps the file's fills for the part the history cannot reach.
-3. The TAO/USD mark for `p_d`: the node's daily mean; an exchange median is the fallback.
+A miner can trade by agent: code that places the account's orders with no person able to trade the account.
+Agents run on the miner's own Google Cloud project, in a **Confidential Space** machine (Intel TDX or AMD SEV-SNP)
+started from Kokoah's published harness image. The harness (`src/kokoah_subnet/agent/`, `deploy/agent/`):
+
+- **Creates the account's key inside the machine** and never exports it. Nobody else can sign for the account, so
+  no person can trade it by hand: every action on it comes from the machine. To survive restarts the key is kept
+  wrapped twice (a key derived from a secret only the miner holds, and a Kokoah Cloud KMS key usable only by an
+  approved harness image through Workload Identity Federation), write-once in the owner's service.
+- **Runs the miner's agent code in a sandbox**: a separate user, no new privileges, no core dumps, memory and
+  process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and other
+  processes' memory. The agent's only way out is the harness's Unix socket.
+- **Offers the agent a narrow interface**: orders (limit and trigger), cancels, leverage, isolated margin and a
+  scheduled cancel; read-only exchange data, account queries answered for this account only. Kokoah's builder code
+  is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`); prices more than 5%
+  from the mid are refused. Not offered: modify, TWAP, trailing stops, withdrawals, transfers, approvals.
+- **Withdraws only to the miner's own address**, and only on a request signed by it.
+
+**Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
+packages it imports inside), optionally encrypted with a key only the miner holds, and submits it to the owner's
+service signed by the hotkey (`agent submit`; one submission per hotkey per 12 hours). The machine fetches exactly
+that submission, checks its id, decrypts it inside, and computes the **code fingerprint** (sha256 of the zip).
+
+**Binding.** The machine signs the subnet binding line with the account's key; the miner publishes it with an
+agent field (`A1`: the code fingerprint and the machine's address) as the hotkey's commitment (`agent bind`).
+
+**Verification, by every validator, every scored day** (`src/kokoah_subnet/validator/agents.py`):
+
+```
+challenge  = 32 random bytes (hex)
+answer     = GET <machine>/attestation?challenge=...      {token, address, netuid, hotkey, code_sha256}
+binding    = sha256("kokoah-agent-1 netuid=<n> hotkey=<ss58> address=<0x..> code=<sha256>")
+agent_i    = answer names this subnet, hotkey, account and the committed fingerprint
+             ∧ Google's signature on the token verifies, iss/aud/exp, Confidential Space, production
+               (dbgstat disabled-since-boot, STABLE), confidential hardware, secure boot
+             ∧ the token's image digest is an approved harness image (src/kokoah_subnet/agent/images.py)
+             ∧ the token's nonces include the challenge and the binding digest
+             ∧ the account has no other trading key approved on the exchange (extraAgents empty)
+```
+
+Only a day on which all of these hold gives the agent bonus (§7a). The validator trusts neither the operator nor
+the miner: the token is Google's, the image digest is public, and the challenge is its own.
+
+**What stays outside the guarantee.** A person can still influence an agent indirectly (through the market data it
+reads, or a new submission); not by trading the account. The cloud provider and the chip maker are trusted for
+the hardware's isolation; memory-bus attacks need physical access, which a cloud machine denies the miner. A
+miner's own hardware is not accepted (the token must be Google's).
+
+## 17. Assumptions and open points
+
+1. Resolved 2026-10-20: the builder fee is charged on maker fills as on taker fills.
+2. Builder attribution: the address's own history merged with the per-builder daily file, each history-only fill
+   confirmed by its own order's builder field, and the earnings check (§3). The public per-user API keeps 10,000 fills per address.
+3. The TAO/USD mark for `p_d`: the day's mean of the exchange's TAO perpetual; a configured value is the fallback.
 4. The buyback path (USDC on Hyperliquid → TAO → `add_stake_burn`) and its publication.
-5. Legal review of paying tokens for trading (pending for the app).
+5. Agents need the operator's Google Cloud resources (the KMS key and the Workload Identity pool with its
+   condition on the image digest) and a released harness image whose digest is added to the approved list.
+6. Legal review of paying tokens for trading (pending for the app).
