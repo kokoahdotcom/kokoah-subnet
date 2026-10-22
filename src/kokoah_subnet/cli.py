@@ -602,7 +602,11 @@ def _agent(args: argparse.Namespace) -> int:
         print(f"start the machine with --metadata-from-file=tee-env-KOKOAH_AGENT_PERMIT={args.out}")
         return 0
     if args.agent_command == "service-key":
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            print(f"{args.out} already exists: the service key is never replaced (every stored copy depends on it)")
+            return 1
         with os.fdopen(fd, "w") as f:
             f.write(os.urandom(32).hex() + "\n")
         print(f"the agent service's key is in {args.out} (mode 600). Keep a copy offline, away from the backups:")
