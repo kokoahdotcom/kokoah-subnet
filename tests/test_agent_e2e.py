@@ -80,6 +80,7 @@ def world(tmp_path: Path) -> dict[str, Any]:
         DevelopmentAttestor(rsa_key, IMAGE),
         http=httpx.Client(transport=httpx.MockTransport(exchange), base_url="https://x"),
     )
+    h.builder_approved = True
     return {"h": h, "code": code, "rsa": rsa_key, "exchange": exchange, "hotkey": hotkey.ss58_address, "svc": service}
 
 

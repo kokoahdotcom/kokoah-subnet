@@ -182,6 +182,13 @@ class Harness:
     def order(self, orders: list[dict[str, Any]], grouping: str = "na") -> Any:
         if not orders:
             raise ValueError("no orders")
+        if not self.builder_approved:  # the exchange refuses builder orders until the account has approved the fee
+            try:
+                self.approve_builder()
+            except (httpx.HTTPError, ValueError):
+                pass
+            if not self.builder_approved:
+                raise ValueError("Kokoah's builder fee is not approved yet (the account needs a deposit first)")
         mids = self.info({"type": "allMids"})
         wires = []
         cloids = []

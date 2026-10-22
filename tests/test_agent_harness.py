@@ -56,6 +56,7 @@ def setup() -> tuple[Harness, FakeExchange, Any, Any]:
         DevelopmentAttestor(rsa_key, IMAGE),
         http=httpx.Client(transport=httpx.MockTransport(fake.handler), base_url="https://x"),
     )
+    h.builder_approved = True  # the approval itself is tested separately
     return h, fake, master, rsa_key
 
 
@@ -150,3 +151,12 @@ def test_the_two_interfaces(setup: Any) -> None:
 
 def test_the_harness_binding_line_is_the_subnet_one() -> None:
     assert harness_module.binding_message(7, "5Abc", "0xAB") == binding_message(7, "5Abc", "0xAB")
+
+
+def test_an_order_first_approves_the_builder_fee(setup: Any) -> None:
+    h, fake, _, _ = setup
+    h.builder_approved = False
+    h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    approval, order = fake.posted[-2]["action"], fake.posted[-1]["action"]
+    assert approval["type"] == "approveBuilderFee" and approval["builder"] == BUILDER
+    assert approval["maxFeeRate"] == "0.025%" and order["type"] == "order"
