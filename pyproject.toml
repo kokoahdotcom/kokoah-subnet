@@ -3,6 +3,8 @@ name = "kokoah-subnet"
 version = "0.0.1"
 description = "Kokoah's Bittensor subnet: the incentive mechanism, validator and miner."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "bittensor==11.3.0",
