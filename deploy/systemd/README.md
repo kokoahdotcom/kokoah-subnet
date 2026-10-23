@@ -5,7 +5,8 @@ homes, a private `/tmp`, no devices or kernel settings, and a memory cap. They c
 
 | Path | What |
 |---|---|
-| `/opt/kokoah-subnet/venv` | the installed release (`uv sync --frozen --no-dev --no-editable` with `UV_PROJECT_ENVIRONMENT`) |
+| `/opt/kokoah-subnet/venv` | the installed release (the validator guide's `uv sync` command, with `UV_PROJECT_ENVIRONMENT`) |
+| `/opt/kokoah-subnet/python` | the Python it runs on (`UV_PYTHON_INSTALL_DIR`), readable by the service user |
 | `/var/lib/kokoah-subnet/data` | the validator's data directory (`--data-dir`) |
 | `/var/lib/kokoah-subnet/wallets` | the validator's hotkey and the coldkey's public file only (`--wallet-path`) |
 | `/etc/kokoah-subnet/db.env` | `KOKOAH_SUBNET_DB_URL=...` (from `scripts/db.sh start`), readable by the group |

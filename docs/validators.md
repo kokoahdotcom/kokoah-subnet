@@ -110,7 +110,9 @@ systemd's sandboxing (the unit files in `deploy/systemd/`, described in its READ
 
 ```bash
 sudo useradd --system --home-dir /var/lib/kokoah-subnet --create-home --shell /usr/sbin/nologin kokoah-subnet
-sudo UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv uv sync --frozen --no-dev --no-editable   # in the repository
+# in the repository; Python goes under /opt too, so the service user can run it
+sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
+    uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
 sudo chmod -R a+rX /opt/kokoah-subnet
 
 # data and the hotkey only (never the coldkey): the wallet's hotkey file and its coldkeypub.txt
@@ -197,9 +199,13 @@ by day; each account's earlier daily values are backfilled from the exchange whe
 
 ```bash
 git pull
-sudo UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv uv sync --frozen --no-dev --no-editable
+sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
+    uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
+sudo chmod -R a+rX /opt/kokoah-subnet
 sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 ```
+
+`--reinstall-package` makes the sync install the pulled code even when the package's version number is unchanged.
 
 - **Parameter changes** are versioned in the code, announced at least seven days before they take effect, and
   published in every daily artifact as the mechanism's version. Nothing changes until you update.
