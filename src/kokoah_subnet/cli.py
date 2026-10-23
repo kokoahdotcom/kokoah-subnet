@@ -60,10 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     agent = sub.add_parser("agent", help="sealed-machine agents: package, submit, bind, sign, run the owner service")
     asub = agent.add_subparsers(dest="agent_command", required=True)
-    apack = asub.add_parser("package", help="zip an agent directory (needs entry.py); --encrypt for private code")
+    apack = asub.add_parser(
+        "package", help="zip an agent directory (needs entry.py), encrypted so only your sealed machine can read it"
+    )
     apack.add_argument("directory", type=Path)
     apack.add_argument("--out", type=Path, required=True)
-    apack.add_argument("--encrypt", action="store_true")
+    apack.add_argument(
+        "--public", action="store_true", help="publish the code unencrypted: anyone can download and copy it"
+    )
     asubmit = asub.add_parser("submit", help="submit a bundle to the owner's agent service, signed by the hotkey")
     asubmit.add_argument("--service", required=True)
     asubmit.add_argument("--bundle", type=Path, required=True)
@@ -511,13 +515,23 @@ def _agent(args: argparse.Namespace) -> int:
     if args.agent_command == "package":
         plain = package(args.directory)
         data = plain
-        if args.encrypt:
+        if not args.public:
             key = new_key()
             data = encrypt(plain, key)
-            print(f"bundle key (keep it; the sealed machine needs it, nobody else has it): {key.hex()}")
+            key_file = args.out.with_name(args.out.name + ".key")
+            try:
+                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                print(f"{key_file} already exists: choose another --out")
+                return 1
+            with os.fdopen(fd, "w") as f:
+                f.write(key.hex())
+            print(f"bundle key in {key_file} (mode 600): the sealed machine needs it, nobody else should have it")
+        else:
+            print("public code: anyone can download it from the service and copy your strategy")
         args.out.write_bytes(data)
         print(f"code fingerprint (commit this): {sha256_hex(plain)}")
-        print(f"submission id: {sha256_hex(data)}  ({len(data)} bytes, {'encrypted' if args.encrypt else 'plain'})")
+        print(f"submission id: {sha256_hex(data)}  ({len(data)} bytes, {'plain' if args.public else 'encrypted'})")
         return 0
     if args.agent_command == "submit":
         from kokoah_subnet.agent.service import submit_message

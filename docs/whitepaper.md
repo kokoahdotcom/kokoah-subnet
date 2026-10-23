@@ -141,8 +141,8 @@ also share the skill reward.
 
 ## 4. Who takes part
 
-**Agent builders.** Write a trading agent (a small program with an `entry.py`) and submit it, optionally encrypted,
-to Kokoah's agent service (`https://api.kokoah.com/miners`), signed by a registered hotkey. Make the machine's secret
+**Agent builders.** Write a trading agent (a small program with an `entry.py`) and submit it, encrypted, to
+Kokoah's agent service (`https://api.kokoah.com/miners`), signed by a registered hotkey. Make the machine's secret
 from a strong password and sign a start permission with the hotkey, both on their own computer. Start Kokoah's
 published harness image in a sealed machine on their own cloud account; the machine fetches exactly that code,
 creates the trading account's key inside itself, and the agent trades. Nobody, the builder included, can trade the
@@ -262,8 +262,8 @@ from the published source and get the same digest.
   account data.
 - **Every order carries the Kokoah builder code.** The harness attaches it, marks the order as an agent's, and refuses
   prices far from the market. Withdrawals go only to the owner's own address, on a request signed by it.
-- **Private code stays private.** An agent can be submitted encrypted with a key only its author holds; it is
-  decrypted only inside the sealed machine. Its fingerprint, which reveals nothing about its content, is what the
+- **Private code stays private.** An agent is encrypted with a key only its author holds and decrypted only inside
+  the sealed machine; publishing the code openly is the author's choice. Its fingerprint, which reveals nothing about its content, is what the
   author commits on chain.
 
 **How validators verify an agent, every day, on their own.** The validator sends the machine a fresh random challenge.

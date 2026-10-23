@@ -400,7 +400,7 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
 - **Withdraws only to the miner's own address**, and only on a request signed by it.
 
 **Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
-packages it imports inside), optionally encrypted with a key only the miner holds, and submits it to the owner's
+packages it imports inside), encrypted by default with a key only the miner holds, and submits it to the owner's
 service signed by a registered hotkey (`agent submit`; one submission per hotkey per 12 hours). The machine fetches exactly
 that submission, checks its id, decrypts it inside, and computes the **code fingerprint** (sha256 of the zip).
 

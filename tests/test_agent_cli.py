@@ -37,3 +37,18 @@ def test_the_service_key_is_created_once_and_private(tmp_path: Path) -> None:
     before = out.read_text()
     assert main(["agent", "service-key", "--out", str(out)]) == 1  # never replaced: every stored copy depends on it
     assert out.read_text() == before
+
+
+def test_packaging_encrypts_by_default(tmp_path: Path) -> None:
+    from kokoah_subnet.agent.bundle import decrypt, is_encrypted
+
+    (tmp_path / "agent").mkdir()
+    (tmp_path / "agent" / "entry.py").write_text("print('agent')\n")
+    out = tmp_path / "a.bundle"
+    assert main(["agent", "package", str(tmp_path / "agent"), "--out", str(out)]) == 0
+    key_file = tmp_path / "a.bundle.key"
+    assert is_encrypted(out.read_bytes()) and stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    assert decrypt(out.read_bytes(), bytes.fromhex(key_file.read_text()))[:2] == b"PK"  # the zip inside
+    public = tmp_path / "p.bundle"
+    assert main(["agent", "package", str(tmp_path / "agent"), "--out", str(public), "--public"]) == 0
+    assert not is_encrypted(public.read_bytes()) and not (tmp_path / "p.bundle.key").exists()

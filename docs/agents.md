@@ -29,13 +29,14 @@ transfers, approvals. Main perpetuals only.
 ## 2. Package and submit
 
 ```bash
-uv run kokoah-subnet agent package ./my-agent --out my-agent.bundle --encrypt
-# prints the code fingerprint (commit this), the submission id, and for --encrypt the bundle key (keep it secret)
+uv run kokoah-subnet agent package ./my-agent --out my-agent.bundle
+# encrypted: writes the bundle key to my-agent.bundle.key (keep it secret); prints the code fingerprint and the
+# submission id
 uv run kokoah-subnet agent submit --service https://api.kokoah.com/miners --bundle my-agent.bundle --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
-The same files always give the same fingerprint. Without `--encrypt` the code is public: anyone can download it
-from the service and check the fingerprint. One submission per hotkey per 12 hours, and only from a hotkey that is
+The same files always give the same fingerprint. The code is encrypted so that only your sealed machine can read it;
+`--public` publishes it unencrypted instead, and then anyone can download it from the service. One submission per hotkey per 12 hours, and only from a hotkey that is
 registered on the subnet (the service also stores key copies only for registered hotkeys; getting an account back
 or taking its key out works even after the hotkey lost its registration).
 
@@ -92,11 +93,11 @@ gcloud compute instances create kokoah-agent \
   --metadata="^~^tee-image-reference=docker.io/kokoahdotcom/kokoah-subnet-agent@sha256:<approved digest>\
 ~tee-env-KOKOAH_AGENT_SERVICE=https://api.kokoah.com/miners\
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
-~tee-env-KOKOAH_AGENT_BUNDLE_KEY=<bundle key, for an encrypted bundle>\
 ~tee-env-KOKOAH_AGENT_NETUID=<netuid>\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
 ~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>" \
-  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=secret.hex,tee-env-KOKOAH_AGENT_PERMIT=permit.txt
+  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=secret.hex,tee-env-KOKOAH_AGENT_PERMIT=permit.txt,\
+tee-env-KOKOAH_AGENT_BUNDLE_KEY=my-agent.bundle.key   # leave the bundle key out for a --public bundle
 gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080   # validators reach the machine here
 ```
 
