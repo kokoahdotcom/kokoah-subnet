@@ -26,6 +26,7 @@ from kokoah_subnet.agent.keystore import (
     decrypt_key,
     encrypt_key,
     release_message,
+    restore_digest,
     start_message,
     store_digest,
 )
@@ -139,7 +140,7 @@ def test_a_restore_needs_a_fresh_challenge(world: dict[str, Any]) -> None:
     address = Account.from_key(key).address.lower()
     replayed = world["machine"].token(["00" * 32])
     r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
-    assert r.status_code == 409  # no challenge asked
+    assert r.status_code == 403  # it answers no current challenge
     keys.challenge(address)
     r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
     assert r.status_code == 403  # the token does not answer the challenge
@@ -302,3 +303,22 @@ def test_made_up_requests_leave_nothing_behind_and_touch_no_real_copy(world: dic
     )
     assert svc.put(f"/key-store/{address}", json={**fake, "token": token}).status_code == 409
     assert start(world, master, address) == key
+
+
+def test_strangers_cannot_stop_a_machine_from_restoring(world: dict[str, Any]) -> None:
+    """Between the machine's challenge and its restore, a stranger asks for challenges and sends junk restores: the
+    machine's restore still works. A machine's token works once."""
+    keys: KeyService = world["keys"]
+    svc: TestClient = world["svc"]
+    master = Account.create()
+    key = start(world, master)
+    address = Account.from_key(key).address.lower()
+    challenge = keys.challenge(address)
+    token = world["machine"].token([restore_digest(address, challenge)])
+    for _ in range(5):
+        svc.get(f"/key-store/{address}/challenge")
+        svc.post(f"/key-store/{address}/restore", json={"token": "junk"})
+    blob = svc.post(f"/key-store/{address}/restore", json={"token": token})
+    assert blob.status_code == 200
+    assert decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
+    assert svc.post(f"/key-store/{address}/restore", json={"token": token}).status_code == 403  # used once

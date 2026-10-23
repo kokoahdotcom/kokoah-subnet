@@ -23,6 +23,8 @@ The hotkey signs `kokoah-agent-submit-1 sha256=<id> hotkey=<ss58>`. One submissi
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import os
 import secrets
 import time
@@ -95,7 +97,8 @@ key_events = Table(  # every store, restore and release, for the record
     Column("at", Float, nullable=False),
     Column("detail", Text),
 )
-CHALLENGE_TTL_S = 300
+CHALLENGE_TTL_S = 300  # a restore challenge's window; the one before it is accepted too
+MAX_TOKEN_CHARS = 16_384
 MAX_KEY_COPY_CHARS = 512  # base64 of a key copy (a 64-byte ciphertext); anything bigger is not from a harness
 MAX_COPIES_PER_HOTKEY = 50  # kept, unreleased copies one hotkey may file (each needs its own signed permission)
 WRAP_MAGIC = b"KSW1"
@@ -259,12 +262,21 @@ def create_app(
     def approved_images() -> dict[str, list[str]]:
         return {"images": list(images or [])}
 
-    challenges: dict[str, tuple[str, float]] = {}
+    # restore challenges are derived, not stored: the same for everyone asking within a window, so nobody can replace
+    # or use up a machine's challenge; a token that restored a key is not accepted again
+    challenge_key = secrets.token_bytes(32)
+    used_tokens: dict[str, float] = {}
+
+    def challenge_value(address: str, window: int) -> str:
+        text = f"kokoah-restore-challenge-1 {address} {window}".encode()
+        return hmac.new(challenge_key, text, hashlib.sha256).hexdigest()
+
     key_source: list[Any] = [attestation_keys]
 
-    def machine_proof(token: str, nonce: str) -> None:
+    def proof_error(token: str, nonce: str) -> str | None:
+        """Why the token is not a genuine sealed machine's answer to `nonce` (None when it is)."""
         if accept_unverified_machines:
-            return
+            return None
         from .attest import AttestationError, google_keys, verify_token
 
         if key_source[0] is None:
@@ -272,7 +284,13 @@ def create_app(
         try:
             verify_token(token, key_source[0], list(images or []), [nonce])
         except AttestationError as exc:
-            raise HTTPException(status_code=403, detail=f"not a genuine sealed machine: {exc}") from exc
+            return str(exc)
+        return None
+
+    def machine_proof(token: str, nonce: str) -> None:
+        error = proof_error(token, nonce)
+        if error is not None:
+            raise HTTPException(status_code=403, detail=f"not a genuine sealed machine: {error}")
 
     def event(c: Any, address: str, kind: str, detail: str = "") -> None:
         c.execute(insert(key_events).values(address=address, event=kind, at=clock(), detail=detail or None))
@@ -348,32 +366,37 @@ def create_app(
 
     @app.get("/key-store/{address}/challenge")
     def challenge(address: str) -> dict[str, str]:
-        """Only for an account whose copy is kept (and not released), so requests for made-up accounts leave
-        nothing behind; expired challenges are dropped on the way."""
+        """Only for an account whose copy is kept (and not released). The value is derived from the service's own
+        key, the account and the time window, so asking changes nothing."""
         a = check_address(address)
         with engine.connect() as c:
             if kept(c, a)["released_at"] is not None:
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
-        now = clock()
-        for stale in [k for k, (_, until) in challenges.items() if until < now]:
-            del challenges[stale]
-        value = secrets.token_hex(32)
-        challenges[a] = (value, now + CHALLENGE_TTL_S)
-        return {"challenge": value}
+        return {"challenge": challenge_value(a, int(clock() // CHALLENGE_TTL_S))}
 
     @app.post("/key-store/{address}/restore")
     def restore(address: str, body: Restore) -> dict[str, Any]:
         a = check_address(address)
-        outstanding = challenges.pop(a, None)
-        if outstanding is None or outstanding[1] < clock():
-            raise HTTPException(status_code=409, detail="ask for a fresh challenge first")
-        machine_proof(body.token, restore_digest(a, outstanding[0]))
+        if not body.token or len(body.token) > MAX_TOKEN_CHARS:
+            raise HTTPException(status_code=400, detail="bad token")
+        now = clock()
+        for seen, until in list(used_tokens.items()):
+            if until < now:
+                del used_tokens[seen]
+        token_id = hashlib.sha256(body.token.encode()).hexdigest()
+        if token_id in used_tokens:
+            raise HTTPException(status_code=403, detail="this token was used already")
+        window = int(now // CHALLENGE_TTL_S)  # the current challenge, or the one just before it
+        errors = [proof_error(body.token, restore_digest(a, challenge_value(a, w))) for w in (window, window - 1)]
+        if all(e is not None for e in errors):
+            raise HTTPException(status_code=403, detail=f"not a genuine sealed machine's answer: {errors[0]}")
         with engine.begin() as c:
             row = kept(c, a)
             if row["released_at"] is not None:
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
             blob = opened(row)  # before anything is recorded: a copy the service cannot open changes nothing
             event(c, a, "restore")
+        used_tokens[token_id] = now + 2 * CHALLENGE_TTL_S
         return {"address": a, "blob": blob}
 
     @app.post("/key-store/{address}/release")
