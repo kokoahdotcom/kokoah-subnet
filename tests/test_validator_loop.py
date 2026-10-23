@@ -24,6 +24,7 @@ PORTFOLIO_FAILS: set[str] = set()  # addresses whose history read fails
 HISTORY: dict[str, list[dict[str, Any]]] = {}  # address -> extra fills in its own history (not in the builder file)
 OTHER_BUILDER: set[str] = set()  # addresses whose history-only orders paid another builder
 EARNED = {"builderRewards": "100000"}
+ACCOUNTS: dict[str, Any] = {}  # the accounts of the latest setup (their keys sign the bindings)
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -134,6 +135,8 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"type": "txDetails", "tx": {}})
     if t == "referral":
         return httpx.Response(200, json=dict(EARNED))
+    if t == "extraAgents":
+        return httpx.Response(200, json=[])
     if t == "userFillsByTime" and body["user"].lower() in HISTORY and body.get("startTime") == DAY_MS:
         return httpx.Response(200, json=HISTORY[body["user"].lower()])
     if t == "userFillsByTime":
@@ -201,6 +204,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     OTHER_BUILDER.clear()
     EARNED["builderRewards"] = "100000"
     a, b = Account.create(), Account.create()
+    ACCOUNTS.update(a=a, b=b)
     cfg = ValidatorConfig(
         network="fake",
         netuid=2,
@@ -518,4 +522,54 @@ async def test_an_order_that_paid_another_builder_is_not_counted(tmp_path: Path)
 
         stages = [r.stage for r in c.execute(S.errors.select()).all()]
     assert "builder" in stages
+    await hl.close()
+
+
+async def test_a_sealed_machine_agent_is_verified_through_the_whole_pass(tmp_path: Path) -> None:
+    """Hotkey A's account trades from a sealed machine (the real harness, a development attestor standing in for
+    Google): its binding carries the agent field, the validator challenges the machine and reads the operator's
+    released list over HTTP, and the day records A as a verified agent; once the key is released, it is not."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
+    from kokoah_subnet.agent.harness import Harness, HarnessConfig, public_app
+    from kokoah_subnet.binding import AgentRef
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    image, code = "sha256:" + "ab" * 32, "cd" * 32
+    machine_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    harness = Harness(
+        HarnessConfig(netuid=2, hotkey=HK_A, master=Account.create().address, code_sha256=code, builder="0xbuilder"),
+        ACCOUNTS["a"].key,
+        DevelopmentAttestor(machine_key, image),
+    )
+    line = harness.binding()
+    assert line["address"] == addr_a
+    agent_binding = Binding(line["address"], line["signature"], agent=AgentRef(code, "203.0.113.7", 8080))
+    chain._commitments[HK_A] = _Commitment(encode_binding(agent_binding), 9000)
+    released: list[dict[str, Any]] = []
+    machine = httpx.ASGITransport(app=public_app(harness))
+
+    async def route(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "203.0.113.7":
+            return await machine.handle_async_request(request)
+        assert request.url.path == "/key-store/released"
+        return httpx.Response(200, json={"released": released})
+
+    class Router(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return await route(request)
+
+    cfg = ValidatorConfig(**{**cfg.__dict__, "agent_images": (image,), "agent_service": "https://svc.example"})
+    keys = StaticKeys(machine_key.public_key())
+    async with httpx.AsyncClient(transport=Router()) as http:
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_keys=keys, agent_http=http)
+        records = {r.hotkey: r for r in result.records}
+        assert records[HK_A].agent_verified and not records[HK_B].agent_verified
+        assert records[HK_A].fees.builder_fee == pytest.approx(250.0)  # an agent's fills count like anyone's
+        artifact = json.loads(store.day(DAY) or "{}")
+        assert next(m for m in artifact["miners"] if m["hotkey"] == HK_A)["agent_verified"] is True
+        released.append({"address": addr_a, "released_at": 1.0})  # the miner takes the key out
+        again = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_keys=keys, agent_http=http)
+        assert not {r.hotkey: r for r in again.records}[HK_A].agent_verified
     await hl.close()
