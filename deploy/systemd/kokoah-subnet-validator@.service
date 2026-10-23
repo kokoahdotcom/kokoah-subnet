@@ -5,14 +5,40 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/kokoah/kokoah-subnet
-EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
-EnvironmentFile=%h/.local/share/kokoah/subnet-validator-%i.env
-ExecStart=/bin/bash -c 'exec /kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli validator run $KOKOAH_SUBNET_ARGS'
+User=kokoah-subnet
+Group=kokoah-subnet
+Environment=HOME=/var/lib/kokoah-subnet
+EnvironmentFile=/etc/kokoah-subnet/db.env
+EnvironmentFile=/etc/kokoah-subnet/validator-%i.env
+WorkingDirectory=/var/lib/kokoah-subnet
+ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet validator run $KOKOAH_SUBNET_ARGS
 Restart=always
 RestartSec=30
-StandardOutput=append:%h/.local/share/kokoah/subnet-validator-%i.log
-StandardError=append:%h/.local/share/kokoah/subnet-validator-%i.log
+MemoryMax=2G
+TasksMax=256
+ReadWritePaths=/var/lib/kokoah-subnet
+StandardOutput=append:/var/log/kokoah-subnet/validator-%i.log
+StandardError=append:/var/log/kokoah-subnet/validator-%i.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

@@ -105,22 +105,36 @@ uv run kokoah-subnet validator run --network test --netuid 385 \
     --start-day <YYYY-MM-DD> --once
 ```
 
-**As a service.** Drop `--once` to run the loop. On a server, run it under systemd with the units in
-`deploy/systemd/` (adjust `WorkingDirectory` and the paths in `ExecStart` to where you cloned the repository; the
-units read the database settings written by `scripts/db.sh start`):
+**As a service.** On a server, run the validator, its interface and its health check as a dedicated user with
+systemd's sandboxing (the unit files in `deploy/systemd/`, described in its README):
 
 ```bash
+sudo useradd --system --home-dir /var/lib/kokoah-subnet --create-home --shell /usr/sbin/nologin kokoah-subnet
+sudo UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv uv sync --frozen --no-dev --no-editable   # in the repository
+sudo chmod -R a+rX /opt/kokoah-subnet
+
+# data and the hotkey only (never the coldkey): the wallet's hotkey file and its coldkeypub.txt
+sudo install -d -o kokoah-subnet -g kokoah-subnet -m 700 /var/lib/kokoah-subnet/data \
+    /var/lib/kokoah-subnet/wallets/validator/hotkeys
+sudo install -o kokoah-subnet -g kokoah-subnet -m 600 ~/.bittensor/wallets/validator/hotkeys/default \
+    /var/lib/kokoah-subnet/wallets/validator/hotkeys/default
+sudo install -o kokoah-subnet -g kokoah-subnet -m 600 ~/.bittensor/wallets/validator/coldkeypub.txt \
+    /var/lib/kokoah-subnet/wallets/validator/coldkeypub.txt
+
+# settings (readable by the service's group only) and logs
+sudo install -d -m 755 /etc/kokoah-subnet && sudo install -d -g kokoah-subnet -m 775 /var/log/kokoah-subnet
+sudo install -g kokoah-subnet -m 640 ~/.local/share/kokoah/subnet-db.env /etc/kokoah-subnet/db.env
+echo 'KOKOAH_SUBNET_ARGS=--network test --netuid 385 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
+    | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/validator-main.env
+
 sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
         deploy/systemd/kokoah-subnet-check.* deploy/systemd/kokoah-subnet-backup.* /etc/systemd/system/
-mkdir -p ~/.local/share/kokoah
-echo 'KOKOAH_SUBNET_ARGS=--network test --netuid 385 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz --agent-service https://api.kokoah.com/miners --data-dir /home/<you>/kokoah-subnet-data --wallet validator --wallet-hotkey default --start-day <YYYY-MM-DD>' \
-    > ~/.local/share/kokoah/subnet-validator-main.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer kokoah-subnet-backup.timer
 ```
 
-Logs go to `~/.local/share/kokoah/subnet-validator-main.log`. Restarts are safe at any time: scoring resumes with
-the oldest unscored day, and a re-scored day starts from the state as it was before that day.
+Logs go to `/var/log/kokoah-subnet/validator-main.log`. Restarts are safe at any time: scoring resumes with the
+oldest unscored day, and a re-scored day starts from the state as it was before that day.
 
 ## 7. What a validator does each day
 
@@ -165,7 +179,7 @@ request limit. Publishing lets miners and other validators compare figures with 
 - **Health check.** `uv run kokoah-subnet validator check` prints the latest scored day, the last weights, the last
   epoch, errors in the last 24 hours and the builder-earnings check, and exits 1 on a problem. The
   `kokoah-subnet-check.timer` runs it hourly and posts to a webhook only when something is wrong: put
-  `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `~/.local/share/kokoah/subnet-alert.env`.
+  `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `/etc/kokoah-subnet/alert.env`.
 - **The earnings check.** The builder fees credited to miners must never exceed what Hyperliquid reports the builder
   has earned; the health check alarms if they do.
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source
@@ -183,7 +197,7 @@ by day; each account's earlier daily values are backfilled from the exchange whe
 
 ```bash
 git pull
-uv sync
+sudo UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv uv sync --frozen --no-dev --no-editable
 sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 ```
 
@@ -196,6 +210,7 @@ sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 ## 12. Security
 
 - The server holds **only the hotkey**; keep the coldkey offline.
+- The services run as their own user in systemd's sandbox, with a memory cap (`deploy/systemd/`).
 - The validator **never holds Hyperliquid keys** and never writes to the exchange.
 - The record and the interface are local by default; publish the interface only through a reverse proxy.
 - Keep the server patched and the repository on a tagged release or a commit you have reviewed.

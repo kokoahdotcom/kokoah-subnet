@@ -1,9 +1,38 @@
 [Unit]
-Description=Kokoah subnet health check (posts to the alert webhook when something is wrong)
+Description=Kokoah subnet health check (alerts only on a problem)
+After=network-online.target docker.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/kokoah/kokoah-subnet
-EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
-EnvironmentFile=-%h/.local/share/kokoah/subnet-alert.env
-ExecStart=/bin/bash -c '/kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli validator check --only-problems >> %h/.local/share/kokoah/subnet-check.log 2>&1 || true'
+User=kokoah-subnet
+Group=kokoah-subnet
+Environment=HOME=/var/lib/kokoah-subnet
+EnvironmentFile=/etc/kokoah-subnet/db.env
+EnvironmentFile=-/etc/kokoah-subnet/alert.env
+WorkingDirectory=/var/lib/kokoah-subnet
+ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet validator check --only-problems
+SuccessExitStatus=1
+MemoryMax=512M
+ReadWritePaths=/var/lib/kokoah-subnet
+StandardOutput=append:/var/log/kokoah-subnet/check.log
+StandardError=append:/var/log/kokoah-subnet/check.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077

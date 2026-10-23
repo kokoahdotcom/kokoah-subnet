@@ -4,13 +4,39 @@ After=network-online.target docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/kokoah/kokoah-subnet
-EnvironmentFile=%h/.local/share/kokoah/subnet-db.env
-ExecStart=/kokoah/kokoah-subnet/.venv/bin/python -m kokoah_subnet.cli validator serve --data-dir %h/kokoah-subnet-data --host 127.0.0.1 --port 48100
+User=kokoah-subnet
+Group=kokoah-subnet
+Environment=HOME=/var/lib/kokoah-subnet
+EnvironmentFile=/etc/kokoah-subnet/db.env
+WorkingDirectory=/var/lib/kokoah-subnet
+ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet validator serve --data-dir /var/lib/kokoah-subnet/data --host 127.0.0.1 --port 48100
 Restart=always
 RestartSec=10
-StandardOutput=append:%h/.local/share/kokoah/subnet-validator-api.log
-StandardError=append:%h/.local/share/kokoah/subnet-validator-api.log
+MemoryMax=1G
+TasksMax=128
+ReadWritePaths=/var/lib/kokoah-subnet
+StandardOutput=append:/var/log/kokoah-subnet/api.log
+StandardError=append:/var/log/kokoah-subnet/api.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
