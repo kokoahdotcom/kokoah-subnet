@@ -252,8 +252,8 @@ ineligible days, and nothing is paid for them later.
 **Identity.** Credit (`Φ̂`, `F̂`) and qualification belong to one identity: one hotkey, one bound address, one
 registration. They start from zero when the bound address changes (migration), when the hotkey is swapped on
 chain, when the hotkey registers again after leaving, and naturally for a new hotkey. What a fresh identity must
-not escape is kept: the pay history, the skill record and any mirror penalty (which follows the address and its
-cluster, §3).
+not escape is kept: the pay history, the skill record and any mirror penalty (which follows the address and the
+addresses its owner controls, §3).
 
 An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of capital, its own
 registration and its own qualification.
@@ -328,7 +328,8 @@ after 60 days.
   hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of that
   day's credit, 49% of the day before, and so on. A new identity never gains on skill: it must pass the 90-day
   entry test again, from its own record.
-- **A mirror report follows the address and its cluster**, not the hotkey: binding a penalized address to a new
+- **A mirror report follows the address**, and the addresses its owner controls (hotkeys on the same coldkey, its
+  sub-accounts), not the hotkey; a transfer someone else sends never carries it: binding a penalized address to a new
   hotkey keeps the penalty.
 - **Hotkey swap on chain** (same UID and coldkey, new hotkey): the pay history, skill and penalties follow the new
   hotkey, the credit and qualification do not (the swap is recorded in `hotkey_swaps` and applied when the

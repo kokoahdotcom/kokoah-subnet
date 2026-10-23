@@ -37,7 +37,7 @@ from kokoah_subnet.mechanism.fills import assign_counterparties, builder_orders,
 from .agents import check_agents
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
-from .clusters import clusters, coldkey_edges
+from .clusters import clusters, coldkey_edges, penalty_reach
 from .hyperliquid import (
     MAINNET_INFO,
     HyperliquidInfo,
@@ -600,9 +600,8 @@ async def collect_and_score(
         if r.reported:
             until = inputs.day_index + params.mirror_zero_days
             store.put_penalty(r.address, until, day, r.hotkey, f"mirrored {r.mirrored_share:.0%}")
-            for other, cid in cluster_of.items():
-                if cid == cluster_of.get(r.address) and other != r.address:
-                    store.put_penalty(other, until, day, r.hotkey, f"cluster of {r.address}")
+            for other in sorted(penalty_reach(r.address, edges) - {r.address.lower()}):
+                store.put_penalty(other, until, day, r.hotkey, f"tied to {r.address}")
 
     # every fill, with why it did or did not count
     bound = set(addresses)

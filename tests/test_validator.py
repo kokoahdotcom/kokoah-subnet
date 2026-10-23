@@ -300,3 +300,17 @@ def test_states_before_a_rescore(tmp_path: Path) -> None:
         (19, 1.0),
     )
     assert s.states_before("2026-10-20") == {}
+
+
+def test_a_report_never_reaches_an_address_through_a_transfer_it_received() -> None:
+    """Miner A sends $1 to a competitor V, then gets reported: V is untouched. A's own sub-account and the address
+    of A's other hotkey on the same coldkey carry the report."""
+    from kokoah_subnet.validator.clusters import penalty_reach
+
+    edges = [
+        ("0xa", "0xv", "transfer"),  # A's $1 to the victim
+        ("0xa", "0xsub", "subaccount"),
+        ("0xa", "0xsame", "coldkey"),
+        ("0xv", "0xw", "coldkey"),  # the victim's own other address stays untouched too
+    ]
+    assert penalty_reach("0xA", edges) == {"0xa", "0xsub", "0xsame"}

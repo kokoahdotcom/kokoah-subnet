@@ -44,3 +44,16 @@ def coldkey_edges(address_of_hotkey: Mapping[str, str], coldkey_of_hotkey: Mappi
     for addrs in by_coldkey.values():
         edges.extend((addrs[0], other) for other in addrs[1:])
     return edges
+
+
+OWNER_LINKS = ("coldkey", "subaccount")  # links only the owner can create; anyone can send a transfer
+
+
+def penalty_reach(reported: str, edges: Iterable[tuple[str, str, str]]) -> set[str]:
+    """The addresses a mirror report reaches: the reported address and those tied to it by links only its owner can
+    create (hotkeys on one coldkey, a master and its sub-accounts). Transfers do not carry a report, because anyone
+    can send a transfer to anyone."""
+    owned = [(a, b) for a, b, kind in edges if kind in OWNER_LINKS]
+    of = clusters([reported], owned)
+    root = of[reported.lower()]
+    return {a for a, c in of.items() if c == root}
