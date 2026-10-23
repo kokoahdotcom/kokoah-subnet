@@ -104,29 +104,53 @@ def fetch_code(service: str, submission: str, bundle_key: str | None, http: http
     return plain, sha256_hex(plain)
 
 
-def close_to_agent(directories: list[Path]) -> list[str]:
-    """Make directories the agent must never reach root-only (the attestation socket's): the harness runs as root
-    and still reaches them, the agent's user cannot even look inside. Returns the ones that could not be closed."""
-    failed = []
-    for d in directories:
-        if not d.exists():
-            continue
-        try:
-            os.chmod(d, 0o700)
-        except OSError as exc:
-            failed.append(f"{d}: {exc}")
-            continue
-        if d.stat().st_mode & 0o077:
-            failed.append(f"{d}: still open")
-    return failed
+# What the agent must never reach: the launcher's folder, with the attestation socket (open to every user in
+# Confidential Space, and mounted read-only) and the launcher's default token. Only the harness asks it for tokens.
+HIDDEN_FROM_AGENT = [Path(LAUNCHER_SOCKET).parent]
+
+# Prints the directories it can still see into; run as the agent, in the agent's sandbox.
+_PROBE = (
+    "import os, sys\n"
+    "def seen(d):\n"
+    "    try:\n        return bool(os.listdir(d))\n"
+    "    except OSError:\n        return False\n"
+    "print('\\n'.join(d for d in sys.argv[1:] if seen(d)))\n"
+)
 
 
-def agent_command(memory_mb: int, uid: int | None, gid: int | None) -> list[str]:
+def agent_command(
+    memory_mb: int,
+    uid: int | None,
+    gid: int | None,
+    hide: list[str] | None = None,
+    program: list[str] | None = None,
+) -> list[str]:
     # the sandbox runs as a plain script (standard library only), so the agent's environment needs no harness code
     cmd = [sys.executable, str(Path(sandbox.__file__).resolve()), "--memory-mb", str(memory_mb)]
     if uid is not None:
         cmd += ["--uid", str(uid), "--gid", str(gid if gid is not None else uid)]
-    return [*cmd, "--", sys.executable, str(AGENT_HOME / "entry.py")]
+    for d in hide or []:
+        cmd += ["--hide", d]
+    return [*cmd, "--", *(program or [sys.executable, str(AGENT_HOME / "entry.py")])]
+
+
+def visible_to_agent(directories: list[str], uid: int | None, gid: int | None) -> list[str]:
+    """Runs a probe exactly as the agent will run (its user, its sandbox, the same hidden directories) and returns
+    the directories it can still see into. A sandbox that cannot start counts as seeing all of them."""
+    program = [sys.executable, "-I", "-c", _PROBE, *directories]
+    try:
+        out = subprocess.run(
+            agent_command(1024, uid, gid, directories, program),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": "/usr/bin:/bin"},
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"{d} (the sandbox did not start: {exc})" for d in directories]
+    if out.returncode != 0:
+        return [f"{d} (the sandbox failed: {out.stderr.strip()[-300:]})" for d in directories]
+    return [line for line in out.stdout.splitlines() if line]
 
 
 class AgentRunner:
@@ -244,10 +268,11 @@ def main() -> int:
             raise SystemExit("the agent user is missing from the image") from None
         uid = gid = None
     unpack(plain, AGENT_HOME)
-    if uid is not None:  # the agent never reaches the attestation socket (only the harness asks it for tokens)
-        failed = close_to_agent([Path(LAUNCHER_SOCKET).parent])
-        if failed:
-            raise SystemExit(f"cannot close the attestation socket to the agent: {failed}")
+    hidden = [str(d) for d in HIDDEN_FROM_AGENT if d.exists()]
+    if uid is not None and hidden:  # the agent never reaches the attestation socket (only the harness asks it)
+        seen = visible_to_agent(hidden, uid, gid)
+        if seen:
+            raise SystemExit(f"cannot hide the attestation socket from the agent: {seen}")
     if uid is not None and gid is not None:
         for p in [AGENT_HOME, *AGENT_HOME.rglob("*")]:
             os.chown(p, uid, gid)
@@ -285,7 +310,7 @@ def main() -> int:
         mainnet=env("KOKOAH_AGENT_NETWORK", "mainnet") != "testnet",
     )
     runner = AgentRunner(
-        agent_command(1024, uid, gid),
+        agent_command(1024, uid, gid, hidden),
         {
             "KOKOAH_AGENT_SOCKET": str(AGENT_SOCKET),
             "PYTHONPATH": str(AGENT_HOME),

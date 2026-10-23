@@ -2,8 +2,10 @@
 
     python -m kokoah_subnet.agent.sandbox [--uid N --gid N] [--memory-mb M] -- <command...>
 
-In order: drop to the agent's user and group (when started as root), set resource limits (no core dumps, memory,
-processes, open files), set `no_new_privs`, install a seccomp filter, and exec the command. The filter refuses
+In order: drop to the agent's user and group (when started as root), hide paths the agent must never reach (`--hide`:
+the agent gets its own view of the filesystem, in which each of them is an empty read-only directory), set resource
+limits (no core dumps, memory, processes, open files), set `no_new_privs`, install a seccomp filter, and exec the
+command. The filter refuses
 every network socket except Unix sockets (so the agent can reach the harness and nothing else, whatever its code
 does), io_uring (which can open sockets without the socket call) and reading or writing other processes' memory
 (ptrace, process_vm_readv/writev). Other system calls on a foreign or x32 ABI kill the process. The filter and
@@ -21,6 +23,7 @@ import resource
 import struct
 import sys
 
+PR_SET_DUMPABLE = 4
 PR_SET_NO_NEW_PRIVS = 38
 PR_SET_SECCOMP = 22
 SECCOMP_MODE_FILTER = 2
@@ -28,6 +31,8 @@ RET_ALLOW = 0x7FFF0000
 RET_KILL_PROCESS = 0x80000000
 RET_ERRNO = 0x00050000
 AF_UNIX = 1
+CLONE_NEWNS, CLONE_NEWUSER = 0x00020000, 0x10000000
+MS_RDONLY, MS_NOSUID, MS_NODEV, MS_NOEXEC, MS_REC, MS_PRIVATE = 1, 2, 4, 8, 0x4000, 1 << 18
 
 # BPF opcodes
 LD_W_ABS = 0x20
@@ -108,6 +113,38 @@ def drop_privileges(uid: int, gid: int) -> None:
         raise RuntimeError("could not drop to the agent user")
 
 
+def _write(path: str, text: str) -> None:
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def hide_paths(paths: list[str]) -> None:
+    """Give this process (and all it starts) its own view of the filesystem in which each path is an empty, read-only
+    directory. It works where the paths themselves cannot be changed (Confidential Space mounts the launcher's folder
+    read-only and its socket is open to every user). The view lives in a new user namespace that maps only the
+    current user, so nothing in it can act as root; the covering mounts come locked into any namespace the agent
+    makes itself, so they cannot be taken off to reach what is under them."""
+    if not paths:
+        return
+    uid, gid = os.geteuid(), os.getegid()
+    libc = ctypes.CDLL(None, use_errno=True)
+    # switching users made /proc/self root's; the agent's program is dumpable again after exec anyway (ptrace stays
+    # refused by the filter, core dumps by the limits)
+    if libc.prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl(PR_SET_DUMPABLE) failed")
+    if libc.unshare(CLONE_NEWUSER | CLONE_NEWNS) != 0:
+        raise OSError(ctypes.get_errno(), "could not give the agent its own view of the filesystem")
+    _write("/proc/self/setgroups", "deny")
+    _write("/proc/self/uid_map", f"{uid} {uid} 1")
+    _write("/proc/self/gid_map", f"{gid} {gid} 1")
+    if libc.mount(None, b"/", None, MS_REC | MS_PRIVATE, None) != 0:
+        raise OSError(ctypes.get_errno(), "could not make the agent's view private")
+    flags = MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC
+    for p in paths:
+        if libc.mount(b"tmpfs", os.fsencode(p), b"tmpfs", flags, b"size=4k,mode=0555") != 0:
+            raise OSError(ctypes.get_errno(), f"could not hide {p}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="kokoah-agent-sandbox")
     ap.add_argument("--uid", type=int)
@@ -115,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--memory-mb", type=int, default=None)
     ap.add_argument("--max-processes", type=int, default=256)
     ap.add_argument("--max-files", type=int, default=1024)
+    ap.add_argument("--hide", action="append", default=[], help="a directory the agent must never reach; repeatable")
     ap.add_argument("command", nargs=argparse.REMAINDER)
     args = ap.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -122,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("a command is required after --")
     if args.uid is not None:
         drop_privileges(args.uid, args.gid if args.gid is not None else args.uid)
+    hide_paths(args.hide)
     apply_limits(args.memory_mb, args.max_processes, args.max_files)
     install_filter()
     os.execvp(command[0], command)

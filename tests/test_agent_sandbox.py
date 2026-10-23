@@ -5,6 +5,7 @@ import platform
 import subprocess
 import sys
 import textwrap
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -86,49 +87,96 @@ def test_core_dumps_are_off(tmp_path: Path) -> None:
     assert out.stdout.strip() == "(0, 0)"
 
 
-@pytest.mark.skipif(os.geteuid() != 0, reason="switching to the agent's user needs root")
-def test_the_agent_user_cannot_reach_the_attestation_socket() -> None:
-    """The harness (root) asks the attestation socket for tokens; the agent's user must not. Closing the socket's
-    directory to everyone but root does it, whatever the socket file's own mode."""
+def _user_namespaces() -> bool:
+    return subprocess.run(["unshare", "-U", "-m", "true"], capture_output=True).returncode == 0
+
+
+needs_root_and_namespaces = pytest.mark.skipif(
+    os.geteuid() != 0 or not _user_namespaces(), reason="switching users needs root; the view needs user namespaces"
+)
+
+CONNECT = (
+    "import socket, sys\n"
+    "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+    "try:\n    s.connect(sys.argv[1]); print('connected')\n"
+    "except OSError as e:\n    print(type(e).__name__)\n"
+)
+# The agent makes its own namespaces and tries to take the covering mount off.
+UNCOVER = (
+    "import ctypes, os, sys\n"
+    "libc = ctypes.CDLL(None, use_errno=True)\n"
+    "uid, gid = os.geteuid(), os.getegid()\n"
+    "assert libc.unshare(0x10000000 | 0x00020000) == 0\n"
+    "open('/proc/self/setgroups', 'w').write('deny')\n"
+    "open('/proc/self/uid_map', 'w').write(f'0 {uid} 1')\n"
+    "open('/proc/self/gid_map', 'w').write(f'0 {gid} 1')\n"
+    "print('removed' if libc.umount2(sys.argv[1].encode(), 0) == 0 else 'locked', os.listdir(sys.argv[1]))\n"
+)
+
+
+@pytest.fixture
+def launcher() -> Iterator[Path]:
+    """A launcher folder as Confidential Space gives it: a socket open to every user, and a token anyone can read."""
     import shutil
     import socket
     import tempfile
 
-    from kokoah_subnet.agent.supervisor import close_to_agent
-
     base = Path(tempfile.mkdtemp(dir="/tmp"))
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         os.chmod(base, 0o755)
-        launcher = base / "container_launcher"
-        launcher.mkdir(mode=0o755)
-        sock = launcher / "teeserver.sock"
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(sock))
+        folder = base / "container_launcher"
+        folder.mkdir(mode=0o755)
+        server.bind(str(folder / "teeserver.sock"))
         server.listen(4)
-        os.chmod(sock, 0o777)
-        probe = base / "probe.py"
-        probe.write_text(
-            "import socket, sys\n"
-            "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
-            "try:\n    s.connect(sys.argv[1]); print('connected')\n"
-            "except PermissionError:\n    print('refused')\n"
-        )
-        os.chmod(probe, 0o644)
-
-        def as_agent() -> str:
-            out = subprocess.run(
-                [sys.executable, "-m", "kokoah_subnet.agent.sandbox", "--uid", "65534", "--gid", "65534", "--",
-                 "/usr/bin/python3", str(probe), str(sock)],
-                capture_output=True, text=True, timeout=60,
-            )  # fmt: skip
-            assert out.returncode == 0, out.stderr
-            return out.stdout.strip()
-
-        assert as_agent() == "connected"  # an open directory lets any user in
-        assert close_to_agent([launcher]) == []
-        assert as_agent() == "refused"
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as root_client:  # the harness still reaches it
-            root_client.connect(str(sock))
-        server.close()
+        os.chmod(folder / "teeserver.sock", 0o777)
+        (folder / "attestation_verifier_claims_token").write_text("token")
+        yield folder
     finally:
+        server.close()
         shutil.rmtree(base, ignore_errors=True)
+
+
+def as_agent(code: str, *args: str, hide: list[str] | None = None) -> str:
+    hidden = [a for d in hide or [] for a in ("--hide", d)]
+    out = subprocess.run(
+        [sys.executable, "-m", "kokoah_subnet.agent.sandbox", "--uid", "65534", "--gid", "65534", *hidden, "--",
+         "/usr/bin/python3", "-c", code, *args],
+        capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+@needs_root_and_namespaces
+def test_the_agent_cannot_reach_the_attestation_socket_though_its_folder_stays_as_it_is(launcher: Path) -> None:
+    """Confidential Space mounts the launcher's folder read-only with its socket open to every user, so nothing can be
+    changed there: the agent gets its own view of the filesystem in which the folder is empty."""
+    sock = str(launcher / "teeserver.sock")
+    assert as_agent(CONNECT, sock) == "connected"  # without the view, any user gets in
+    assert as_agent(CONNECT, sock, hide=[str(launcher)]) in {"FileNotFoundError", "PermissionError"}
+    assert as_agent("import os, sys; print(os.listdir(sys.argv[1]))", str(launcher), hide=[str(launcher)]) == "[]"
+    assert launcher.stat().st_mode & 0o777 == 0o755  # nothing about the folder itself was changed
+    import socket
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as root_client:  # the harness still reaches it
+        root_client.connect(sock)
+
+
+@needs_root_and_namespaces
+def test_the_agent_cannot_take_the_cover_off_from_namespaces_of_its_own(launcher: Path) -> None:
+    assert as_agent(UNCOVER, str(launcher), hide=[str(launcher)]) == "locked []"
+
+
+@needs_root_and_namespaces
+def test_the_harness_starts_the_agent_only_once_a_probe_sees_nothing(
+    launcher: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.agent import supervisor
+
+    monkeypatch.setattr(sys, "executable", "/usr/bin/python3")  # an interpreter the probe's user can run
+    assert supervisor.visible_to_agent([str(launcher)], 65534, 65534) == []
+    missing = str(launcher.parent / "missing")
+    assert supervisor.visible_to_agent([str(launcher), missing], 65534, 65534)  # the view failed: refuse
+    monkeypatch.setattr(sys, "executable", "/nonexistent/python")
+    assert supervisor.visible_to_agent([str(launcher)], 65534, 65534)  # the sandbox did not start: refuse
