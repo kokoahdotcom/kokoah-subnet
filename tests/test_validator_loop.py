@@ -29,6 +29,8 @@ LIVE: dict[str, float] = {}  # address -> live account value (default $25,000)
 STEP: dict[str, tuple[int, float]] = {}  # address -> (time ms, new value): the recorded value changes then
 PNL_DAY: dict[str, float] = {}  # address -> recorded profit over the scored day (default $1,000, spread evenly)
 LEDGER: dict[str, list[dict[str, Any]]] = {}  # address -> ledger records of the scored day
+EXPLORER_FAILS: set[str] = set()  # addresses whose explorer reads fail
+TX_LOOKUPS: list[str] = []  # every txDetails hash asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -119,6 +121,8 @@ def _csv(addr_a: str, addr_b: str) -> str:
 def _info_handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     t = body["type"]
+    if t == "userDetails" and body["user"].lower() in EXPLORER_FAILS:
+        return httpx.Response(500, json={"error": "down"})
     if t == "userDetails":
         user = body["user"].lower()
         txs = [
@@ -136,6 +140,7 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         ]
         return httpx.Response(200, json={"type": "userDetails", "txs": txs})
     if t == "txDetails":
+        TX_LOOKUPS.append(body["hash"])
         return httpx.Response(200, json={"type": "txDetails", "tx": {}})
     if t == "referral":
         return httpx.Response(200, json=dict(EARNED))
@@ -222,6 +227,8 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     STEP.clear()
     PNL_DAY.clear()
     LEDGER.clear()
+    EXPLORER_FAILS.clear()
+    TX_LOOKUPS.clear()
     PORTFOLIO_FAILS.clear()
     HISTORY.clear()
     OTHER_BUILDER.clear()
@@ -673,4 +680,66 @@ async def test_a_day_the_record_does_not_cover_has_no_return(tmp_path: Path) -> 
 
         stages = [r.stage for r in c.execute(S.errors.select()).all()]
     assert "daily return" in stages
+    await hl.close()
+
+
+def _taker_fills_after_midday(n: int) -> list[dict[str, Any]]:
+    """Tiny taker fills after the file's cut, each its own transaction, none of them a Kokoah order."""
+    return [
+        {
+            "time": DAY_MS + 15 * 3_600_000 + i * 1000,
+            "coin": "BTC",
+            "side": "B" if i % 2 == 0 else "A",
+            "px": "100000",
+            "sz": "0.0001",
+            "crossed": True,
+            "fee": "0.007",
+            "builderFee": "0.0025",
+            "tid": 50_000 + i,
+            "hash": f"0x{i:064x}",
+            "closedPnl": "0",
+        }
+        for i in range(n)
+    ]
+
+
+async def test_cheap_tiny_orders_cannot_flood_the_validator_with_lookups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "MAX_TX_LOOKUPS", 30)
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills() + _taker_fills_after_midday(300)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert len(TX_LOOKUPS) == 30  # the cap, not 300
+    assert {r.hotkey: r for r in result.records}[HK_A].pay_alpha > 0  # the day is scored
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        messages = [r.message for r in c.execute(S.errors.select()).all()]
+    assert any("beyond the daily lookup cap" in m for m in messages)
+    await hl.close()
+
+
+async def test_one_accounts_explorer_failure_affects_only_that_account_after_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import hyperliquid
+
+    async def instant(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    HISTORY[addr_b] = _taker_fills_after_midday(3)
+    EXPLORER_FAILS.add(addr_b)
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="unavailable"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].credited.fills == 22  # A's day is untouched: its four history fills confirmed as usual
+    assert records[HK_B].fees.fills == 10  # B keeps its file fills; its three unconfirmed later fills do not count
     await hl.close()

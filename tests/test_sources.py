@@ -124,3 +124,18 @@ def test_two_bound_traders_trading_each_other_after_midday_earn_nothing_from_it(
     res = score_day(DayInputs(day_index=3, price_usd=1.0, fills=fills, miners=miners, states=states), DEFAULT)
     for r in res.records:
         assert r.fees.fills == 0 and r.mirrored_share == pytest.approx(1.0) and r.pay_alpha == 0.0
+
+
+def test_an_order_id_another_order_also_used_proves_nothing() -> None:
+    """A Kokoah order with id X, then an order through another app (or none) reusing X: X confirms nothing, since a
+    fill with id X could come from either."""
+    x = "0x" + "77" * 16
+    kokoah = {"hash": "0x1", "action": {"type": "order", "orders": [{"c": x}], "builder": {"b": BUILDER, "f": 25}}}
+    other = {
+        "hash": "0x2",
+        "action": {"type": "order", "orders": [{"c": x}], "builder": {"b": "0x" + "99" * 20, "f": 25}},
+    }
+    plain = {"hash": "0x3", "action": {"type": "order", "orders": [{"c": x}]}}
+    assert builder_orders([kokoah], BUILDER)[0] == {x}
+    assert builder_orders([kokoah, other], BUILDER)[0] == set()
+    assert builder_orders([plain, kokoah], BUILDER)[0] == set()

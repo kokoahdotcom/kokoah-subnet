@@ -199,11 +199,13 @@ def confirm_builder(
 def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> tuple[set[str], set[str]]:
     """From an address's own transactions (the explorer's `userDetails`): the client order ids of orders it placed
     with `builder`, and the hashes of those order transactions. A client order id that was later modified is left
-    out (a modify carries no builder field)."""
+    out (a modify carries no builder field), and so is one that any order without `builder` also used: a reused id
+    proves nothing about which order a fill came from."""
     b = builder.lower()
     cloids: set[str] = set()
     hashes: set[str] = set()
     modified: set[str] = set()
+    elsewhere: set[str] = set()
     for tx in transactions:
         action = tx.get("action") or {}
         kind = action.get("type")
@@ -212,6 +214,8 @@ def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> t
         if kind == "order" and str((action.get("builder") or {}).get("b", "")).lower() == b:
             hashes.add(str(tx.get("hash", "")).lower())
             cloids.update(str(o["c"]).lower() for o in action.get("orders", []) if o.get("c"))
+        elif kind == "order":
+            elsewhere.update(str(o["c"]).lower() for o in action.get("orders", []) if o.get("c"))
         elif kind in ("modify", "batchModify"):
             mods = action.get("modifies") or [action]
             for m in mods:
@@ -220,7 +224,7 @@ def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> t
                     modified.add(str(order["c"]).lower())
                 if isinstance(m.get("oid"), str):
                     modified.add(str(m["oid"]).lower())
-    return cloids - modified, hashes
+    return cloids - modified - elsewhere, hashes
 
 
 def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: float) -> list[Fill]:

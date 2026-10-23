@@ -163,20 +163,26 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
     }
 
 
+MAX_TX_LOOKUPS = 200  # per address and day: taker fills beyond it are not confirmed one by one
+
+
 async def confirmed_builder_orders(
-    hl: HyperliquidInfo, user: str, builder: str, taker_hashes: set[str]
-) -> tuple[set[str], set[str]]:
+    hl: HyperliquidInfo, user: str, builder: str, taker_hashes: set[str], limit: int | None = None
+) -> tuple[set[str], set[str], int]:
     """The client order ids and transaction hashes of `user`'s orders that carried `builder`: from the address's
-    own transactions, and for taker fills not found there, from the transaction that placed and filled them."""
+    own transactions, and for taker fills not found there, from the transaction that placed and filled them, at most
+    `limit` (default MAX_TX_LOOKUPS) of those a day. Also returns how many were left unlooked-up."""
     details = await hl.explorer({"type": "userDetails", "user": user})
     cloids, hashes = builder_orders(details.get("txs", []) if isinstance(details, dict) else [], builder)
-    for h in sorted(taker_hashes - hashes):
+    pending = sorted(taker_hashes - hashes)
+    cap = MAX_TX_LOOKUPS if limit is None else limit
+    for h in pending[:cap]:
         tx = (await hl.explorer({"type": "txDetails", "hash": h})).get("tx") or {}
         if str(tx.get("user", "")).lower() == user.lower():
             more_cloids, more_hashes = builder_orders([tx], builder)
             cloids |= more_cloids
             hashes |= more_hashes
-    return cloids, hashes
+    return cloids, hashes, max(0, len(pending) - cap)
 
 
 async def builder_rewards(hl: HyperliquidInfo, builder: str) -> dict[str, float]:
@@ -407,24 +413,36 @@ async def collect_and_score(
                     store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
             log.info("backfilled %d days of account value for %s", len(history), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
-        # of the day); without it the day cannot be scored correctly, so a failed read fails the day (retried hourly)
+        # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
+        # fills beyond the file go unconfirmed, and every other address is scored as usual
+        past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
-            merged = merge_sources(own, public, params.builder_fee_rate)
-            candidates = [f for f in merged if f.source == "history"]
-            if candidates:
-                # the history does not name the builder: each candidate's order must be one the address signed
-                # with Kokoah's builder (its own transactions on the explorer)
-                takers = {f.hash for f in candidates if f.crossed and f.hash}
-                cloids, hashes = await confirmed_builder_orders(hl, address, builder, takers)
-                merged, refused = confirm_builder(merged, cloids, hashes)
-                if refused:
-                    store.put_error(
-                        day, hk, address, "builder", f"{len(refused)} history fills not confirmed as Kokoah orders"
-                    )
         except Exception as exc:
             store.put_error(day, hk, address, "fill history", str(exc))
-            raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
+            if not past_deadline:
+                raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
+            public = []
+        merged = merge_sources(own, public, params.builder_fee_rate)
+        candidates = [f for f in merged if f.source == "history"]
+        if candidates:
+            # the history does not name the builder: each candidate's order must be one the address signed with
+            # Kokoah's builder (its own transactions on the explorer)
+            takers = {f.hash for f in candidates if f.crossed and f.hash}
+            try:
+                cloids, hashes, skipped = await confirmed_builder_orders(hl, address, builder, takers)
+            except Exception as exc:
+                store.put_error(day, hk, address, "builder", f"orders unavailable: {exc}")
+                if not past_deadline:
+                    raise RuntimeError(f"orders of {address} unavailable: {exc}") from exc
+                cloids, hashes, skipped = set(), set(), 0
+            merged, refused = confirm_builder(merged, cloids, hashes)
+            if refused:
+                store.put_error(
+                    day, hk, address, "builder", f"{len(refused)} history fills not confirmed as Kokoah orders"
+                )
+            if skipped:
+                store.put_error(day, hk, address, "builder", f"{skipped} taker fills beyond the daily lookup cap")
         history_only = [f for f in merged if f.source == "history"]
         file_only = [f for f in merged if f.source == "file"]
         if file_only:
