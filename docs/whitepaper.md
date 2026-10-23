@@ -258,9 +258,9 @@ from the published source and get the same digest.
   machine stops, a new sealed machine started with the same secret proves it is genuine and gets the copy back, so
   the account carries on as an agent. The owner can also take the key out with a request signed by their own wallet;
   that is recorded publicly, and the account never earns the agent bonus again, since a person now holds its key.
-- **The agent runs in a sandbox.** The submitted code runs as a separate user, with no network at all. Its only way
-  out is a local channel to the harness, which offers orders, cancels and leverage changes, and read-only market and
-  account data.
+- **The agent runs in a sandbox.** The submitted code runs as a separate user, with no network at all, and cannot
+  ask the machine for its proofs. Its only way out is a local channel to the harness, which offers orders, cancels
+  and leverage changes, and read-only market and account data.
 - **Every order carries the Kokoah builder code.** The harness attaches it, marks the order as an agent's, and refuses
   prices far from the market. Withdrawals go only to the owner's own address, on a request signed by it.
 - **Private code stays private.** An agent is encrypted with a key only its author holds and decrypted only inside

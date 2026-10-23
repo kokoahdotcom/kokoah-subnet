@@ -394,9 +394,11 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   permission:** the hotkey's signature (made on the miner's computer, `agent authorize`) of the subnet, hotkey,
   master address, submission and time, at most 7 days old, used once, at most 50 kept copies per hotkey; the
   machine's attested store nonce covers the permission, so a copy can be filed under a hotkey only by its owner.
-- **Runs the miner's agent code in a sandbox**: a separate user, no new privileges, no core dumps, memory and
-  process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and other
-  processes' memory. The agent's only way out is the harness's Unix socket.
+- **Runs the miner's agent code in a sandbox**: a separate user, its own view of the filesystem in which the
+  launcher's folder (the attestation socket and the launcher's token) is empty, no new privileges, no core dumps,
+  memory and process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and
+  other processes' memory. The agent's only way out is the harness's Unix socket, and it cannot ask the machine for
+  an attestation token; the harness starts it only after a probe, run exactly as the agent, sees nothing there.
 - **Offers the agent a narrow interface**: orders (limit and trigger), cancels, leverage, isolated margin and a
   scheduled cancel; read-only exchange data, account queries answered for this account only. Kokoah's builder code
   is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`); prices more than 5%
