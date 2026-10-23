@@ -10,13 +10,22 @@ For every bound hotkey whose commitment carries an agent field, the validator:
 5. checks that the account's key was never released to the miner (the owner's public released list): a released
    account is traded by a person from then on and never counts as an agent again, whatever its machine says.
 Only an account that passes all four that day gets the agent bonus. Nothing here trusts the operator or the miner.
+
+The miner chooses the endpoint, so every check is bounded: only public addresses are contacted (a host name must
+resolve to public addresses only, and the connection goes to the address checked), redirects are not followed, the
+answer is read up to a size cap within a deadline, every check runs in its own error boundary, and the batch has an
+overall deadline. A bad machine costs only its own account's bonus.
 """
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import logging
+import re
 import secrets
+import socket
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -24,9 +33,75 @@ from typing import Any
 import httpx
 
 from kokoah_subnet.agent.attest import AttestationError, KeySource, binding_digest, verify_token
-from kokoah_subnet.binding import Binding
+from kokoah_subnet.binding import AgentRef, Binding
 
 log = logging.getLogger("kokoah_subnet.validator.agents")
+
+ANSWER_TIMEOUT_S = 30.0  # the whole answer, connection included
+MAX_ANSWER_BYTES = 64 * 1024
+BATCH_TIMEOUT_S = 180.0  # every agent check of the day together
+CONCURRENCY = 16
+_HOST_NAME = re.compile(r"^(?=.{1,51}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$")
+
+
+class EndpointRefused(Exception):
+    """An agent endpoint the validator does not contact or read."""
+
+
+def address_allowed(ip: str) -> bool:
+    """Only public unicast addresses: never loopback, private, link-local, reserved or multicast ones."""
+    address = ipaddress.ip_address(ip)
+    return address.is_global and not address.is_multicast
+
+
+async def resolve_host(host: str) -> list[str]:
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return sorted({str(info[4][0]) for info in infos})
+
+
+async def public_address(host: str) -> str:
+    """The address to connect to: the host itself when it is an IP address, else what it resolves to; every
+    address must be public."""
+    try:
+        candidates = [str(ipaddress.ip_address(host))]
+    except ValueError:
+        if not _HOST_NAME.match(host.lower()):
+            raise EndpointRefused("not an IP address or host name") from None
+        candidates = await resolve_host(host)
+        if not candidates:
+            raise EndpointRefused("the host name does not resolve") from None
+    if not all(address_allowed(c) for c in candidates):
+        raise EndpointRefused("not a public address")
+    return candidates[0]
+
+
+async def fetch_answer(http: httpx.AsyncClient, agent: AgentRef, challenge: str) -> dict[str, Any]:
+    """The machine's answer to a challenge: a JSON object of at most MAX_ANSWER_BYTES, read within ANSWER_TIMEOUT_S."""
+    address = await public_address(agent.host)
+    host = f"[{address}]" if ":" in address else address
+    headers = {} if address == agent.host else {"Host": f"{agent.host}:{agent.port}"}
+
+    async def read() -> bytes:
+        async with http.stream(
+            "GET",
+            f"http://{host}:{agent.port}/attestation",
+            params={"challenge": challenge},
+            headers=headers,
+            timeout=10.0,
+            follow_redirects=False,
+        ) as r:
+            r.raise_for_status()
+            body = bytearray()
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > MAX_ANSWER_BYTES:
+                    raise EndpointRefused("answer too large")
+            return bytes(body)
+
+    answer = json.loads(await asyncio.wait_for(read(), ANSWER_TIMEOUT_S))
+    if not isinstance(answer, dict):
+        raise ValueError("the answer is not a JSON object")
+    return answer
 
 
 @dataclass(frozen=True)
@@ -54,6 +129,25 @@ async def check_agent(
     http: httpx.AsyncClient,
     extra_agents: Any,
 ) -> AgentCheck:
+    """One account's check; whatever its machine does, it ends in a result for that account alone."""
+    agent = binding.agent
+    if agent is None:
+        raise ValueError("not an agent binding")
+    try:
+        return await _check_agent(hotkey, binding, netuid, keys, images, http, extra_agents)
+    except Exception as exc:  # noqa: BLE001 - a bad answer costs this account's bonus, nothing else
+        return AgentCheck(hotkey, binding.address, agent.code_sha256, agent.url, False, f"bad answer: {exc!r}"[:160])
+
+
+async def _check_agent(
+    hotkey: str,
+    binding: Binding,
+    netuid: int,
+    keys: KeySource,
+    images: Iterable[str],
+    http: httpx.AsyncClient,
+    extra_agents: Any,
+) -> AgentCheck:
     agent = binding.agent
     if agent is None:
         raise ValueError("not an agent binding")
@@ -63,10 +157,12 @@ async def check_agent(
 
     challenge = secrets.token_hex(32)
     try:
-        r = await http.get(f"{agent.url}/attestation", params={"challenge": challenge}, timeout=20)
-        r.raise_for_status()
-        answer = r.json()
-    except (httpx.HTTPError, ValueError) as exc:
+        answer = await fetch_answer(http, agent, challenge)
+    except TimeoutError:
+        return fail("machine too slow to answer")
+    except EndpointRefused as exc:
+        return fail(f"endpoint refused: {exc}")
+    except (httpx.HTTPError, ValueError, OSError) as exc:
         return fail(f"machine unreachable: {str(exc)[:120]}")
     if str(answer.get("address", "")).lower() != binding.address:
         return fail("the machine speaks for another account")
@@ -149,7 +245,21 @@ async def check_agents(
 
         keys = await asyncio.to_thread(google_keys)
     approved = list(images)
-    checked = await asyncio.gather(
-        *(check_agent(hk, b, netuid, keys, approved, http, extra_agents) for hk, b in sorted(agents.items()))
-    )
+    gate = asyncio.Semaphore(CONCURRENCY)
+
+    async def bounded(hk: str, b: Binding) -> AgentCheck:
+        async with gate:
+            return await check_agent(hk, b, netuid, keys, approved, http, extra_agents)
+
+    tasks = {hk: asyncio.create_task(bounded(hk, b)) for hk, b in sorted(agents.items())}
+    done, pending = await asyncio.wait(tasks.values(), timeout=BATCH_TIMEOUT_S)
+    for task in pending:
+        task.cancel()
+    checked = []
+    for hk, task in tasks.items():
+        b = agents[hk]
+        if task in done and not task.cancelled() and task.exception() is None:
+            checked.append(task.result())
+        elif b.agent is not None:
+            checked.append(AgentCheck(hk, b.address, b.agent.code_sha256, b.agent.url, False, "check timed out"))
     return sorted([*out, *checked], key=lambda c: c.hotkey)
