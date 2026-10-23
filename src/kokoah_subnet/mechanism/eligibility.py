@@ -83,6 +83,49 @@ class EquityAverage:
     note: str = ""
 
 
+def value_at(points: Iterable[tuple[int, float]], t: int) -> float | None:
+    """The recorded series at time `t`, on the straight line between the points around it; None unless there is a
+    recorded point at or before `t` and one at or after it."""
+    pts = sorted({int(a): float(b) for a, b in points}.items())
+    before = [p for p in pts if p[0] <= t]
+    after = [p for p in pts if p[0] >= t]
+    if not before or not after:
+        return None
+    a, b = before[-1], after[0]
+    return b[1] if b[0] == a[0] else a[1] + (b[1] - a[1]) * (t - a[0]) / (b[0] - a[0])
+
+
+@dataclass(frozen=True)
+class DayChange:
+    """A day from the exchange's own record: account value at both ends and the profit in between."""
+
+    value_start: float | None
+    value_end: float | None
+    profit: float | None
+    note: str = ""
+
+    @property
+    def known(self) -> bool:
+        return self.value_start is not None and self.value_end is not None and self.profit is not None
+
+
+def day_change(
+    values: Iterable[tuple[int, float]], profits: Iterable[tuple[int, float]], start_ms: int, end_ms: int
+) -> DayChange:
+    """The day's account value at its start and end and the exchange's recorded profit over it, each read on the
+    straight line between recorded points. Every validator reads the same recorded points, so the result does not
+    depend on when it scores. Money moved in or out (deposits, withdrawals, transfers, vault moves) changes the
+    value but not the profit, so it never counts as a return."""
+    vals, pnls = list(values), list(profits)
+    v0, v1 = value_at(vals, start_ms), value_at(vals, end_ms)
+    p0, p1 = value_at(pnls, start_ms), value_at(pnls, end_ms)
+    if v0 is None or p0 is None:
+        return DayChange(None, v1, None, "no recorded point at the start of the day")
+    if v1 is None or p1 is None:
+        return DayChange(v0, None, None, "no recorded point after the end of the day yet")
+    return DayChange(v0, v1, p1 - p0)
+
+
 def daily_average_equity(
     points: Iterable[tuple[int, float]],
     start_ms: int,

@@ -25,6 +25,10 @@ HISTORY: dict[str, list[dict[str, Any]]] = {}  # address -> extra fills in its o
 OTHER_BUILDER: set[str] = set()  # addresses whose history-only orders paid another builder
 EARNED = {"builderRewards": "100000"}
 ACCOUNTS: dict[str, Any] = {}  # the accounts of the latest setup (their keys sign the bindings)
+LIVE: dict[str, float] = {}  # address -> live account value (default $25,000)
+STEP: dict[str, tuple[int, float]] = {}  # address -> (time ms, new value): the recorded value changes then
+PNL_DAY: dict[str, float] = {}  # address -> recorded profit over the scored day (default $1,000, spread evenly)
+LEDGER: dict[str, list[dict[str, Any]]] = {}  # address -> ledger records of the scored day
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -161,12 +165,12 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
-                "marginSummary": {"accountValue": "25000"},
+                "marginSummary": {"accountValue": str(LIVE.get(body["user"].lower(), 25000.0))},
                 "assetPositions": [{"position": {"coin": "BTC", "szi": "0.5", "positionValue": "50000"}}],
             },
         )
     if t == "userNonFundingLedgerUpdates":
-        return httpx.Response(200, json=[])
+        return httpx.Response(200, json=LEDGER.get(body["user"].lower(), []))
     if t == "userFees":
         return httpx.Response(200, json={"userCrossRate": "0.00045", "userAddRate": "0.00015"})
     if t == "metaAndAssetCtxs":
@@ -182,15 +186,30 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         if user in PORTFOLIO_FAILS:
             return httpx.Response(500, json={"error": "down"})
         hist = {"accountValueHistory": [[DAY_MS - 86_400_000, "24000"]], "pnlHistory": [[DAY_MS - 86_400_000, "0"]]}
-        value = str(EQUITY.get(user, 25_000.0))
+        base = EQUITY.get(user, 25_000.0)
+        step = STEP.get(user)
+        day_pnl = PNL_DAY.get(user, 1_000.0)
+
+        def value_at(ts: int) -> str:
+            return str(step[1] if step and ts >= step[0] else base)
+
+        def pnl_at(ts: int) -> str:
+            return str(day_pnl * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000)))
+
         # the 7-day window: a made-up point at the far edge, recorded points every two hours, the live point last
-        week = [[DAY_MS - 7 * 86_400_000 + 123, "1"]]
-        week += [[DAY_MS + h * 7_200_000, value] for h in range(-24, 18)]
+        times = [DAY_MS + h * 7_200_000 for h in range(-24, 18)]
+        week = [[DAY_MS - 7 * 86_400_000 + 123, "1"]] + [[ts, value_at(ts)] for ts in times]
         week += [[DAY_MS + 86_400_000 + 3_600_000 + 456, "999999"]]
+        week_pnl = [[DAY_MS - 7 * 86_400_000 + 123, "0"]] + [[ts, pnl_at(ts)] for ts in times]
+        week_pnl += [[DAY_MS + 86_400_000 + 3_600_000 + 456, "777"]]
         all_time = {"accountValueHistory": [[DAY_MS - 90 * 86_400_000, "1000"]], "pnlHistory": []}
         return httpx.Response(
             200,
-            json=[["perpMonth", hist], ["perpWeek", {"accountValueHistory": week}], ["perpAllTime", all_time]],
+            json=[
+                ["perpMonth", hist],
+                ["perpWeek", {"accountValueHistory": week, "pnlHistory": week_pnl}],
+                ["perpAllTime", all_time],
+            ],
         )
     if t == "subAccounts":
         return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
@@ -199,6 +218,10 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 
 def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _FakeChain, str, str]:
     EQUITY.clear()
+    LIVE.clear()
+    STEP.clear()
+    PNL_DAY.clear()
+    LEDGER.clear()
     PORTFOLIO_FAILS.clear()
     HISTORY.clear()
     OTHER_BUILDER.clear()
@@ -572,4 +595,82 @@ async def test_a_sealed_machine_agent_is_verified_through_the_whole_pass(tmp_pat
         released.append({"address": addr_a, "released_at": 1.0})  # the miner takes the key out
         again = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_keys=keys, agent_http=http)
         assert not {r.hotkey: r for r in again.records}[HK_A].agent_verified
+    await hl.close()
+
+
+async def test_money_back_from_a_vault_is_not_trading_profit(tmp_path: Path) -> None:
+    """B's account value jumps by $5,000 at noon: a vault withdrawal (whose record names the amount as
+    `netWithdrawnUsd`), while the exchange's recorded profit stays flat. The day's return is the recorded profit
+    over the account value, not the jump."""
+    cfg, store, hl, chain, _, addr_b = _setup(tmp_path)
+    noon = DAY_MS + 12 * 3_600_000
+    STEP[addr_b] = (noon, 30_000.0)
+    LIVE[addr_b] = 30_000.0
+    PNL_DAY[addr_b] = 2_000.0  # the day's recorded profit: the off-market fill's gain, which the return leaves out
+    LEDGER[addr_b] = [
+        {
+            "time": noon,
+            "hash": "0x" + "ab" * 32,
+            "delta": {
+                "type": "vaultWithdraw",
+                "vault": "0x" + "cd" * 20,
+                "user": addr_b,
+                "requestedUsd": "5000.0",
+                "commission": "0.0",
+                "closingCost": "0.0",
+                "basis": "5000.0",
+                "netWithdrawnUsd": "5000.0",
+            },
+        },
+    ]
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.dated_returns(addr_b, 5) == {DAY: pytest.approx(0.0)}
+    await hl.close()
+
+
+async def test_the_return_does_not_depend_on_when_a_validator_scores(tmp_path: Path) -> None:
+    """Two validators score the same day at different times, with different live account values: the return is
+    read from the recorded history at the day's edges, so both get the same."""
+    results = []
+    for i, live in enumerate((25_000.0, 31_000.0)):
+        (tmp_path / f"v{i}").mkdir()
+        cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / f"v{i}")
+        LIVE[addr_a] = live
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        results.append(store.dated_returns(addr_a, 5)[DAY])
+        await hl.close()
+    assert results[0] == pytest.approx(results[1])
+
+
+async def test_a_day_the_record_does_not_cover_has_no_return(tmp_path: Path) -> None:
+    """Without recorded points around the end of the day, the day is waited for until the file deadline (the
+    record catches up within hours), then scored without a return: it is never guessed from a live value."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    STEP[addr_a] = (DAY_MS + 22 * 3_600_000, 25_000.0)
+    end = DAY_MS + 86_400_000
+    import test_validator_loop as me
+
+    original = me._info_handler
+
+    def no_late_points(request: httpx.Request) -> httpx.Response:
+        response = original(request)
+        if json.loads(request.content)["type"] == "portfolio":
+            windows = response.json()
+            for name, w in windows:
+                if name == "perpWeek":
+                    for key in ("accountValueHistory", "pnlHistory"):
+                        w[key] = [p for p in w[key] if p[0] < end - 3_600_000] + [w[key][-1]]
+            return httpx.Response(200, json=windows)
+        return response
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(no_late_points))
+    with pytest.raises(RuntimeError, match="does not reach the end"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    assert DAY not in store.dated_returns(addr_a, 5)
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        stages = [r.stage for r in c.execute(S.errors.select()).all()]
+    assert "daily return" in stages
     await hl.close()

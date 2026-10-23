@@ -241,6 +241,7 @@ equity = Table(
     Column("value", Float, nullable=False),
     Column("flows", Float, nullable=False),
     Column("offmarket_pnl", Float),  # money moved in through off-market fills that day (removed from the return)
+    Column("return_known", Boolean),  # false: the exchange's record did not cover the day, so it has no return
     Column("fetched_at", DateTime(timezone=True)),
     Column("raw", JSON),  # the clearinghouse margin summary
 )

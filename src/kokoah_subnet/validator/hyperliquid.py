@@ -212,28 +212,40 @@ async def positions_notional(client: HyperliquidInfo, user: str) -> dict[str, fl
     return out
 
 
+def ledger_amount(user: str, delta: Mapping[str, Any]) -> float:
+    """The USD a ledger record moves into (+) or out of (-) the address's perps account; 0 for records that do not
+    touch it (spot-only moves, staking). Vault withdrawals name the amount `netWithdrawnUsd`."""
+    me = user.lower()
+    kind = delta.get("type")
+
+    def num(key: str) -> float:
+        return float(delta.get(key, 0.0) or 0.0)
+
+    if kind == "deposit":
+        return num("usdc")
+    if kind == "withdraw":
+        return -num("usdc")
+    if kind in ("accountClassTransfer", "internalTransfer", "subAccountTransfer"):
+        inbound = delta.get("toPerp", True) and str(delta.get("destination", me)).lower() == me
+        return num("usdc") if inbound else -num("usdc")
+    if kind in ("vaultDeposit", "vaultCreate"):
+        return -num("usdc")
+    if kind == "vaultWithdraw":
+        return num("netWithdrawnUsd")
+    if kind == "vaultDistribution":
+        return num("usdc")
+    if kind == "send" and str(delta.get("token", "")).upper().startswith("USDC"):
+        amount = num("usdcValue") or num("amount")
+        received = str(delta.get("destination", "")).lower() == me and delta.get("destinationDex", "") == ""
+        sent = str(delta.get("user", "")).lower() == me and delta.get("sourceDex", "") == ""
+        return (amount if received else 0.0) - (amount if sent else 0.0)
+    return 0.0
+
+
 def flows_from_updates(user: str, updates: list[dict[str, Any]]) -> float:
-    """Deposits minus withdrawals (and account transfers in minus out), USD, from raw ledger records."""
-    total = 0.0
-    for u in updates:
-        delta = u.get("delta", {})
-        kind = delta.get("type")
-        if kind == "deposit":
-            total += float(delta.get("usdc", 0.0))
-        elif kind == "withdraw":
-            total -= float(delta.get("usdc", 0.0))
-        elif kind in ("accountClassTransfer", "internalTransfer", "subAccountTransfer"):
-            amount = float(delta.get("usdc", 0.0))
-            total += (
-                amount
-                if delta.get("toPerp", True) and delta.get("destination", user).lower() == user.lower()
-                else -amount
-            )
-        elif kind == "vaultDeposit":  # money moved into a vault is not a loss
-            total -= float(delta.get("usdc", 0.0) or 0.0)
-        elif kind == "vaultWithdraw":  # and money coming back is not a gain
-            total += float(delta.get("usdc", 0.0) or 0.0)
-    return total
+    """Money moved into minus out of the perps account, USD, from raw ledger records (for the record; the daily
+    return uses the exchange's own recorded profit, which needs no ledger reading)."""
+    return sum(ledger_amount(user, u.get("delta", {})) for u in updates)
 
 
 def positions_from_state(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -329,7 +341,15 @@ def _window(windows: list[Any], name: str) -> Mapping[str, Any] | None:
     return None
 
 
-def portfolio_points(windows: list[Any], name: str, edge_days: float = 6.0) -> list[tuple[int, float]]:
+def portfolio_pnl_points(windows: list[Any], name: str, edge_days: float = 6.0) -> list[tuple[int, float]]:
+    """The recorded (time ms, cumulative profit) points of one portfolio window, with the same edge rules as the
+    value points: the exchange's own profit, which leaves out deposits, withdrawals, transfers and vault moves."""
+    return portfolio_points(windows, name, edge_days, key="pnlHistory")
+
+
+def portfolio_points(
+    windows: list[Any], name: str, edge_days: float = 6.0, key: str = "accountValueHistory"
+) -> list[tuple[int, float]]:
     """The recorded (time ms, account value) points of one portfolio window. The window's last point is the live
     value at the moment of the request, and a point at the window's far edge can be made up for the window's
     start; both differ from one request to the next, so both are dropped and only recorded history is returned
@@ -338,7 +358,7 @@ def portfolio_points(windows: list[Any], name: str, edge_days: float = 6.0) -> l
     w = _window(windows, name)
     if not w:
         return []
-    pts = [(int(t), float(v)) for t, v in w.get("accountValueHistory", [])][:-1]
+    pts = [(int(t), float(v)) for t, v in w.get(key, [])][:-1]
     if len(pts) > 1 and pts[-1][0] - pts[0][0] > edge_days * 86_400_000:
         pts = pts[1:]
     return pts

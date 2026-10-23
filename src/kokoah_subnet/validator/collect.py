@@ -30,7 +30,7 @@ from kokoah_subnet.mechanism import (
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
-from kokoah_subnet.mechanism.eligibility import daily_average_equity, fresh_identity
+from kokoah_subnet.mechanism.eligibility import daily_average_equity, day_change, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 from kokoah_subnet.mechanism.fills import assign_counterparties, builder_orders, confirm_builder, merge_sources
 
@@ -43,11 +43,12 @@ from .hyperliquid import (
     HyperliquidInfo,
     daily_equity_from_portfolio,
     day_bounds_ms,
-    flows_from_updates,
+    ledger_amount,
     mark_by_minute,
     mean_close,
     off_market_transfer,
     portfolio_origin,
+    portfolio_pnl_points,
     portfolio_points,
     positions_from_state,
     sub_accounts,
@@ -383,6 +384,9 @@ async def collect_and_score(
             store.put_error(day, hk, address, "portfolio", str(exc))
             raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
         store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
+        store.put_equity_points(
+            address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
+        )
         origin = portfolio_origin(windows, params.equity_origin_window)
         avg = daily_average_equity(
             store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
@@ -454,17 +458,39 @@ async def collect_and_score(
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
         fills_by_address[address] = marked
         rates: tuple[float, float] | None = None
+        # the day's return from the exchange's own record, the same for every validator whenever it scores; the end
+        # of the day is recorded within hours, so until the file deadline a missing end point is waited for
+        change = day_change(
+            store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+            store.equity_points(address, params.equity_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+            start_ms,
+            end_ms,
+        )
+        if change.value_start is not None and change.value_end is None:
+            if clock < end_ms / 1000 + params.file_deadline_hours * 3600:
+                raise RuntimeError(f"the recorded history of {address} does not reach the end of {day} yet")
         try:
             state = await hl.account_state(address)
-            equity = float(state["marginSummary"]["accountValue"])
+            live = float(state["marginSummary"]["accountValue"])
             try:
                 updates = await hl.ledger_updates(address, start_ms, end_ms)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - the ledger is kept for the record; the return does not use it
                 updates = []
                 errors[hk] = f"ledger: {str(exc)[:160]}"
                 store.put_error(day, hk, address, "ledger", str(exc))
-            flows = flows_from_updates(address, updates)
-            store.put_equity(address, day, equity, flows, raw=state.get("marginSummary"), offmarket_pnl=offmarket)
+            if change.known and change.value_end is not None and change.profit is not None:
+                # the return is the exchange's recorded profit; any other change in value is money moved
+                previous = store.equity_value(address, store.day_before(day))
+                base = previous if previous is not None else change.value_start or 0.0
+                flows = (change.value_end - base) - change.profit
+                store.put_equity(
+                    address, day, change.value_end, flows, raw=state.get("marginSummary"), offmarket_pnl=offmarket
+                )
+            else:
+                store.put_equity(
+                    address, day, live, 0.0, raw=state.get("marginSummary"), offmarket_pnl=offmarket, known=False
+                )
+                store.put_error(day, hk, address, "daily return", change.note)
             store.put_ledger_updates(
                 address,
                 [
@@ -472,7 +498,7 @@ async def collect_and_score(
                         "time_ms": int(u.get("time", 0)),
                         "hash": u.get("hash"),
                         "type": (u.get("delta") or {}).get("type"),
-                        "usdc": float((u.get("delta") or {}).get("usdc", 0.0) or 0.0),
+                        "usdc": ledger_amount(address, u.get("delta") or {}),
                         "raw": u,
                     }
                     for u in updates

@@ -265,7 +265,7 @@ def test_marks_and_off_market_transfers() -> None:
     # vault moves are flows, not profit or loss
     updates = [
         {"delta": {"type": "vaultDeposit", "usdc": "500"}},
-        {"delta": {"type": "vaultWithdraw", "usdc": "200"}},
+        {"delta": {"type": "vaultWithdraw", "requestedUsd": "200", "netWithdrawnUsd": "200"}},  # the real format
         {"delta": {"type": "deposit", "usdc": "1000"}},
     ]
     assert flows_from_updates("0xa", updates) == pytest.approx(700.0)

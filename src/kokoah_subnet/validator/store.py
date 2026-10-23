@@ -77,8 +77,16 @@ class Store:
     # ----- equity, ledger, returns ------------------------------------------------------------------------
 
     def put_equity(
-        self, address: str, day: str, value: float, flows: float, raw: Any = None, offmarket_pnl: float = 0.0
+        self,
+        address: str,
+        day: str,
+        value: float,
+        flows: float,
+        raw: Any = None,
+        offmarket_pnl: float = 0.0,
+        known: bool = True,
     ) -> None:
+        """One day's account value and money moved; `known` false records a day without a return."""
         a = address.lower()
         with self._engine.begin() as c:
             c.execute(delete(S.equity).where(S.equity.c.address == a, S.equity.c.day == day))
@@ -89,6 +97,7 @@ class Store:
                     value=float(value),
                     flows=float(flows),
                     offmarket_pnl=float(offmarket_pnl),
+                    return_known=bool(known),
                     fetched_at=_now(),
                     raw=raw,
                 )
@@ -218,13 +227,42 @@ class Store:
         return float(total or 0.0)
 
     def dated_returns(self, address: str, days: int) -> dict[str, float]:
-        """Daily returns by day over consecutive stored days (the same series as `returns`)."""
-        series = self.equity_series(address, days + 1)
+        """Daily returns by day over consecutive stored days whose return is known (the same series as `returns`)."""
+        series = self._equity_rows(address, days + 1)
         out: dict[str, float] = {}
-        for (d0, e0, _), (d1, e1, f1) in zip(series, series[1:], strict=False):
-            if e0 > 0 and _next_day(d0) == d1:
+        for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
+            if k0 and k1 and e0 > 0 and _next_day(d0) == d1:
                 out[d1] = (e1 - e0 - f1) / e0
         return out
+
+    def _equity_rows(self, address: str, days: int) -> list[tuple[str, float, float, bool]]:
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(
+                    S.equity.c.day,
+                    S.equity.c.value,
+                    S.equity.c.flows,
+                    S.equity.c.offmarket_pnl,
+                    S.equity.c.return_known,
+                )
+                .where(S.equity.c.address == address.lower())
+                .order_by(S.equity.c.day.desc())
+                .limit(days)
+            ).all()
+        return [(str(d), float(v), float(f) + float(o or 0.0), k is not False) for d, v, f, o, k in reversed(rows)]
+
+    def equity_value(self, address: str, day: str) -> float | None:
+        """The stored account value of one day (None when the day has no row)."""
+        with self._engine.connect() as c:
+            v = c.execute(
+                select(S.equity.c.value).where(S.equity.c.address == address.lower(), S.equity.c.day == day)
+            ).scalar()
+        return float(v) if v is not None else None
+
+    @staticmethod
+    def day_before(day: str) -> str:
+        d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) - timedelta(days=1)
+        return d.strftime("%Y-%m-%d")
 
     def equity_series(self, address: str, days: int) -> list[tuple[str, float, float]]:
         """Up to `days` most recent (day, value, flows + off-market transfers), oldest first."""
@@ -240,13 +278,7 @@ class Store:
     def returns(self, address: str, days: int) -> list[float]:
         """Daily returns over consecutive stored days, oldest first, with deposits, withdrawals and money moved in
         through off-market fills removed."""
-        series = self.equity_series(address, days + 1)
-        out: list[float] = []
-        for (d0, v0, _), (d1, v1, f1) in zip(series, series[1:], strict=False):
-            if _next_day(d0) != d1 or v0 <= 0:
-                continue
-            out.append((v1 - v0 - f1) / v0)
-        return out
+        return list(self.dated_returns(address, days).values())
 
     def mean_equity(self, address: str, days: int) -> float:
         series = self.equity_series(address, days)

@@ -90,6 +90,7 @@ STEPS: list[tuple[int, str, Step]] = [
             "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS skill_pool_reason varchar(64)"
         ),
     ),
+    (9, "equity.return_known", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS return_known boolean")),
 ]
 
 
