@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.0)
+# Incentive mechanism in plain words (v6.1)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -34,8 +34,8 @@ The whole miner emission is paid out every day, in two parts:
    running figure). Twice the fees, twice the share. Splitting an account in two changes nothing.
 2. **20% for proven skill.** Shared only among miners whose daily returns pass a strict test over the last 90 days
    (a 95% confidence that the edge is real). Inside it, the share grows with the skill score above a luck floor and
-   with the miner's Kokoah volume over 30 days, up to $1 million. Verified agents get 10% more. Accounts that trade
-   almost exactly alike share one share, so copies and split accounts gain nothing. On a day nobody passes, this
+   with the miner's Kokoah volume over 30 days, up to $1 million. Verified agents get 10% more. Among accounts that
+   trade almost exactly alike, only the one whose trades come first is paid, so copies and split accounts gain nothing. On a day nobody passes, this
    part joins the activity part.
 
 Nothing is capped and nothing is burned (only a day with nobody to pay would go to the burn hotkey).

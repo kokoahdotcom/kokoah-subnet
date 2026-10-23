@@ -163,7 +163,8 @@ earns nothing extra: the reward is proportional to fees.
   average account value of at least $500.
 - **Weight.** Skill above a luck floor, multiplied by participation: full participation at $1 million of eligible
   Kokoah volume over 30 days, less in proportion below it.
-- **Copies.** Accounts whose daily returns correlate above 0.9 over at least 30 days share one weight.
+- **Copies.** Among accounts whose daily returns correlate above 0.9 over at least 30 days, only the one whose
+  trades come first keeps its weight; copying another miner earns nothing.
 - **Agents.** A verified trading agent earns 10% more skill weight (section 10).
 
 If nobody qualifies for the skill reward on a day, the volume reward takes the whole emission.

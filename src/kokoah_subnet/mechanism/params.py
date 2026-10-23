@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "6.0"
+SPEC_VERSION = "6.1"
 
 
 @dataclass(frozen=True)

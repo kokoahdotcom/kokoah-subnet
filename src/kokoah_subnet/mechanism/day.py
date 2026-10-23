@@ -28,7 +28,15 @@ from .gates import active_days, passes_gates, round_trips
 from .params import Params
 from .payout import Allocation, allocate, weights
 from .skill import SkillParts, skill_factor, skill_raw
-from .skillpool import adjusted_skill, apply_copy_groups, copy_groups, entry_psr, skill_weight, volume_factor
+from .skillpool import (
+    adjusted_skill,
+    apply_copy_groups,
+    copy_groups,
+    copy_leader,
+    entry_psr,
+    skill_weight,
+    volume_factor,
+)
 from .state import MinerState, advance
 
 
@@ -244,7 +252,10 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
 
     groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
     group_of = {k: tuple(g) for g in groups for k in g}
-    skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups)
+    fills_of = {w.m.hotkey: bound_fills.get(w.m.address, []) for w in work}
+    record_start = {w.m.hotkey: min(w.m.dated_returns, default=None) for w in work}
+    leaders = {tuple(g): copy_leader(g, fills_of, record_start) for g in groups}
+    skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}
     allocation = allocate(volume_weights, skill_weights, inputs.price_usd, params, inputs.pool_alpha)
 

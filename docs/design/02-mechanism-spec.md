@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.0)
+# Kokoah subnet incentive mechanism: complete specification (v6.1)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -187,9 +187,12 @@ the **entry test**: the probabilistic Sharpe ratio of the last 90 capped daily r
 Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 days recorded: no entry). Then:
 
 - **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
-  (joined transitively); the group's weights are scaled so they sum to the largest member's weight. The same
-  strategy in many accounts earns one weight, and splitting one account above the volume cap into several gains
-  nothing, because the parts trade alike.
+  (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
+  whose trades come first: each member's fills of the day are matched with the nearest fill of another member on the
+  same coin and side within 10 minutes, and the member whose fill comes first most often leads (a copier trades
+  after what it copies). With fewer than 5 matched fills, the member with the longest record (the earliest scored
+  day) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another miner
+  earns nothing, and splitting one account above the volume cap into several gains nothing.
 - **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
   pay; proving an edge from daily returns takes months by design.
 - **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
@@ -302,8 +305,8 @@ to A. A is paid 1,771.2 alpha, B 1,180.8; nothing is burned.
 sealed-machine agent. Skill weights 1.1 and 1.0: the agent takes 52.4% of the skill pool, the human 47.6%; the
 volume pool is split by fees alone.
 
-**Ten copies.** One strategy run in ten accounts, each with `s × v` = 0.9: the copy rule groups them and their
-weights sum to 0.9, the same as a single account.
+**Ten copies.** One strategy run in ten accounts, each with `s × v` = 0.9: the copy rule groups them and only the
+leader keeps its 0.9, the same as a single account.
 
 ## 14. Account switching and migration
 

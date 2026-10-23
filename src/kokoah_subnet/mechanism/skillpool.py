@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
+from .fills import Fill
 from .params import Params
 from .skill import capped, prob_sharpe
 
@@ -82,15 +83,54 @@ def copy_groups(dated_returns: Mapping[str, Mapping[str, float]], params: Params
     return sorted((sorted(g) for g in groups.values() if len(g) > 1), key=lambda g: g[0])
 
 
-def apply_copy_groups(weights: Mapping[str, float], groups: Sequence[Sequence[str]]) -> dict[str, float]:
-    """Scale each group's weights so their total is the largest member's weight (one strategy, one weight)."""
+def copy_leader(
+    group: Sequence[str],
+    fills_of: Mapping[str, Sequence[Fill]],
+    record_start: Mapping[str, str | None],
+    window_s: float = 600.0,
+    min_pairs: int = 5,
+) -> str:
+    """The member a copy group follows. Whoever trades first leads: every fill of one member is matched with the
+    nearest fill of another member on the same coin and side within `window_s`, and the member whose fills come
+    first most often leads (a copier always trades after what it copies). Without `min_pairs` matched fills the
+    longest record leads (its first scored day), then the hotkey order."""
+    index: dict[str, dict[tuple[str, str], list[int]]] = {}
+    for k in group:
+        by_key: dict[tuple[str, str], list[int]] = {}
+        for f in fills_of.get(k, ()):
+            by_key.setdefault((f.coin, f.side), []).append(f.time_ms)
+        index[k] = {key: sorted(ts) for key, ts in by_key.items()}
+    led = dict.fromkeys(group, 0)
+    pairs = 0
+    window_ms = window_s * 1000
+    for x in group:
+        for y in group:
+            if x == y:
+                continue
+            for key, times in index[x].items():
+                others = index[y].get(key, [])
+                for t in times:
+                    near = min(others, key=lambda u: abs(u - t), default=None)
+                    if near is not None and 0 < near - t <= window_ms:
+                        led[x] += 1
+                        pairs += 1
+    best = max(led.values())
+    top = [k for k in group if led[k] == best]
+    if pairs >= min_pairs and len(top) == 1:
+        return top[0]
+    return min(group, key=lambda k: (record_start.get(k) or "9999-99-99", k))
+
+
+def apply_copy_groups(
+    weights: Mapping[str, float], groups: Sequence[Sequence[str]], leaders: Mapping[tuple[str, ...], str]
+) -> dict[str, float]:
+    """One strategy, one weight: in each group only the leader keeps its weight; the others get none."""
     out = dict(weights)
     for g in groups:
-        members = [k for k in g if out.get(k, 0.0) > 0]
-        total = sum(out[k] for k in members)
-        if len(members) < 2 or total <= 0:
+        leader = leaders.get(tuple(g))
+        if leader is None:
             continue
-        top = max(out[k] for k in members)
-        for k in members:
-            out[k] = out[k] * top / total
+        for k in g:
+            if k != leader:
+                out[k] = 0.0
     return out

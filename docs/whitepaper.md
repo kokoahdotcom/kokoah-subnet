@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.0, October 2026. Mechanism specification v6.0.
+Whitepaper, version 3.0, October 2026. Mechanism specification v6.1.
 
 ### Summary
 
@@ -130,7 +130,7 @@ flowchart TD
   E -->|yes| F[Builder fees paid today<br/>smoothed: 30% today, 70% the running figure]
   F --> VP[Volume reward: 80% of the pool<br/>in proportion to fees]
   E -->|yes| S{Proven record?<br/>90-day statistical test, activity,<br/>skill above the luck floor}
-  S -->|yes| W[Skill weight<br/>skill x participation, +10% for a verified agent,<br/>copies share one weight]
+  S -->|yes| W[Skill weight<br/>skill x participation, +10% for a verified agent,<br/>copies earn nothing]
   W --> SP[Skill reward: 20% of the pool<br/>in proportion to skill weight]
   VP --> PAY[Paid to the miner]
   SP --> PAY
@@ -167,7 +167,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.0; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.1; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -199,8 +199,9 @@ with what weight:
   $1 million; beyond that, more volume adds nothing to the skill reward.
 
 The skill weight is the skill above the floor times participation, with 10% more for a verified agent. Accounts whose
-daily returns move almost exactly together over 30 days or more share a single weight, so the same strategy in ten
-accounts earns what it would in one. The skill reward also needs the activity gates (10 round trips, 7 active days
+daily returns move almost exactly together over 30 days or more form a group in which only the account that leads,
+the one whose trades come first, keeps its weight: a copy earns nothing, and the same strategy in ten accounts earns
+what it would in one. The skill reward also needs the activity gates (10 round trips, 7 active days
 and a mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody qualifies for
 it, the skill reward joins the volume reward.
 
@@ -229,7 +230,7 @@ dollar is worth the same to everyone. Splitting and merging accounts change noth
 fees, and every fee paid funds the buyback.
 
 **The skill reward pays only for a proven edge.** An account without a real edge almost never passes the 90-day test.
-Copies of one strategy share one weight; splitting a large account gains nothing; a fresh identity has to pass the
+A copy of another miner's strategy earns nothing; splitting a large account gains nothing; a fresh identity has to pass the
 test again from its own record.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
@@ -427,7 +428,8 @@ entry      = PSR of the last 90 days of r̃ ≥ 0.95, gates passed, no mirror re
 s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
 w_i        = s_i × v_i × (1.1 for a verified agent)       when entry holds, else 0
-copies     = accounts with daily-return correlation > 0.9 over ≥ 30 common days share max(w) between them
+copies     = in a group with daily-return correlation > 0.9 over ≥ 30 common days, only the leader keeps its w
+             (the leader trades first on the same coin and side; else the longest record)
 ```
 
 The agent check, by each validator:
@@ -448,8 +450,8 @@ participation giving 0.8 before the bonus, so 0.88 after it; trader C has no pro
 (2,361.6 alpha) splits three ways, 787.2 alpha each. The skill reward (590.4 alpha) splits between A and B in the
 ratio 0.8 to 0.88: 281.1 and 309.3 alpha. A is paid 1,068.3 alpha, B 1,096.5 and C 787.2; the whole pool is paid.
 
-If A ran the same strategy in a second account, the two accounts' weights would sum to 0.8 together, and the total
-paid to A's strategy would not change.
+If A ran the same strategy in a second account, or someone copied A's trades, only A, whose trades come first,
+would keep its weight of 0.8, and the total paid to A's strategy would not change.
 
 ### Appendix C. A validator's day
 
