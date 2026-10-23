@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME="${KOKOAH_SUBNET_GRAFANA_NAME:-kokoah-subnet-grafana}"
-IMAGE="${KOKOAH_SUBNET_GRAFANA_IMAGE:-grafana/grafana-oss:11.6.0}"
+IMAGE="${KOKOAH_SUBNET_GRAFANA_IMAGE:-grafana/grafana-oss:11.6.0@sha256:62d2b9d20a19714ebfe48d1bb405086081bc602aa053e28cf6d73c7537640dfb}"
 PORT="${KOKOAH_SUBNET_GRAFANA_PORT:-48120}"
 DB_ENV="${KOKOAH_SUBNET_DB_ENV:-$HOME/.local/share/kokoah/subnet-db.env}"
 ENV_FILE="${KOKOAH_SUBNET_GRAFANA_ENV:-$HOME/.local/share/kokoah/subnet-grafana.env}"

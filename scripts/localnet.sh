@@ -11,7 +11,7 @@
 set -euo pipefail
 
 NAME="${KOKOAH_SUBNET_LOCALNET_NAME:-kokoah-subnet-localnet}"
-IMAGE="${KOKOAH_SUBNET_LOCALNET_IMAGE:-ghcr.io/raofoundation/subtensor-localnet:devnet}"
+IMAGE="${KOKOAH_SUBNET_LOCALNET_IMAGE:-ghcr.io/raofoundation/subtensor-localnet:devnet@sha256:111ebdbead406a3c11a6c357caf3d67106e030c83e7ce2fa83b35ba16bacd45e}"
 VOLUME="${KOKOAH_SUBNET_LOCALNET_VOLUME:-kokoah-subnet-localnet-data}"
 
 cmd="${1:-status}"
