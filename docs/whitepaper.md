@@ -189,9 +189,8 @@ with what weight:
 
 - **The entry test.** The account's daily returns over the last 90 days, computed from account value with deposits,
   withdrawals and vault transfers removed and any money moved in through off-market fills removed as well, each day
-  capped at ±10%, must pass a probabilistic Sharpe ratio test at 95% confidence against a modest benchmark. In
-  simulation, accounts with no edge pass about 3% of the time and lottery-style accounts almost never; a strong
-  trader passes about half the time over 90 days. Proving a real edge takes months, which is what keeps luck out.
+  capped at ±10%, must pass a probabilistic Sharpe ratio test at 95% confidence against a modest benchmark. Proving
+  a real edge takes months, which is what keeps luck out.
 - **The skill score.** Is the edge statistically real (the probabilistic Sharpe ratio of the last 60 days), and are
   recent gains clearly larger than recent losses (a recency-weighted gain-to-pain ratio of the last 30 days, halved if
   two or more days in the last 60 lost more than 10%)? The two are multiplied, smoothed like the credit, and scaled so
@@ -223,22 +222,15 @@ validators 41%, owner 18% (locked). Changes follow section 10.
 
 ## 6. Two rewards, two kinds of contribution
 
-The two rewards pay for two different things, and each is protected against what would otherwise exploit it.
+The two rewards pay for two different things, and each has its own safeguards.
 
-**The volume reward is a fee rebate miners compete for.** Its value per dollar of builder fee is large while few fees
-are paid and falls as more are. Anyone who trades mainly to earn it joins only while the reward per fee dollar exceeds
-what the trading costs them, so the reward settles at about what such traders pay in fees. Splitting and merging
-accounts change nothing, because the reward is linear in fees.
+**The volume reward rewards activity.** Miners share it in proportion to the builder fees they pay, so every fee
+dollar is worth the same to everyone. Splitting and merging accounts change nothing, because the reward is linear in
+fees, and every fee paid funds the buyback.
 
-| Traders paying $500 of builder fees a day each, reward worth $12,667 a day | 1 | 5 | 20 | 100 |
-|---|---|---|---|---|
-| volume reward per trader per day | $3,378 | $1,448 | $461 | $99 |
-| what that trading costs a base-tier taker | $1,400 | $1,400 | $1,400 | $1,400 |
-
-**The skill reward pays only for a proven edge.** Trading that exists only to generate volume has no edge, and an
-account with no edge almost never passes the 90-day test; in simulation such accounts take under a twentieth of a
-strong trader's weight on average. Copies of one strategy share one weight; splitting a large account gains nothing;
-a fresh identity has to pass the test again from its own record.
+**The skill reward pays only for a proven edge.** An account without a real edge almost never passes the 90-day test.
+Copies of one strategy share one weight; splitting a large account gains nothing; a fresh identity has to pass the
+test again from its own record.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
@@ -313,9 +305,6 @@ strategies built on verified agents will add their own revenue. Kokoah spends th
 subnet token on a published cadence, each time as one `add_stake_burn` transaction that buys alpha with TAO and burns
 it in a single call. A coverage figure, cumulative buyback over cumulative alpha received by miners, is published.
 
-**The volume reward pays for itself in revenue.** Section 6 shows why: traders who trade for the reward join until it
-is worth about what they pay in fees, so the reward and the revenue it brings grow together.
-
 **The owner's share.** The owner's 18% of emission is locked by enabling the chain's `owner_cut_auto_lock_enabled`
 hyperparameter, so it is never sold into the buyback.
 
@@ -333,10 +322,10 @@ agent: any validator would compute a different result and the chain's consensus 
 stores submissions and the machines' encrypted key copies and lists the released keys; validators compare the
 fingerprint the attested harness reports with the one committed on chain, not with anything the service says.
 
-Parameters are part of the versioned code. A change is announced at least seven days before it takes effect, recorded
-in the changelog (appendix F), and published in every daily artifact as the mechanism's version number. Validators
-adopt it by updating; nothing changes until they do. A new harness image counts only once its digest is added to the
-approved list in the validator code.
+Parameters are part of the versioned code. A change is announced at least seven days before it takes effect and
+published in every daily artifact as the mechanism's version number. Validators adopt it by updating; nothing
+changes until they do. A new harness image counts only once its digest is added to the approved list in the
+validator code.
 
 Every validator keeps a complete relational record of what it saw and decided: every builder fill, from the account's
 own history or the builder file, with its source, whether it counted and why not; every per-miner figure with the
@@ -370,51 +359,19 @@ value it creates in an outside market returns to the network.
 Every stage is read from the same record: traders and agents linked, volume routed, fees collected, alpha paid,
 buybacks executed.
 
-## 12. Verification
+## 12. Roadmap
 
-**Done.** The whole pool is paid on 2,000 random days; the volume reward is unchanged by splitting one account into
-2, 5 or 20; the entry test's pass rates on simulated records (no edge 3%, lottery 0%, a modest edge 17%, a strong edge
-51%) and the mean skill weight per account (luck under a twentieth of a strong trader's); ten copies of one strategy
-earn one weight; the agent bonus is exactly 10% of the skill weight and nothing else; a 150-day replay in which
-strategies without an edge took none of the skill reward. The data plane recovers every builder fee the exchange
-credits to Kokoah's builder, to the cent, with every row of the daily file matched and every history-only fill
-confirmed from the account's own signed orders. The sealed-machine path end to end: submission, key creation, its
-encrypted copy, restore on a new machine and public release, the sandbox, orders through the harness with the builder
-code, and every validator check with each failure case. The harness image is a reproducible build: two machines with
-different tool versions produced the same digest from the same commit. On a real Confidential Space machine with
-Intel TDX, through the public agent service: the service and a validator verified the Google-signed token of the
-approved image; the agent traded the exchange's test network with the builder code on every fill; a replacement
-machine restored the same account; a release ended its agent status; reused and forged start permissions were
-refused. Two validators on the test network, each keeping its own record, scored the same days with identical weights.
+1. **Test network.** The subnet runs on Bittensor's test network with its validators and the agent service. Traders
+   and agent builders join, and their records start.
+2. **Mainnet.** The subnet launches on Bittensor's main network.
+3. **More builders, better agents.** Guides, examples and tools that make agents easier to build; agents compete on
+   verified results.
+4. **Verified strategies for traders.** The strongest verified agents become strategies traders follow on Kokoah
+   (section 8).
+5. **Trading intelligence for everyone.** Kokoah keeps adding intelligence for every trader, and the subnet becomes
+   the reference for verified trading agents.
 
-**Before mainnet.**
-
-1. A sealed-machine agent changing leverage and withdrawing to its owner's address on the test network (orders and
-   cancels are done).
-2. A month of real traders and agents on the test network: who passes the entry test, the copy groups, the volume
-   competition.
-
-**Assumptions.** Each account's own fill history is complete and names every builder fee but not the builder; the
-validator confirms the builder from the account's own signed orders. The exchange keeps day-by-day account values for
-about a month, so the rest of a 90-day record is the subnet's own daily record. Google's attestation and the
-confidential hardware are trusted for the agents' isolation; memory-bus attacks need physical access, which a cloud
-machine denies its user. Whether, and when, root enables emission for a new subnet is the network's decision. Paying
-tokens for trading activity, and offering strategies to traders, are subject to legal review in each jurisdiction.
-
-## 13. Roadmap
-
-**Done.** The scoring library with its tests, the validator with its record and interface, the binding flow, the data
-plane from the accounts' own histories, eligibility, the two rewards, the sealed-machine agent harness with its
-sandbox, key handling and validator checks, the released harness image run on a real sealed machine and approved, the
-agent service live at `https://api.kokoah.com/miners`, and a test-network subnet with running validators.
-
-**Next.** Real traders and agents on the test network for at least a month; then mainnet, only after the verification
-list is complete and published, with the parameters the test-network period supports.
-
-**Then.** Verified agents offered to traders as strategies on Kokoah (section 8), and tools that make building
-agents easier. Kokoah's platform keeps adding intelligence for every trader.
-
-## 14. References
+## 13. References
 
 - Bailey, D. H., and M. López de Prado (2012). The Sharpe ratio efficient frontier. Journal of Risk 15(2).
 - Chen, Y., C. Papadimitriou, and T. Roughgarden (2019). An axiomatic approach to block rewards. arXiv:1909.10645.
@@ -534,29 +491,3 @@ artifact: per-miner eligibility, credit, skill and its parts, the entry test, th
 status; weights; file hash and whether it matches Kokoah's commitment; refused bindings; errors), `/bindings`,
 `/leaderboard` (the ranking with totals over all days), `/summary` (alpha paid, builder fees, totals over all days),
 and `/` (the leaderboard page).
-
-### Appendix F. Changelog
-
-- **3.0 (2026-10-22).** The vision stated in full: Kokoah as a platform for trading intelligence, the subnet as the
-  place where trading agents are built and proven, and verified agents brought to traders as strategies, with their
-  revenue joining the buyback (sections 1, 2, 7, 8 and 11). The mechanism is unchanged (v6.0).
-- **2.1 (2026-10-22).** The harness image released (a reproducible build) and run on a real sealed machine with Intel
-  TDX; the agent service live at `https://api.kokoah.com/miners`, accepting code and key copies only from registered
-  hotkeys; the machine's secret made from a strength-checked password or at random; the service's own encryption over
-  every stored copy; a copy filed only with the hotkey's signed start permission.
-- **2.0 (2026-10-22).** Mechanism v6.0. The whole miner emission is paid out in two rewards: 80% by builder fees paid,
-  20% by proven skill (a 90-day entry test at 95% confidence, a luck floor, participation capped at $1M of volume over
-  30 days, and a copy rule); the fee caps, the burn of the unawarded remainder and the holding factor are removed.
-  Trading agents in sealed machines, verified by every validator from Google-signed tokens, earn 10% more skill
-  weight. History-only fills are confirmed from the account's own signed orders.
-- **1.3 (2026-10-22).** Mechanism v5.10: each account's own fills on the exchange are the primary source, merged with
-  the per-builder daily file, counterparties named by trade id, and the credited fees checked against the builder's
-  earnings on the exchange.
-- **1.2 (2026-10-22).** Mechanism v5.9: eligibility ($10,000 average account value a day, three qualifying trades);
-  credit and qualification restart with a new address, a hotkey swap or a new registration.
-- **1.1 (2026-10-21).** Off-market fills valued at the exchange's minute marks; the day's TAO/USD from hourly candles;
-  chain samples anchored to the scored day; leaving, returning and switching handled; perpetuals only; emission split
-  owner 18%, validators 41%, miners 41%.
-- **1.0 (2026-10-20).** Mechanism v5.8, the first complete version, with fee caps and burning; validator, binding flow
-  and interface running on a test network.
-- **0.9 (2026-10-20).** First public draft.

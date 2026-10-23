@@ -22,7 +22,7 @@ published at launch. Examples use the test network (`--network test`); on mainne
 7. [What a validator does each day](#7-what-a-validator-does-each-day)
 8. [The public interface](#8-the-public-interface)
 9. [Monitoring, alerts and backups](#9-monitoring-alerts-and-backups)
-10. [Joining late: how a new validator converges](#10-joining-late-how-a-new-validator-converges)
+10. [Choosing the start day](#10-choosing-the-start-day)
 11. [Upgrades](#11-upgrades)
 12. [Security](#12-security)
 13. [Troubleshooting](#13-troubleshooting)
@@ -173,17 +173,11 @@ request limit. Publishing lets miners and other validators compare figures with 
 - **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `~/.local/share/kokoah/backups/`;
   `scripts/db.sh backup <file>` does it by hand.
 
-## 10. Joining late: how a new validator converges
+## 10. Choosing the start day
 
-A validator that starts today cannot read everything an older validator recorded:
-
-- **Account values.** The daily $10,000 average comes from the exchange's recorded account values, which it keeps in
-  detail for about a week. Start with `--start-day` at most **seven days ago**; older days would be scored with
-  unknown account values (ineligible).
-- **Fee credit** is smoothed day by day; a new validator's credit matches the others' within about two weeks.
-- **Skill.** The entry test needs 90 days of daily returns. About 30 days are backfilled from the exchange; the rest
-  is the validator's own record. Until a new validator has 90 days, its skill reward joins its volume reward, so its
-  weights differ from older validators' by up to the skill share. This is expected and resolves itself.
+Set `--start-day` to a day within the last seven days: the daily average account value is read from the exchange's
+recent record of each account. From that day on, the validator scores every day in order and builds its record day
+by day; each account's earlier daily values are backfilled from the exchange when the account is first scored.
 
 ## 11. Upgrades
 
@@ -215,5 +209,5 @@ sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 | Errors about the exchange's API | Public rate limits or an outage; the day is retried within the hour. A dedicated endpoint (`--hl-info-url`) avoids rate limits. |
 | "no TAO perpetual" | Pass `--tao-usd-fallback <price>`. |
 | No verified agents | `--agent-service https://api.kokoah.com/miners` must be set and reachable. |
-| Different figures from another validator | Compare `/days/<day>` artifacts; a late start (section 10) explains differences in skill for up to 90 days. |
+| Different figures from another validator | Compare the `/days/<day>` artifacts, and check that both run the same release. |
 | The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`. |

@@ -88,9 +88,7 @@ Miners submit agent code and their machines keep an encrypted copy of the key at
 
 ## Status
 
-Running on the Bittensor test network (netuid 385), with two validators, each keeping its own record, scoring live
-Hyperliquid data with identical results. The
-agent harness has run end to end on a real Intel TDX machine. Mainnet follows the test-network period.
+The subnet runs on the Bittensor test network as netuid 385. Mainnet follows.
 
 ## Documentation
 
@@ -102,8 +100,6 @@ agent harness has run end to end on a real Intel TDX machine. Mainnet follows th
 | [Whitepaper](docs/whitepaper.md) | The subnet, its incentives and its guarantees |
 | [Mechanism specification](docs/design/02-mechanism-spec.md) | Every formula, parameter and edge case |
 | [The mechanism in plain words](docs/design/01-incentive-mechanism.md) | The same rules, without the math |
-| [Runbook](docs/runbook.md) | Operations: services, dashboards, the operator's duties |
-| [Binding from the app](docs/app-binding.md) | How a Kokoah trader becomes a miner |
 | [The validator's record](docs/database.md) | Every table a validator keeps, with example queries |
 
 ## Development
@@ -129,7 +125,7 @@ src/kokoah_subnet/
   binding/       how a hotkey binds a Hyperliquid account
 deploy/          harness image (reproducible build), systemd units, reverse-proxy sample
 dashboards/      validator monitoring
-scripts/         local chain, CI checks, verification and simulations
+scripts/         local chain, database, backups, CI checks and verification
 docs/            whitepaper, specification and guides
 tests/           offline tests
 ```

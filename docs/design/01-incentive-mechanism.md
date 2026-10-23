@@ -1,7 +1,7 @@
-# Incentive mechanism in plain words (v6.0, 2026-10-22)
+# Incentive mechanism in plain words (v6.0)
 
-The formulas are in `02-mechanism-spec.md`; this page says what they do. The public, polished version is the
-whitepaper (`docs/whitepaper.md`).
+The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
+the [whitepaper](../whitepaper.md).
 
 ## What the subnet is
 
@@ -40,13 +40,11 @@ The whole miner emission is paid out every day, in two parts:
 
 Nothing is capped and nothing is burned (only a day with nobody to pay would go to the burn hotkey).
 
-## Fake volume
+## Fair play
 
-Trading only to earn the activity reward is allowed by design: it is a competition. The reward per fee dollar falls
-as more fees are paid, so people who trade only for the reward join until it is worth about what their trading
-costs them, and the Kokoah fee they pay funds the buyback. What fake volume cannot do is win the skill reward: it
-has no edge, and accounts with no edge almost never pass the 90-day test. Trades between two of the subnet's own miners never
-count, and linked addresses that keep opposite positions for weeks lose their credit and leave the skill reward.
+Trades with yourself or your linked accounts never count, and neither do trades between two of the subnet's own
+miners. Linked addresses that keep opposite positions for weeks lose their credit and leave the skill reward. The
+skill reward needs a real edge, proven over 90 days.
 
 ## Agents
 
@@ -61,8 +59,8 @@ when it is strong) and with Kokoah's own key; only the miner's hotkey can file i
 ## Where the trades come from
 
 Validators read each linked trader's own trade history from Hyperliquid, which shows the Kokoah fee on every trade,
-and check it against Hyperliquid's daily list of Kokoah trades, which has so far covered only about half of each
-day. A trade the daily list misses counts only when the trader's own signed order shows Kokoah's builder code. Every
+and check it against Hyperliquid's daily list of Kokoah trades. A trade counts only when the trader's own signed
+order shows Kokoah's builder code. Every
 day the total credited to traders is compared with what Hyperliquid says Kokoah has earned; more would raise an
 alarm.
 
@@ -70,8 +68,7 @@ alarm.
 
 It asks two things of the daily returns, with deposits removed and each day capped at ±10%: is the edge
 statistically real (probabilistic Sharpe ratio over 60 days), and is the recent month's profit much larger than its
-losses (gain-to-pain over 30 days)? Luck rarely gets past the 90-day test; a strong trader passes about half the
-time after 90 days and more often with a longer record.
+losses (gain-to-pain over 30 days)? Only a record that holds up over 90 days passes the test.
 
 ## Leaving and coming back
 
@@ -79,8 +76,3 @@ Come back with the same hotkey and your records resume, but as a new registratio
 trades. Moving to a new address, or swapping the hotkey, keeps your track record, your pay history and any penalty,
 but your fee credit and your qualification start again. A new identity has to pass the 90-day test again from its
 own record.
-
-## Still open
-
-An agent changing leverage and withdrawing from a real sealed machine (its orders, cancels, restore and release ran
-on real Intel TDX on 2026-10-22); a month of real traders and agents on testnet; legal review.

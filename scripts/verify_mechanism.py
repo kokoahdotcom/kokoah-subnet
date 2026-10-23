@@ -67,7 +67,6 @@ def entry_rates() -> None:
         rng = random.Random(7)
         n = 2000
         rates[name] = sum(passes_entry([gen(rng) for _ in range(90)], P) for _ in range(n)) / n
-        print(f"      {name:30} {rates[name]:6.1%}")
     check("zero-edge accounts pass at most 5% of the time", rates["zero edge"] <= 0.05)
     check("lottery accounts pass at most 2%", rates["lottery"] <= 0.02)
     check(
@@ -97,7 +96,6 @@ def luck_weight() -> None:
             if passes_entry(rets, P):
                 total += skill_weight(skill_factor(g, P), P.skill_volume_cap_usd, False, P)
         means[name] = total / n
-        print(f"      {name:30} {means[name]:.4f}")
     strong = means["strong edge (Sharpe 3.2/yr)"]
     check(
         "luck takes under a tenth of a strong trader's weight",
@@ -127,22 +125,6 @@ def agent_bonus() -> None:
     print(f"      s(0.25) = {adjusted_skill(0.25, P)}, v($500k) = {volume_factor(5e5, P)}")
 
 
-def farming_equilibrium() -> None:
-    print("7. Volume farming is a competition (by design): what farmers earn as more of them join")
-    pool_usd = 12_667.0
-    honest_fees = 1_000.0  # a day's builder fees from honest traders
-    cost_per_fee = 1 + 4.5 / 2.5  # a base-tier taker farmer pays the exchange 4.5 bps for every 2.5 bps of builder fee
-    for farmers in (1, 5, 20, 100):
-        fee_each = 500.0
-        total = honest_fees + farmers * fee_each
-        income = 0.8 * pool_usd * fee_each / total
-        print(
-            f"      {farmers:4} farmers at ${fee_each:,.0f} of fees a day each: "
-            f"income ${income:,.0f}, cost ${fee_each * cost_per_fee:,.0f}"
-        )
-    check("documented", True, "entry stops when income per fee dollar meets the cost per fee dollar")
-
-
 def main() -> int:
     for f in (
         pool_conservation,
@@ -151,7 +133,6 @@ def main() -> int:
         luck_weight,
         copy_rule,
         agent_bonus,
-        farming_equilibrium,
     ):
         f()
         print()
