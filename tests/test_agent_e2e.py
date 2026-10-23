@@ -70,6 +70,9 @@ def world(tmp_path: Path) -> dict[str, Any]:
     # the sealed machine: fetch, check, decrypt, fingerprint
     got, code = fetch_code("http://svc", blob_id, bundle_key.hex(), service)
     assert got == plain and code == sha256_hex(plain)
+    for wrong in (new_key().hex(), None):  # the wrong key, or none: the machine stops before anything runs
+        with pytest.raises(SystemExit, match="KOKOAH_AGENT_BUNDLE_KEY"):
+            fetch_code("http://svc", blob_id, wrong, service)
     key = bytes(Account.create().key)  # created in the machine's memory, never stored
     rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     exchange = Exchange()

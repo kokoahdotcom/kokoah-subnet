@@ -45,6 +45,7 @@ from typing import Any
 
 import httpx
 import uvicorn
+from cryptography.exceptions import InvalidTag
 from eth_account import Account
 
 from . import sandbox
@@ -94,7 +95,10 @@ def fetch_code(service: str, submission: str, bundle_key: str | None, http: http
     if is_encrypted(blob):
         if not bundle_key:
             raise SystemExit("the bundle is encrypted: KOKOAH_AGENT_BUNDLE_KEY is required")
-        plain = decrypt(blob, bytes.fromhex(bundle_key))
+        try:
+            plain = decrypt(blob, bytes.fromhex(bundle_key))
+        except (InvalidTag, ValueError):
+            raise SystemExit("KOKOAH_AGENT_BUNDLE_KEY does not open this submission") from None
     else:
         plain = blob
     return plain, sha256_hex(plain)
