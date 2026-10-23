@@ -49,7 +49,7 @@ from cryptography.exceptions import InvalidTag
 from eth_account import Account
 
 from . import sandbox
-from .attest import ConfidentialSpaceAttestor, DevelopmentAttestor
+from .attest import LAUNCHER_SOCKET, ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
 from .keystore import KeyService, check_secret, decrypt_key, encrypt_key, restore_digest, store_digest
@@ -102,6 +102,23 @@ def fetch_code(service: str, submission: str, bundle_key: str | None, http: http
     else:
         plain = blob
     return plain, sha256_hex(plain)
+
+
+def close_to_agent(directories: list[Path]) -> list[str]:
+    """Make directories the agent must never reach root-only (the attestation socket's): the harness runs as root
+    and still reaches them, the agent's user cannot even look inside. Returns the ones that could not be closed."""
+    failed = []
+    for d in directories:
+        if not d.exists():
+            continue
+        try:
+            os.chmod(d, 0o700)
+        except OSError as exc:
+            failed.append(f"{d}: {exc}")
+            continue
+        if d.stat().st_mode & 0o077:
+            failed.append(f"{d}: still open")
+    return failed
 
 
 def agent_command(memory_mb: int, uid: int | None, gid: int | None) -> list[str]:
@@ -227,6 +244,10 @@ def main() -> int:
             raise SystemExit("the agent user is missing from the image") from None
         uid = gid = None
     unpack(plain, AGENT_HOME)
+    if uid is not None:  # the agent never reaches the attestation socket (only the harness asks it for tokens)
+        failed = close_to_agent([Path(LAUNCHER_SOCKET).parent])
+        if failed:
+            raise SystemExit(f"cannot close the attestation socket to the agent: {failed}")
     if uid is not None and gid is not None:
         for p in [AGENT_HOME, *AGENT_HOME.rglob("*")]:
             os.chown(p, uid, gid)
