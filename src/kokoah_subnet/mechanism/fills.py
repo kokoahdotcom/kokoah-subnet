@@ -61,7 +61,7 @@ class Fill:
 
 def is_perp(coin: str) -> bool:
     """Perpetual markets are plain tickers ("BTC", "kPEPE"); spot pairs are "PURR/USDC" or index names like "@107".
-    The subnet scores perpetuals only (v5.8): the app's builder code also rides on spot orders, where the exchange
+    The subnet scores perpetuals only: the app's builder code also rides on spot orders, where the exchange
     charges it on sells, and those fills are recorded but never counted."""
     return "/" not in coin and not coin.startswith("@")
 

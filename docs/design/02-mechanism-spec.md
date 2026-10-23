@@ -62,7 +62,7 @@ Only the bound address's Hyperliquid data is used: perpetual fills with the Koko
 address's daily account value and flows (skill), the hotkey's stake (holding). Fills without the builder code count
 for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
 exchange charges it on sells; spot fills (pairs like `PURR/USDC` or index names like `@107`) are recorded but never
-counted, in this version. No other platform is ever read.
+counted. No other platform is ever read.
 
 Data plane. Two public sources, for every bound address and day:
 

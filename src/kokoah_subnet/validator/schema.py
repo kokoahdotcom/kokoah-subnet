@@ -198,7 +198,7 @@ miner_days = Table(
     Column("credited_fills", Integer),
     Column("identity_reset", String(32)),  # why credit and qualification were dropped today, if they were
     Column("registered_block", BigInteger),
-    # the two pools (v6)
+    # the two pools
     Column("volume_pay_alpha", Float),
     Column("skill_pay_alpha", Float),
     Column("skill_weight", Float),

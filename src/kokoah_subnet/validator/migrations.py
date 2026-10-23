@@ -75,7 +75,7 @@ STEPS: list[tuple[int, str, Step]] = [
     ),
     (
         8,
-        "miner_days: the two pools (v6)",
+        "miner_days: the two pools",
         _pg(
             "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS volume_pay_alpha double precision; "
             "ALTER TABLE miner_days ADD COLUMN IF NOT EXISTS skill_pay_alpha double precision; "

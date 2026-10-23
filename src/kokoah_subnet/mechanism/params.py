@@ -15,12 +15,12 @@ class Params:
     """Every number the mechanism uses. Money is USD, rates are fractions, windows are days."""
 
     builder_fee_rate: float = 0.00025  # 0.025% of notional per fill
-    maker_credit: float = 1.0  # maker fills earn their builder fee in full (the fee is charged on both; v5.7)
+    maker_credit: float = 1.0  # maker fills earn their builder fee in full (the fee is charged on both)
     smoothing: float = 0.3  # today's weight in the daily smoothing (70/30)
-    # the two pools (v6): the whole miner emission is paid out, nothing is capped or burned
+    # the two pools: the whole miner emission is paid out, nothing is capped or burned
     volume_share: float = 0.80  # shared by eligible smoothed builder fees
     skill_share: float = 0.20  # shared by skill weight; empty: joins the volume pool
-    # skill score (section 7, unchanged since v3)
+    # skill score (section 7)
     return_cap: float = 0.10
     confidence_days: int = 60
     quality_days: int = 30
@@ -32,7 +32,7 @@ class Params:
     blowup_count: int = 2
     blowup_days: int = 60
     g_full: float = 0.65
-    # skill pool (v6)
+    # skill pool
     skill_floor: float = 0.25  # s = max(0, (g' - floor) / (1 - floor))
     skill_volume_cap_usd: float = 1_000_000.0  # v = min(1, eligible Kokoah notional over the window / cap)
     skill_volume_days: int = 30

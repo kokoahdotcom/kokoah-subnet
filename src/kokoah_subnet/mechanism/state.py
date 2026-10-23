@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from .credit import DayFees, ema
 from .params import Params
 
-PAY_HISTORY_DAYS = 60  # the pay history kept per hotkey (a record since v6; the holding factor is gone)
+PAY_HISTORY_DAYS = 60  # the pay history kept per hotkey
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class MinerState:
     phi_hat: float = 0.0  # smoothed fee credit, USD
     fee_hat: float = 0.0  # smoothed total fees on the builder leg, USD
     g: float = 0.0  # smoothed skill
-    paid: tuple[float, ...] = ()  # alpha paid per scored day, newest last (legacy; `paid_days` is authoritative)
+    paid: tuple[float, ...] = ()  # alpha paid per scored day, newest last (`paid_days` is authoritative)
     zero_until_day: int | None = None  # day index until which g' = h' = 0 (mirror report)
     paid_days: tuple[tuple[int, float], ...] = ()  # (day index, alpha paid), so the window follows calendar days
     last_day: int | None = None  # the last day index this state was advanced on

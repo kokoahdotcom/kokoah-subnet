@@ -9,7 +9,7 @@ mkdir -p "$dir"
 chmod 700 "$dir"
 umask 077
 "$here/db.sh" backup "$dir/kokoah_subnet-$day.dump"
-if [ -n "${KOKOAH_SUBNET_AGENT_DATA:-}" ]; then
+if [ -n "${KOKOAH_SUBNET_AGENT_DATA:-}" ] && [ -d "$KOKOAH_SUBNET_AGENT_DATA" ]; then
   "$here/db.sh" backup "$dir/kokoah_subnet_agents-$day.dump" kokoah_subnet_agents
   tar czf "$dir/kokoah_subnet_agents_bundles-$day.tgz" -C "$KOKOAH_SUBNET_AGENT_DATA" bundles
 fi

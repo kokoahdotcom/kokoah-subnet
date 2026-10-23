@@ -1,9 +1,0 @@
-[Unit]
-Description=Kokoah subnet operator step (hourly at :20 UTC until yesterday's file hash is committed)
-
-[Timer]
-OnCalendar=*-*-* *:20:00 UTC
-Persistent=true
-
-[Install]
-WantedBy=timers.target

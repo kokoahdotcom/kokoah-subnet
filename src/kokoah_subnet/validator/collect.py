@@ -224,7 +224,7 @@ async def collect_and_score(
     snap = await snapshot(client, cfg.netuid)
     now = datetime.now(tz=UTC)
     uid_of = snap.uid_of()
-    # the whole pool goes to miners (v6); only a day with no weight at all goes to the burn hotkey, or to the owner
+    # the whole pool goes to miners; only a day with no weight at all goes to the burn hotkey, or to the owner
     # hotkey when no burn hotkey is registered
     fallback_hotkey = cfg.burn_hotkey if cfg.burn_hotkey and cfg.burn_hotkey in uid_of else snap.owner_hotkey
     if fallback_hotkey != cfg.burn_hotkey:

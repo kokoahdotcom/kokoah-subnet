@@ -40,7 +40,7 @@ class MinerInputs:
     address: str  # lowercase
     returns: Sequence[float] = ()  # daily returns, newest last, flows removed, uncapped
     mean_equity_usd: float = 0.0  # over the gate window
-    staked_min_alpha: float = 0.0  # recorded (no holding factor since v6)
+    staked_min_alpha: float = 0.0  # recorded for information
     collateral_min_alpha: float = 0.0  # recorded
     collateral_locked_alpha: float = 0.0  # recorded
     window_fills: Sequence[Fill] = ()  # the gate window's builder-code fills (for round trips and active days)
@@ -51,7 +51,7 @@ class MinerInputs:
     # eligibility (section 9a)
     avg_equity_usd: float | None = None  # the day's time-weighted average account value; None = unknown (ineligible)
     registered_block: int | None = None  # the hotkey's registration block (a new registration is a fresh identity)
-    # skill pool (v6)
+    # skill pool
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days
     dated_returns: Mapping[str, float] = field(default_factory=dict)  # day -> return, for the copy rule
     agent_verified: bool = False  # a verified sealed-machine agent account (the skill bonus)
