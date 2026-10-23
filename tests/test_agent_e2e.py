@@ -1,7 +1,6 @@
 """The whole agent path, end to end on one machine (development attestor and sealer in place of the cloud's)."""
 
 import asyncio
-import base64
 import json
 import subprocess
 import sys
@@ -18,6 +17,7 @@ from bittensor.keyfiles import Keypair
 from cryptography.hazmat.primitives.asymmetric import rsa
 from eth_account import Account
 from fastapi.testclient import TestClient
+from uploads import upload
 
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import encrypt, new_key, package, sha256_hex
@@ -63,9 +63,7 @@ def world(tmp_path: Path) -> dict[str, Any]:
     blob = encrypt(plain, bundle_key)  # private code: the service stores only ciphertext
     blob_id = sha256_hex(blob)
     sig = bytes(hotkey.sign(submit_message(blob_id, hotkey.ss58_address).encode())).hex()
-    r = service.post(
-        "/agents", json={"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": sig}
-    )
+    r = upload(service, hotkey.ss58_address, blob, sig)
     assert r.status_code == 200 and r.json()["encrypted"] and r.json()["code_sha256"] is None
     # the sealed machine: fetch, check, decrypt, fingerprint
     got, code = fetch_code("http://svc", blob_id, bundle_key.hex(), service)
@@ -93,11 +91,9 @@ def test_submission_rules(world: dict[str, Any], tmp_path: Path) -> None:
     blob = package(make_agent(tmp_path / "second"))
     blob_id = sha256_hex(blob)
     good = bytes(hotkey.sign(submit_message(blob_id, hotkey.ss58_address).encode())).hex()
-    body = {"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": good}
-    assert svc.post("/agents", json=body).status_code == 429  # one per 12 hours
+    assert upload(svc, hotkey.ss58_address, blob, good).status_code == 429  # one per 12 hours
     bob = Keypair.create_from_uri("//Bob")
-    forged = {**body, "hotkey": bob.ss58_address}
-    assert svc.post("/agents", json=forged).status_code == 403
+    assert upload(svc, bob.ss58_address, blob, good).status_code == 403  # signed by Alice, sent as Bob
 
 
 async def _check(world: dict[str, Any], binding: Binding, images: list[str], others: list[Any]) -> Any:

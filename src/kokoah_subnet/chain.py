@@ -74,19 +74,37 @@ class RegisteredHotkeys:
         self._hotkeys: set[str] = set()
         self._read_at: float | None = None
         self._lock = threading.Lock()
+        self._refreshing = threading.Lock()
 
     def _read(self) -> None:
         try:
-            self._hotkeys = asyncio.run(self.fetch())
+            hotkeys = asyncio.run(self.fetch())
         except Exception:
             if self._read_at is None or self.clock() - self._read_at > 6 * self.max_age_s:
                 raise  # nothing recent enough to fall back on
             return  # keep the last list; read again on the next unknown hotkey
-        self._read_at = self.clock()
+        with self._lock:
+            self._hotkeys, self._read_at = hotkeys, self.clock()
 
     def check(self, hotkey: str) -> bool:
+        """One reader at a time refreshes the list; everyone else answers from the current list meanwhile (only the
+        very first read is waited for), so a slow chain never holds up other requests."""
         with self._lock:
             age = None if self._read_at is None else self.clock() - self._read_at
-            if age is None or age > self.max_age_s or (hotkey not in self._hotkeys and age > self.refresh_s):
-                self._read()
+            stale = age is None or age > self.max_age_s or (hotkey not in self._hotkeys and age > self.refresh_s)
+        if stale:
+            if self._refreshing.acquire(blocking=self._read_at is None):
+                try:
+                    with self._lock:
+                        age = None if self._read_at is None else self.clock() - self._read_at
+                        still = (
+                            age is None
+                            or age > self.max_age_s
+                            or (hotkey not in self._hotkeys and age > self.refresh_s)
+                        )
+                    if still:
+                        self._read()
+                finally:
+                    self._refreshing.release()
+        with self._lock:
             return hotkey in self._hotkeys

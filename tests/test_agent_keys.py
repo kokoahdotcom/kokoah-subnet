@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
+from uploads import upload
 
 from kokoah_subnet.agent import service as service_module
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
@@ -49,8 +50,7 @@ def submit(svc: TestClient, hotkey: Any, tmp_path: Path) -> httpx.Response:
     (d / "entry.py").write_text("print('agent')\n")
     blob = package(d)
     sig = bytes(hotkey.sign(submit_message(sha256_hex(blob), hotkey.ss58_address).encode())).hex()
-    body = {"hotkey": hotkey.ss58_address, "bundle": base64.b64encode(blob).decode(), "signature": sig}
-    response: httpx.Response = svc.post("/agents", json=body)
+    response: httpx.Response = upload(svc, hotkey.ss58_address, blob, sig)
     return response
 
 

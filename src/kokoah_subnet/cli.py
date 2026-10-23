@@ -501,7 +501,6 @@ def _wallet(args: argparse.Namespace) -> Any:
 
 
 def _agent(args: argparse.Namespace) -> int:
-    import base64
     import time
     from urllib.parse import urlparse
 
@@ -529,7 +528,13 @@ def _agent(args: argparse.Namespace) -> int:
         signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
         r = httpx.post(
             f"{args.service.rstrip('/')}/agents",
-            json={"hotkey": hotkey, "bundle": base64.b64encode(blob).decode(), "signature": signature},
+            content=blob,
+            headers={
+                "content-type": "application/octet-stream",
+                "x-kokoah-hotkey": hotkey,
+                "x-kokoah-bundle-sha256": sha256_hex(blob),
+                "x-kokoah-signature": signature,
+            },
             timeout=120,
         )
         print(r.status_code, r.text)
@@ -660,7 +665,7 @@ def _agent(args: argparse.Namespace) -> int:
             netuid=netuid,
             accept_unverified_machines=args.dev_accept_any_machine,
         )
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        uvicorn.run(app, host=args.host, port=args.port, log_level="info", limit_concurrency=64)
         return 0
     return 2
 

@@ -1,7 +1,7 @@
 """The subnet owner's agent service (specification v6, section 16): where miners submit agent code, where the
 sealed machines fetch it, and where they keep their account key encrypted with the miner's secret.
 
-    POST /agents            submit a bundle, signed by the miner's hotkey
+    POST /agents            submit a bundle (raw body; hotkey, sha256 and the hotkey's signature as headers)
     GET  /agents/{id}       a submission's record      GET /agents/{id}/bundle   its exact bytes
     GET  /images            the approved harness images
     PUT  /key-store/{address}                 store an encrypted account key (a sealed machine's attestation required)
@@ -22,6 +22,7 @@ The hotkey signs `kokoah-agent-submit-1 sha256=<id> hotkey=<ss58>`. One submissi
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -36,7 +37,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import (
     Boolean,
@@ -52,11 +53,13 @@ from sqlalchemy import (
     insert,
     select,
 )
+from starlette.concurrency import run_in_threadpool
 
-from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted, sha256_hex
+from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted
 from .keystore import PERMIT_DAYS, parse_permit, release_message, restore_digest, start_message, store_digest
 
 SUBMIT_COOLDOWN_S = 12 * 3600
+KEEP_BUNDLES_PER_HOTKEY = 5  # older bundles are deleted unless an account's key copy names them
 metadata = MetaData()
 submissions = Table(
     "agent_submissions",
@@ -154,12 +157,6 @@ class Release(BaseModel):
     signature: str  # EIP-191 signature of `release_message` by the master address
 
 
-class Submission(BaseModel):
-    hotkey: str
-    bundle: str  # base64 of the bundle bytes (plain zip, or encrypted)
-    signature: str  # hex sr25519 signature of `submit_message` by the hotkey
-
-
 def create_app(
     data_dir: Path,
     db_url: str = "",
@@ -197,48 +194,108 @@ def create_app(
         if not ok:
             raise HTTPException(status_code=403, detail="the hotkey is not registered on the subnet")
 
+    submit_lock = asyncio.Lock()
+
+    def drop_old_bundles(c: Any, hotkey: str) -> None:
+        """Keep a hotkey's newest KEEP_BUNDLES_PER_HOTKEY bundles and any bundle an account's key copy names."""
+        rows = c.execute(
+            select(submissions.c.id).where(submissions.c.hotkey == hotkey).order_by(submissions.c.submitted_at.desc())
+        ).all()
+        in_use = {
+            str(d).rsplit("submission ", 1)[-1]
+            for (d,) in c.execute(select(key_events.c.detail).where(key_events.c.event == "store")).all()
+            if d and "submission " in str(d)
+        }
+        for (old,) in rows[KEEP_BUNDLES_PER_HOTKEY:]:
+            if old not in in_use:
+                (data_dir / "bundles" / old).unlink(missing_ok=True)
+
     @app.post("/agents")
-    def submit(body: Submission) -> dict[str, Any]:
+    async def submit(request: Request) -> dict[str, Any]:
+        """A bundle as the raw body, with `X-Kokoah-Hotkey`, `X-Kokoah-Bundle-Sha256` and `X-Kokoah-Signature` (the
+        hotkey's signature of `submit_message`). Everything about the sender is checked before the body is read; the
+        body is then streamed to disk under the size cap and must have the signed hash."""
+        hotkey = request.headers.get("x-kokoah-hotkey", "")
+        signature = request.headers.get("x-kokoah-signature", "")
+        blob_id = request.headers.get("x-kokoah-bundle-sha256", "").lower()
+        if len(blob_id) != 64 or any(ch not in "0123456789abcdef" for ch in blob_id) or not hotkey or not signature:
+            raise HTTPException(
+                status_code=400, detail="the hotkey, the bundle's sha256 and the signature are required"
+            )
         try:
-            blob = base64.b64decode(body.bundle, validate=True)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="bundle must be base64") from exc
-        if not blob or len(blob) > MAX_BUNDLE_BYTES + 64:
+            size = int(request.headers.get("content-length", ""))
+        except ValueError:
+            raise HTTPException(status_code=411, detail="the bundle's length is required") from None
+        if not 0 < size <= MAX_BUNDLE_BYTES + 64:
             raise HTTPException(status_code=413, detail=f"bundle must be 1 to {MAX_BUNDLE_BYTES} bytes")
-        blob_id = sha256_hex(blob)
-        if not verify(submit_message(blob_id, body.hotkey), body.signature, body.hotkey):
+        if not verify(submit_message(blob_id, hotkey), signature, hotkey):
             raise HTTPException(status_code=403, detail="not signed by the hotkey")
-        require_registered(body.hotkey)
-        encrypted = is_encrypted(blob)
-        code = None
-        if not encrypted:
-            try:
-                check_zip(blob)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=f"bundle refused: {exc}") from exc
-            code = blob_id
-        with engine.begin() as c:
+        await run_in_threadpool(require_registered, hotkey)
+        with engine.connect() as c:
+            existing = c.execute(select(submissions).where(submissions.c.id == blob_id)).mappings().first()
             last = c.execute(
                 select(submissions.c.submitted_at)
-                .where(submissions.c.hotkey == body.hotkey)
+                .where(submissions.c.hotkey == hotkey)
                 .order_by(submissions.c.submitted_at.desc())
                 .limit(1)
             ).scalar()
-            if c.execute(select(submissions.c.id).where(submissions.c.id == blob_id)).first():
-                return {"id": blob_id, "encrypted": encrypted, "code_sha256": code, "existing": True}
-            if last is not None and clock() - float(last) < SUBMIT_COOLDOWN_S:
-                raise HTTPException(status_code=429, detail="one submission per hotkey per 12 hours")
-            (data_dir / "bundles" / blob_id).write_bytes(blob)
-            c.execute(
-                insert(submissions).values(
-                    id=blob_id,
-                    hotkey=body.hotkey,
-                    encrypted=encrypted,
-                    code_sha256=code,
-                    bytes=len(blob),
-                    submitted_at=clock(),
-                )
-            )
+        if existing is not None:
+            return {
+                "id": blob_id,
+                "encrypted": existing["encrypted"],
+                "code_sha256": existing["code_sha256"],
+                "existing": True,
+            }
+        if last is not None and clock() - float(last) < SUBMIT_COOLDOWN_S:
+            raise HTTPException(status_code=429, detail="one submission per hotkey per 12 hours")
+        incoming = data_dir / "bundles" / f".incoming-{secrets.token_hex(8)}"
+        try:
+            digest = hashlib.sha256()
+            received = 0
+            with incoming.open("wb") as f:
+                async for chunk in request.stream():
+                    received += len(chunk)
+                    if received > size or received > MAX_BUNDLE_BYTES + 64:
+                        raise HTTPException(status_code=413, detail="the body is longer than declared")
+                    digest.update(chunk)
+                    f.write(chunk)
+            if digest.hexdigest() != blob_id:
+                raise HTTPException(status_code=400, detail="the body does not have the signed sha256")
+            blob = incoming.read_bytes()
+            encrypted = is_encrypted(blob)
+            code = None
+            if not encrypted:
+                try:
+                    check_zip(blob)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=f"bundle refused: {exc}") from exc
+                code = blob_id
+            async with submit_lock:  # the cooldown check and the insert together
+                with engine.begin() as c:
+                    if c.execute(select(submissions.c.id).where(submissions.c.id == blob_id)).first():
+                        return {"id": blob_id, "encrypted": encrypted, "code_sha256": code, "existing": True}
+                    last = c.execute(
+                        select(submissions.c.submitted_at)
+                        .where(submissions.c.hotkey == hotkey)
+                        .order_by(submissions.c.submitted_at.desc())
+                        .limit(1)
+                    ).scalar()
+                    if last is not None and clock() - float(last) < SUBMIT_COOLDOWN_S:
+                        raise HTTPException(status_code=429, detail="one submission per hotkey per 12 hours")
+                    incoming.replace(data_dir / "bundles" / blob_id)
+                    c.execute(
+                        insert(submissions).values(
+                            id=blob_id,
+                            hotkey=hotkey,
+                            encrypted=encrypted,
+                            code_sha256=code,
+                            bytes=len(blob),
+                            submitted_at=clock(),
+                        )
+                    )
+                    drop_old_bundles(c, hotkey)
+        finally:
+            incoming.unlink(missing_ok=True)
         return {"id": blob_id, "encrypted": encrypted, "code_sha256": code, "existing": False}
 
     @app.get("/agents/{blob_id}")
