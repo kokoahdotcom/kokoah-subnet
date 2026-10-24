@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.0, October 2026. Mechanism specification v6.1.
+Whitepaper, version 3.1, October 2026. Mechanism specification v6.1.
 
 ### Summary
 
@@ -37,8 +37,9 @@ returns to Bittensor and to the people and agents who earned it.
   day, from a token signed by the cloud provider.
 - **From verified agents to the market.** Agents with long, verified records are to become strategies offered to
   traders on Kokoah, in the traders' own accounts.
-- **Revenue returns to the network.** Builder fees and strategy revenue buy back and burn the subnet token, each
-  buyback one public transaction. The whole miner emission is paid out.
+- **Revenue returns to the network.** The builder fees of every trader on Kokoah, registered in the subnet or not,
+  and strategy revenue buy back and burn the subnet token, each buyback one public transaction. The whole miner
+  emission is paid out.
 - **Everything is on the record.** Every validator keeps a complete, queryable record of every fill, every figure
   and every decision, and serves the ranking and the daily artifacts over a read-only interface.
 
@@ -299,15 +300,25 @@ join the buyback. The more the subnet's agents are worth to traders, the more va
 before; being offered to traders gives an agent no extra weight, and Kokoah cannot promote an agent in the ranking.
 Strategy products are subject to legal review and to regional availability.
 
-## 9. Sustainability
+## 9. Tokenomics and sustainability
 
-**Revenue.** Every routed trade pays the builder fee, from miners and from every other Kokoah user alike, and
-strategies built on verified agents will add their own revenue. Kokoah spends this revenue on buying back and burning the
-subnet token on a published cadence, each time as one `add_stake_burn` transaction that buys alpha with TAO and burns
-it in a single call. A coverage figure, cumulative buyback over cumulative alpha received by miners, is published.
+**Emission.** The subnet's daily alpha emission is split as Bittensor sets it: 41% to miners, 41% to validators and
+18% to the owner. The owner's share is locked by enabling the chain's `owner_cut_auto_lock_enabled` hyperparameter,
+so it is never sold into the buyback.
 
-**The owner's share.** The owner's 18% of emission is locked by enabling the chain's `owner_cut_auto_lock_enabled`
-hyperparameter, so it is never sold into the buyback.
+**Revenue from every trader on Kokoah.** Every trade routed through Kokoah pays the builder fee: from miners, and from
+every other trader who uses the platform without ever registering in the subnet. Strategies built on verified agents
+will add revenue of their own.
+
+**All of it buys back and burns the subnet token.** Kokoah spends this revenue on buying back and burning the subnet
+token on a published cadence, each time as one `add_stake_burn` transaction that buys alpha with TAO and burns it in
+a single call. The revenue is earned in an outside market, so each buyback brings new capital into Bittensor rather
+than moving it around inside the network, and the more traders use Kokoah, the more alpha is bought and burned.
+Miners are paid in that same alpha: the revenue of the whole platform returns to the token its traders and agents
+earn.
+
+**Published.** Every burn is a transaction on chain. A coverage figure, cumulative buyback over cumulative alpha
+received by miners, is published with the daily volume and revenue.
 
 **Every credited fee is checked.** The exchange reports what Kokoah's builder has earned. Every validator compares
 the builder fees it credits to miners with that figure and raises an alarm if the credited fees are ever larger.
