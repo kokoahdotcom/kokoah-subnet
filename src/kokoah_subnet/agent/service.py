@@ -10,6 +10,9 @@ sealed machines fetch it, and where they keep their account key encrypted with t
     POST /key-store/{address}/release         the encrypted key to the miner (signed by the master address): public,
                                             and the account never earns the agent bonus again
     GET  /key-store/released                       every released account
+    GET  /unlinks/message?hotkey=&address=      the text a linked address signs to end its link (with the time)
+    POST /unlinks                                an address's signed unlink (spec section 14)
+    GET  /unlinks[?address=]                     every unlink accepted, for validators (they check each signature)
 
 A submission's id is the sha256 of the stored bytes (encrypted or not), so a machine can check it fetched exactly
 what was submitted. A plain bundle is checked here (a zip with an entry.py, safe paths, within the size limits) and
@@ -40,6 +43,7 @@ from eth_account.messages import encode_defunct
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     Float,
@@ -55,6 +59,7 @@ from sqlalchemy import (
 )
 from starlette.concurrency import run_in_threadpool
 
+from ..binding.unlink import Unlink, unlink_message
 from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted
 from .keystore import PERMIT_DAYS, parse_permit, release_message, restore_digest, start_message, store_digest
 
@@ -91,6 +96,15 @@ permits = Table(  # every start permission used: each one files one key copy, on
     Column("address", String(42), nullable=False),
     Column("used_at", Float, nullable=False),
 )
+unlinks = Table(  # every unlink accepted: a linked address ended its link to a hotkey (the first one per pair counts)
+    "subnet_unlinks",
+    metadata,
+    Column("hotkey", String(64), primary_key=True),
+    Column("address", String(42), primary_key=True),
+    Column("time_ms", BigInteger, nullable=False),
+    Column("signature", String(200), nullable=False),
+    Column("received_at", Float, nullable=False),
+)
 key_events = Table(  # every store, restore and release, for the record
     "agent_key_events",
     metadata,
@@ -126,6 +140,8 @@ def unwrap_blob(wrap_key: bytes | None, stored: bytes, address: str) -> bytes:
 
 
 SIGNED_REQUEST_WINDOW_MS = 300_000
+UNLINK_WINDOW_MS = 600_000  # an unlink's time must be this close to the service's clock (wallets can be slow)
+SS58_CHARS = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 
 def submit_message(blob_sha256: str, hotkey: str) -> str:
@@ -155,6 +171,13 @@ class Restore(BaseModel):
 class Release(BaseModel):
     time_ms: int
     signature: str  # EIP-191 signature of `release_message` by the master address
+
+
+class UnlinkRequest(BaseModel):
+    hotkey: str
+    address: str
+    time_ms: int
+    signature: str  # EIP-191 signature of `unlink_message` by the address
 
 
 def create_app(
@@ -468,7 +491,7 @@ def create_app(
                     encode_defunct(text=release_message(a, body.time_ms)),
                     signature=bytes.fromhex(body.signature.removeprefix("0x")),
                 )
-            except (ValueError, TypeError) as exc:
+            except Exception as exc:  # noqa: BLE001 - a signature that cannot be read is refused
                 raise HTTPException(status_code=403, detail="bad signature") from exc
             if str(signer).lower() != row["master"]:
                 raise HTTPException(status_code=403, detail="not signed by the account's master address")
@@ -477,6 +500,64 @@ def create_app(
                 c.execute(keys.update().where(keys.c.address == a).values(released_at=clock()))
             event(c, a, "release")
         return {"address": a, "blob": blob}
+
+    def check_hotkey(hotkey: str) -> str:
+        if not 46 <= len(hotkey) <= 48 or not set(hotkey) <= SS58_CHARS:
+            raise HTTPException(status_code=400, detail="bad hotkey")
+        return hotkey
+
+    def unlink_row(row: Any) -> dict[str, Any]:
+        u = Unlink(row.hotkey, row.address, int(row.time_ms), row.signature)
+        return {
+            "hotkey": u.hotkey,
+            "address": u.address,
+            "time_ms": u.time_ms,
+            "signature": u.signature,
+            "effective_day": u.effective_day,
+        }
+
+    @app.get("/unlinks/message")
+    def unlink_text(hotkey: str, address: str) -> dict[str, Any]:
+        if netuid is None:
+            raise HTTPException(status_code=503, detail="this service serves no subnet")
+        hk, a = check_hotkey(hotkey), check_address(address)
+        require_registered(hk)
+        now_ms = int(clock() * 1000)
+        return {"message": unlink_message(netuid, hk, a, now_ms), "time_ms": now_ms}
+
+    @app.post("/unlinks")
+    def unlink(body: UnlinkRequest) -> dict[str, Any]:
+        if netuid is None:
+            raise HTTPException(status_code=503, detail="this service serves no subnet")
+        hk, a = check_hotkey(body.hotkey), check_address(body.address)
+        if len(body.signature) > 200:
+            raise HTTPException(status_code=400, detail="bad signature")
+        with engine.connect() as c:
+            row = c.execute(select(unlinks).where(unlinks.c.hotkey == hk, unlinks.c.address == a)).first()
+        if row is not None:
+            return {**unlink_row(row), "existing": True}
+        if abs(clock() * 1000 - body.time_ms) > UNLINK_WINDOW_MS:
+            raise HTTPException(status_code=400, detail="the time is not within 10 minutes of now: sign a new message")
+        u = Unlink(hk, a, body.time_ms, body.signature)
+        if not u.signed_by_address(netuid):
+            raise HTTPException(status_code=403, detail="not signed by the address")
+        require_registered(hk)
+        with engine.begin() as c:
+            row = c.execute(select(unlinks).where(unlinks.c.hotkey == hk, unlinks.c.address == a)).first()
+            if row is not None:
+                return {**unlink_row(row), "existing": True}
+            c.execute(insert(unlinks).values(hotkey=hk, address=a, time_ms=u.time_ms, signature=u.signature,
+                                             received_at=clock()))  # fmt: skip
+        return {**unlink_row(u), "existing": False}
+
+    @app.get("/unlinks")
+    def unlink_list(address: str | None = None) -> dict[str, list[dict[str, Any]]]:
+        q = select(unlinks).order_by(unlinks.c.time_ms, unlinks.c.hotkey)
+        if address is not None:
+            q = q.where(unlinks.c.address == check_address(address))
+        with engine.connect() as c:
+            rows = c.execute(q).all()
+        return {"unlinks": [unlink_row(r) for r in rows]}
 
     @app.get("/key-store/released")
     def released() -> dict[str, list[dict[str, Any]]]:

@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import case, create_engine, delete, func, insert, select, text
 from sqlalchemy.engine import Engine
 
-from kokoah_subnet.binding import AcceptedBinding
+from kokoah_subnet.binding import AcceptedBinding, Unlink
 from kokoah_subnet.mechanism import MinerState
 
 from . import schema as S
@@ -25,6 +25,19 @@ from .migrations import apply_migrations
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def _growth(returns: Sequence[float]) -> tuple[float | None, float | None]:
+    """The compounded return over daily returns, and the largest fall from a peak of that curve (0 to 1)."""
+    if not returns:
+        return None, None
+    level = peak = 1.0
+    drop = 0.0
+    for r in returns:
+        level *= 1 + r
+        peak = max(peak, level)
+        drop = max(drop, 1 - level / peak)
+    return level - 1, drop
 
 
 class Store:
@@ -280,6 +293,86 @@ class Store:
         through off-market fills removed."""
         return list(self.dated_returns(address, days).values())
 
+    def account_record(self, address: str, with_days: bool = True) -> dict[str, Any] | None:
+        """An address's record as this validator scored it (None if never scored): its daily returns (the series the
+        skill test reads, with money moved in or out and off-market profit removed), the growth of 1 over them
+        (carried over days the exchange did not record), and each scored day's figures."""
+        a = address.lower()
+        with self._engine.connect() as c:
+            scored = (
+                c.execute(
+                    select(
+                        S.miner_days.c.day,
+                        S.miner_days.c.hotkey,
+                        S.miner_days.c.notional,
+                        S.miner_days.c.fills,
+                        S.miner_days.c.pay_alpha,
+                        S.miner_days.c.eligible,
+                        S.miner_days.c.agent_verified,
+                        S.miner_days.c.avg_equity_usd,
+                    )
+                    .where(S.miner_days.c.address == a)
+                    .order_by(S.miner_days.c.day)
+                )
+                .mappings()
+                .all()
+            )
+            if not scored:
+                return None
+            stored = [str(d) for (d,) in c.execute(select(S.equity.c.day).where(S.equity.c.address == a)).all()]
+            averages: dict[str, float | None] = {
+                str(d): v
+                for d, v in c.execute(
+                    select(S.equity_daily.c.day, S.equity_daily.c.avg_equity_usd).where(S.equity_daily.c.address == a)
+                ).all()
+            }
+            linked = c.execute(select(S.bindings.c.hotkey).where(S.bindings.c.address == a)).first() is not None
+        returns = self.dated_returns(a, len(stored))
+        window = list(self.dated_returns(a, 90).values())
+        every = list(returns.values())
+        by_day = {str(m["day"]): m for m in scored}
+        days = sorted(set(stored) | set(by_day))
+        ret_90, drop_90 = _growth(window)
+        ret_all, drop_all = _growth(every)
+        record = {
+            "record_days": len(every),
+            "return_90d": ret_90,
+            "worst_drop_90d": drop_90,
+            "losing_days_90d": sum(1 for r in window if r < 0) if window else None,
+            "return_days_90d": len(window) if window else None,
+            "return_all": ret_all,
+            "worst_drop_all": drop_all,
+            "agent_days": sum(1 for m in scored if m["agent_verified"]),
+            "first_day": days[0],
+            "last_day": days[-1],
+        }
+        out: dict[str, Any] = {"address": a, "hotkey": str(scored[-1]["hotkey"]), "linked": linked, "record": record}
+        if with_days:
+            index, rows = 1.0, []
+            for d in days:
+                r = returns.get(d)
+                if r is not None:
+                    index *= 1 + r
+                m = by_day.get(d)
+                avg = m["avg_equity_usd"] if m is not None else averages.get(d)
+                rows.append(
+                    {
+                        "day": d,
+                        "scored": m is not None,
+                        "hotkey": str(m["hotkey"]) if m is not None else None,
+                        "return": r,
+                        "index": index,
+                        "avg_equity_usd": float(avg) if avg is not None else None,
+                        "volume_usd": float(m["notional"] or 0.0) if m is not None else 0.0,
+                        "fills": int(m["fills"] or 0) if m is not None else 0,
+                        "pay_alpha": float(m["pay_alpha"] or 0.0) if m is not None else 0.0,
+                        "eligible": bool(m["eligible"]) if m is not None else False,
+                        "agent_verified": bool(m["agent_verified"]) if m is not None else False,
+                    }
+                )
+            out["days"] = rows
+        return out
+
     def mean_equity(self, address: str, days: int) -> float:
         series = self.equity_series(address, days)
         return sum(v for _, v, _ in series) / len(series) if series else 0.0
@@ -436,6 +529,32 @@ class Store:
                         updated_day=day,
                     )
                 )
+
+    def put_unlinks(self, day: str, found: Iterable[Unlink]) -> None:
+        """Keep every unlink seen (the first one per hotkey and address counts; they are never removed)."""
+        with self._engine.begin() as c:
+            known = {(hk, a) for hk, a in c.execute(select(S.unlinks.c.hotkey, S.unlinks.c.address)).all()}
+            for u in found:
+                if (u.hotkey, u.address) in known:
+                    continue
+                known.add((u.hotkey, u.address))
+                c.execute(
+                    insert(S.unlinks).values(
+                        hotkey=u.hotkey,
+                        address=u.address,
+                        time_ms=u.time_ms,
+                        signature=u.signature,
+                        effective_day=u.effective_day,
+                        first_seen_day=day,
+                    )
+                )
+
+    def unlinks(self) -> list[Unlink]:
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(S.unlinks.c.hotkey, S.unlinks.c.address, S.unlinks.c.time_ms, S.unlinks.c.signature)
+            ).all()
+        return [Unlink(str(hk), str(a), int(t), str(sig)) for hk, a, t, sig in rows]
 
     def put_commitments(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
         with self._engine.begin() as c:

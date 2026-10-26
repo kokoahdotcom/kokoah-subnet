@@ -33,7 +33,7 @@ from typing import Any
 import httpx
 
 from kokoah_subnet.agent.attest import AttestationError, KeySource, binding_digest, verify_token
-from kokoah_subnet.binding import AgentRef, Binding
+from kokoah_subnet.binding import AgentRef, Binding, Unlink
 
 log = logging.getLogger("kokoah_subnet.validator.agents")
 
@@ -192,6 +192,22 @@ async def _check_agent(
         verified.hardware,
         verified.instance,
     )
+
+
+async def fetch_unlinks(http: httpx.AsyncClient, service: str, netuid: int) -> list[Unlink]:
+    """The unlinks the subnet's service published (`GET /unlinks`), keeping only those the address itself signed for
+    this subnet: the service cannot make one up."""
+    r = await http.get(f"{service.rstrip('/')}/unlinks", timeout=20)
+    r.raise_for_status()
+    out = []
+    for x in r.json()["unlinks"]:
+        try:
+            u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if u.signed_by_address(netuid):
+            out.append(u)
+    return out
 
 
 async def released_accounts(http: httpx.AsyncClient, service: str) -> set[str]:

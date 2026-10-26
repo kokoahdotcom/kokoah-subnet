@@ -7,14 +7,19 @@ accepted only when the previous address is the one currently accepted, its signa
 accepted change is at least `migration_days` old; anything else keeps the earlier binding and is flagged. One
 address can be bound to one hotkey: a later claim on an address already accepted elsewhere is refused. A validator
 that starts fresh therefore agrees with the others except on the 60-day limit during its own first 60 days.
+
+Unlinks (signed by the address, see `unlink.py`) count from their effective day: the hotkey's link to that address
+ends, the address is free for another hotkey, and the pair is never accepted again. They depend only on the published
+unlinks, so every validator applies them alike.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .chain import PublishedBinding
+from .unlink import Unlink
 
 BLOCKS_PER_DAY = 7200
 
@@ -31,6 +36,7 @@ class AcceptedBinding:
 class Resolution:
     accepted: dict[str, AcceptedBinding]  # by hotkey
     refused: dict[str, str]  # hotkey -> reason, for the published report
+    unlinked: dict[str, str] = field(default_factory=dict)  # hotkey -> the address its owner unlinked today
 
 
 def resolve_bindings(
@@ -39,20 +45,32 @@ def resolve_bindings(
     block: int,
     migration_days: int = 60,
     registered: Iterable[str] | None = None,
+    unlinks: Iterable[Unlink] = (),
+    day: str | None = None,
 ) -> Resolution:
     """`registered`, when given, is the set of hotkeys on the subnet today: a hotkey that left releases its address
-    (its records stay in the store and resume if the same hotkey comes back)."""
+    (its records stay in the store and resume if the same hotkey comes back). `unlinks` (signatures already checked)
+    count for `day` (the day being scored) from their effective day on."""
     accepted: dict[str, AcceptedBinding] = dict(previous)
     if registered is not None:
         live = set(registered)
         accepted = {hk: b for hk, b in accepted.items() if hk in live}
     refused: dict[str, str] = {}
+    unlinked: dict[str, str] = {}
+    ended = {(u.hotkey, u.address) for u in unlinks if day is not None and u.effective_day <= day}
+    for hk, a in list(accepted.items()):
+        if (hk, a.address) in ended:
+            del accepted[hk]
+            unlinked[hk] = a.address
     taken = {a.address: hk for hk, a in accepted.items()}
     min_gap = migration_days * BLOCKS_PER_DAY
     for pb in sorted(published, key=lambda p: (p.block, p.hotkey)):
         hk, b = pb.hotkey, pb.binding
         if not pb.valid:
             refused[hk] = "signature does not match"
+            continue
+        if (hk, b.address) in ended:
+            refused[hk] = "the address unlinked itself from this hotkey"
             continue
         current = accepted.get(hk)
         if current is None:
@@ -78,4 +96,4 @@ def resolve_bindings(
         del taken[current.address]
         accepted[hk] = AcceptedBinding(hk, b.address, pb.block, current.first_block)
         taken[b.address] = hk
-    return Resolution(accepted, refused)
+    return Resolution(accepted, refused, unlinked)

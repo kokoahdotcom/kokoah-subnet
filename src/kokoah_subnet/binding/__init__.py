@@ -22,6 +22,7 @@ from .message import (
     verify_binding,
 )
 from .resolve import AcceptedBinding, Resolution, resolve_bindings
+from .unlink import UNLINK_VERSION, Unlink, effective_day, sign_unlink, unlink_message
 
 __all__ = [
     "AgentRef",
@@ -44,4 +45,9 @@ __all__ = [
     "recover_signer",
     "sign_binding",
     "verify_binding",
+    "UNLINK_VERSION",
+    "Unlink",
+    "effective_day",
+    "sign_unlink",
+    "unlink_message",
 ]

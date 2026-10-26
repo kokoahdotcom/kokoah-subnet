@@ -84,3 +84,51 @@ def test_penalties_swaps_and_latest_neurons(tmp_path: Path) -> None:
     s.put_swap("2026-10-23", 2, "hkA", "hkB", "ck2")
     assert s.swaps_through("2026-10-22") == [("2026-10-21", "hkOld", "hkNew")]
     assert len(s.swaps_through("2026-10-23")) == 2
+
+
+def test_an_accounts_record_is_the_series_the_validator_scores_on(tmp_path: Path) -> None:
+    """Returns over consecutive known days only (a day the exchange did not record has none, nor the day after it),
+    the growth of 1 carried over such days, the worst fall from a peak, and the scored days' figures."""
+    s = Store(tmp_path / "r.sqlite")
+    a = "0x" + "aa" * 20
+    s.put_equity(a, "2026-10-01", 1000.0, 0.0)
+    s.put_equity(a, "2026-10-02", 1100.0, 0.0)  # +10%
+    s.put_equity(a, "2026-10-03", 990.0, 0.0)  # -10%
+    s.put_equity(a, "2026-10-04", 990.0, 0.0, known=False)  # not recorded: no return
+    s.put_equity(a, "2026-10-05", 1089.0, 0.0)  # follows an unknown day: no return
+    s.put_equity(a, "2026-10-06", 1197.9, 0.0)  # +10%
+    assert s.account_record(a) is None  # never scored
+    for day, agent in (("2026-10-05", False), ("2026-10-06", True)):
+        s.put_miner_days(day, [{"hotkey": "hk", "address": a, "notional": 5000.0, "fills": 3, "pay_alpha": 1.5,
+                                "eligible": True, "agent_verified": agent, "avg_equity_usd": 1100.0}])  # fmt: skip
+    rec = s.account_record(a.upper().replace("0X", "0x"))
+    assert rec is not None and rec["hotkey"] == "hk" and rec["linked"] is False
+    r = rec["record"]
+    assert r["record_days"] == 3 and r["return_days_90d"] == 3 and r["losing_days_90d"] == 1 and r["agent_days"] == 1
+    assert r["return_90d"] == pytest.approx(0.089) and r["return_all"] == pytest.approx(0.089)
+    assert r["worst_drop_90d"] == pytest.approx(0.1) and r["worst_drop_all"] == pytest.approx(0.1)
+    assert (r["first_day"], r["last_day"]) == ("2026-10-01", "2026-10-06")
+    days = rec["days"]
+    assert [d["return"] for d in days] == [
+        None,
+        pytest.approx(0.1),
+        pytest.approx(-0.1),
+        None,
+        None,
+        pytest.approx(0.1),
+    ]
+    assert [round(d["index"], 4) for d in days] == [1.0, 1.1, 0.99, 0.99, 0.99, 1.089]
+    assert [d["scored"] for d in days] == [False] * 4 + [True] * 2 and days[0]["hotkey"] is None
+    assert days[-1] == {"day": "2026-10-06", "scored": True, "hotkey": "hk", "return": pytest.approx(0.1),
+                        "index": pytest.approx(1.089), "avg_equity_usd": 1100.0, "volume_usd": 5000.0, "fills": 3,
+                        "pay_alpha": 1.5, "eligible": True, "agent_verified": True}  # fmt: skip
+    assert "days" not in (s.account_record(a, with_days=False) or {})
+
+
+def test_a_record_without_known_returns_says_so_with_nulls(tmp_path: Path) -> None:
+    s = Store(tmp_path / "n.sqlite")
+    a = "0x" + "bb" * 20
+    s.put_miner_days("2026-10-05", [{"hotkey": "hk", "address": a}])
+    r = (s.account_record(a) or {})["record"]
+    assert r["record_days"] == 0 and r["return_90d"] is None and r["worst_drop_90d"] is None
+    assert r["losing_days_90d"] is None and r["return_days_90d"] is None and r["return_all"] is None

@@ -57,6 +57,17 @@ def build_parser() -> argparse.ArgumentParser:
     show = msub.add_parser("show", help="list the bindings published on a subnet and whether they verify")
     show.add_argument("--netuid", required=True, type=int)
     show.add_argument("--network", default="local")
+    for name, text in (
+        ("unlink-message", "print the text a linked address signs to end its link (from the subnet's service)"),
+        ("unlink", "send the address's signed unlink to the subnet's service"),
+    ):
+        u = msub.add_parser(name, help=text)
+        u.add_argument("--service", default="https://api.kokoah.com/miners", help="the subnet's service")
+        u.add_argument("--hotkey", required=True, help="the linked hotkey's ss58 address")
+        u.add_argument("--address", required=True, help="the linked Hyperliquid address")
+        if name == "unlink":
+            u.add_argument("--time-ms", required=True, type=int, help="the time printed with the message")
+            u.add_argument("--signature", required=True, help="0x-hex EIP-191 signature of the message by the address")
 
     agent = sub.add_parser("agent", help="sealed-machine agents: package, submit, bind, sign, run the owner service")
     asub = agent.add_subparsers(dest="agent_command", required=True)
@@ -493,6 +504,24 @@ def _miner(args: argparse.Namespace) -> int:
             return 0
 
         return asyncio.run(_show())
+    if args.miner_command in ("unlink-message", "unlink"):
+        import httpx
+
+        base = args.service.rstrip("/")
+        if args.miner_command == "unlink-message":
+            r = httpx.get(
+                f"{base}/unlinks/message", params={"hotkey": args.hotkey, "address": args.address}, timeout=30
+            )
+        else:
+            body = {
+                "hotkey": args.hotkey,
+                "address": args.address,
+                "time_ms": args.time_ms,
+                "signature": args.signature,
+            }
+            r = httpx.post(f"{base}/unlinks", json=body, timeout=30)
+        print(r.text)
+        return 0 if r.status_code == 200 else 1
     return 2
 
 

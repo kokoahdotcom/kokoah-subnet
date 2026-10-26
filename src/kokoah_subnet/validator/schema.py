@@ -474,6 +474,17 @@ bindings = Table(  # the accepted binding per hotkey, as it stands
     Column("updated_day", String(10)),
 )
 
+unlinks = Table(  # every unlink seen (signed by the address, checked here), from the subnet's service
+    "unlinks",
+    metadata,
+    Column("hotkey", String(64), primary_key=True),
+    Column("address", String(42), primary_key=True),
+    Column("time_ms", BigInteger, nullable=False),
+    Column("signature", String(200), nullable=False),
+    Column("effective_day", String(10), nullable=False),
+    Column("first_seen_day", String(10)),
+)
+
 binding_events = Table(  # accepted, migrated, refused (with the reason), per day
     "binding_events",
     metadata,

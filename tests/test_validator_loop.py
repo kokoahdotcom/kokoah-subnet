@@ -10,7 +10,7 @@ import lz4.frame
 import pytest
 from eth_account import Account
 
-from kokoah_subnet.binding import Binding, encode_binding, sign_binding
+from kokoah_subnet.binding import AcceptedBinding, Binding, encode_binding, sign_binding, sign_unlink
 from kokoah_subnet.mechanism import DEFAULT
 from kokoah_subnet.validator.collect import ValidatorConfig, collect_and_score, day_index, day_strings
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
@@ -338,6 +338,21 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         assert page.status_code == 200 and "Leaderboard" in page.text and 'fetch("leaderboard")' in page.text
         summary = (await c.get("/summary")).json()
         assert summary["latest_day"] == DAY and summary["days"] == 1
+        # each row carries the account's record, and the whole record is one request away
+        assert {
+            "record_days",
+            "return_90d",
+            "worst_drop_90d",
+            "losing_days_90d",
+            "return_days_90d",
+            "agent_days",
+        } <= set(board[0])
+        account = (await c.get(f"/accounts/{board[0]['address']}")).json()
+        assert account["hotkey"] == board[0]["hotkey"] and account["linked"] is True
+        assert account["days"][-1]["day"] == DAY and account["days"][-1]["scored"] is True
+        assert account["record"]["record_days"] == board[0]["record_days"]
+        assert (await c.get("/accounts/0x" + "99" * 20)).status_code == 404
+        assert (await c.get("/accounts/not-an-address")).status_code == 400
         assert summary["burn_alpha"] == pytest.approx(DEFAULT.miner_pool_alpha - summary["paid_alpha"])
         assert summary["builder_fee_usd"] == pytest.approx(300.0)
         assert "access-control-allow-origin" in {
@@ -583,6 +598,8 @@ async def test_a_sealed_machine_agent_is_verified_through_the_whole_pass(tmp_pat
     async def route(request: httpx.Request) -> httpx.Response:
         if request.url.host == "203.0.113.7":
             return await machine.handle_async_request(request)
+        if request.url.path == "/unlinks":
+            return httpx.Response(200, json={"unlinks": []})
         assert request.url.path == "/key-store/released"
         return httpx.Response(200, json={"released": released})
 
@@ -742,4 +759,51 @@ async def test_one_accounts_explorer_failure_affects_only_that_account_after_the
     records = {r.hotkey: r for r in result.records}
     assert records[HK_A].credited.fills == 22  # A's day is untouched: its four history fills confirmed as usual
     assert records[HK_B].fees.fills == 10  # B keeps its file fills; its three unconfirmed later fills do not count
+    await hl.close()
+
+
+def _unlinks_service(rows: list[dict[str, Any]], fail: bool = False) -> httpx.AsyncClient:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if fail:
+            return httpx.Response(503)
+        assert request.url.path == "/unlinks"
+        return httpx.Response(200, json={"unlinks": rows})
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(answer))
+
+
+async def test_an_address_that_unlinked_itself_earns_its_hotkey_nothing_from_its_day(tmp_path: Path) -> None:
+    """A's owner signed an unlink the day before: from this day A's hotkey is no longer linked, its commitment is
+    refused, and A's trades pay nobody; B is untouched."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "agent_service": "https://svc.example"})
+    t = DAY_MS - 3_600_000  # an hour before the day starts
+    signed = sign_unlink(ACCOUNTS["a"].key, 2, HK_A, addr_a, t)
+    forged = sign_unlink(Account.create().key, 2, HK_B, ACCOUNTS["b"].address, t)  # not B's own signature
+    rows = [
+        {"hotkey": HK_A, "address": addr_a, "time_ms": t, "signature": signed},
+        {"hotkey": HK_B, "address": ACCOUNTS["b"].address.lower(), "time_ms": t, "signature": forged},
+    ]
+    store.put_bindings({HK_A: AcceptedBinding(HK_A, addr_a, 9000, 9000)})  # A was linked before
+    async with _unlinks_service(rows) as http:
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http)
+    assert {r.hotkey for r in result.records} == {HK_B}
+    assert HK_A not in store.bindings() and HK_B in store.bindings()
+    events = store.execute_sql(f"select event, hotkey, reason from binding_events where day = '{DAY}'")
+    assert {"event": "unlinked", "hotkey": HK_A, "reason": "the address ended the link"} in events
+    assert {"event": "refused", "hotkey": HK_A, "reason": "the address unlinked itself from this hotkey"} in events
+    assert [u.hotkey for u in store.unlinks()] == [HK_A]
+    await hl.close()
+
+
+async def test_a_validator_waits_for_the_unlink_list_until_the_deadline(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "agent_service": "https://svc.example"})
+    early = DAY_MS / 1000 + 86_400 + 3600  # an hour after the day ended
+    async with _unlinks_service([], fail=True) as http:
+        with pytest.raises(RuntimeError, match="unlinks unavailable"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=early)
+        late = DAY_MS / 1000 + 86_400 + (DEFAULT.file_deadline_hours + 1) * 3600
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=late)
+    assert {r.hotkey for r in result.records} == {HK_A, HK_B}
     await hl.close()

@@ -34,7 +34,7 @@ from kokoah_subnet.mechanism.eligibility import daily_average_equity, day_change
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 from kokoah_subnet.mechanism.fills import assign_counterparties, builder_orders, confirm_builder, merge_sources
 
-from .agents import check_agents
+from .agents import check_agents, fetch_unlinks
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
 from .clusters import clusters, coldkey_edges, penalty_reach
@@ -272,8 +272,24 @@ async def collect_and_score(
             store.put_swap(day, n.uid, prev_n["hotkey"], n.hotkey, n.coldkey)
             swaps.append((prev_n["hotkey"], n.hotkey))
             log.info("hotkey swap on uid %d: %s -> %s", n.uid, prev_n["hotkey"], n.hotkey)
+    # unlinks: signed by the linked addresses themselves and published by the subnet's service; each signature is
+    # checked here, and every one seen is kept, so a later outage of the service changes nothing already applied
+    if cfg.agent_service:
+        own_unlink_http = agent_http is None
+        unlink_http = agent_http or httpx.AsyncClient(timeout=20)
+        try:
+            store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid))
+        except Exception as exc:
+            store.put_error(day, None, None, "unlinks", str(exc))
+            if clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
+                raise RuntimeError(f"unlinks unavailable: {exc}") from exc
+        finally:
+            if own_unlink_http:
+                await unlink_http.aclose()
     before = store.bindings()
-    resolution = resolve_bindings(before, published, snap.block, registered=uid_of.keys())
+    resolution = resolve_bindings(
+        before, published, snap.block, registered=uid_of.keys(), unlinks=store.unlinks(), day=day
+    )
     store.put_bindings(resolution.accepted, day=day)
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
@@ -287,6 +303,8 @@ async def collect_and_score(
             events.append(
                 {"hotkey": hk, "event": "left", "address": before[hk].address, "reason": "hotkey no longer registered"}
             )
+    for hk, address in resolution.unlinked.items():
+        events.append({"hotkey": hk, "event": "unlinked", "address": address, "reason": "the address ended the link"})
     for old_hk, new_hk in swaps:
         events.append(
             {"hotkey": new_hk, "event": "swapped", "address": None, "reason": f"history (not credit) from {old_hk}"}

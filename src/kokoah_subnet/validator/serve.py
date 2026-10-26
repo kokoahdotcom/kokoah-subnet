@@ -1,8 +1,10 @@
-"""Read-only HTTP view of the validator's store: the published daily artifacts, the bindings, the leaderboard."""
+"""Read-only HTTP view of the validator's store: the published daily artifacts, the bindings, the leaderboard and each
+account's record."""
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +60,22 @@ def create_app(store: Store) -> FastAPI:
             for b in store.bindings().values()
         ]
 
+    def record_fields(address: str) -> dict[str, Any]:
+        found = store.account_record(address, with_days=False)
+        r = found["record"] if found else {}
+        keys = ("record_days", "return_90d", "worst_drop_90d", "losing_days_90d", "return_days_90d", "agent_days")
+        return {k: r.get(k, 0 if k in ("record_days", "agent_days") else None) for k in keys}
+
+    @app.get("/accounts/{address}")
+    def account(address: str) -> dict[str, Any]:
+        """One address's whole record: every stored day with its return, the growth curve and the scored figures."""
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            raise HTTPException(status_code=400, detail="bad address")
+        found = store.account_record(address)
+        if found is None:
+            raise HTTPException(status_code=404, detail="this address was never scored")
+        return found
+
     @app.get("/leaderboard")
     def leaderboard() -> list[dict[str, Any]]:
         """Miners of the latest day sorted by skill, with the published metrics (no effect on pay) and their
@@ -101,6 +119,7 @@ def create_app(store: Store) -> FastAPI:
                     "total_builder_fee_usd": t.get("builder_fee_usd", 0.0),
                     "total_volume_usd": t.get("volume_usd", 0.0),
                     "profit_usd": t.get("profit_usd", 0.0),
+                    **record_fields(m["address"]),
                 }
             )
         rows.sort(key=lambda r: (r["skill"], r["volume_usd"]), reverse=True)
