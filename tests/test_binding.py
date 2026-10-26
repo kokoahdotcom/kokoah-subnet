@@ -176,3 +176,13 @@ def test_an_agent_field_round_trips_and_old_bindings_still_decode() -> None:
     assert plain is not None and plain.agent is None
     v6 = AgentRef("cd" * 32, "2001:db8::1", 443)
     assert decode_binding(encode_binding(Binding(acct.address, sig, agent=v6))).agent.url == "http://[2001:db8::1]:443"  # type: ignore[union-attr]
+
+
+def test_a_commitment_with_an_unreadable_signature_is_refused_not_a_crash() -> None:
+    """Anyone with a registered hotkey can publish any commitment: a 65-byte signature that is not a signature
+    (bad v, r or s) must make that binding invalid, never stop the validator's day."""
+    address = "0x" + "11" * 20
+    for sig in ("0x" + "ff" * 65, "0x" + "00" * 65, "0x" + "00" * 64 + "1b"):
+        b = Binding(address, sig)
+        assert decode_binding(encode_binding(b)) == b  # it fits the chain format
+        assert verify_binding(2, "5Fake", b) is False

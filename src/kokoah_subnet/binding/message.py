@@ -165,5 +165,5 @@ def verify_binding(netuid: int, hotkey: str, b: Binding) -> bool:
             if recover_signer(netuid, hotkey, b.address, b.previous_signature) != b.previous_address:
                 return False
         return True
-    except (ValueError, TypeError):
+    except Exception:  # noqa: BLE001 - anyone can publish a commitment: a signature that cannot be read is not valid
         return False
