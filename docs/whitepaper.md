@@ -497,10 +497,17 @@ Validators recover the signer from each signature and accept the binding only wh
 keeps only a hotkey's latest commitment, so each validator enforces the 60-day migration limit from the bindings it
 has itself accepted.
 
+The linked address can end its link without the hotkey by signing
+`kokoah-unlink-1 netuid=<netuid> hotkey=<hotkey ss58> address=<0x address, lowercase> time=<unix ms>` and sending it
+to the subnet's service, which publishes it; validators check the signature and apply it from the next UTC day, and
+the pair is never linked again.
+
 ### Appendix E. Validator interface
 
 Read-only, served by every validator: `/days` (scored days), `/days/latest` and `/days/{day}` (the full daily
 artifact: per-miner eligibility, credit, skill and its parts, the entry test, the skill weight, both rewards, agent
 status; weights; file hash and whether it matches Kokoah's commitment; refused bindings; errors), `/bindings`,
-`/leaderboard` (the ranking with totals over all days), `/summary` (alpha paid, builder fees, totals over all days),
-and `/` (the leaderboard page).
+`/leaderboard` (the ranking with totals over all days and each account's record: 90-day return, worst drop, losing
+days, verified agent days), `/accounts/{address}` (one account's whole record: every stored day's return as scored,
+the growth curve and the scored figures), `/summary` (alpha paid, builder fees, totals over all days), and `/` (the
+leaderboard page).

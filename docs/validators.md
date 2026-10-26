@@ -83,7 +83,7 @@ Without a database URL the validator uses a SQLite file in its data directory, w
 | `--netuid` | `385` on testnet | The subnet. |
 | `--builder` | `0x43ccc0618e4358494f87a4b8699230203dc4ab67` | Kokoah's builder address: whose builder fills are scored. |
 | `--burn-hotkey` | testnet: `5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz` | The subnet's burn hotkey, published by the operator. It receives a day only when no miner has any weight. |
-| `--agent-service` | `https://api.kokoah.com/miners` | Where the list of released agent keys is read. Without it, no account counts as a verified agent. |
+| `--agent-service` | `https://api.kokoah.com/miners` | The subnet's service: the released agent keys and the unlinks signed by linked addresses. Without it, no account counts as a verified agent and no unlink is applied. |
 | `--data-dir` | a directory | Cached builder files and local state. |
 | `--db-url` | default `$KOKOAH_SUBNET_DB_URL` | The record; SQLite in `--data-dir` when unset. |
 | `--wallet`, `--wallet-hotkey`, `--wallet-path` | your wallet | The validator's hotkey. |
@@ -150,13 +150,14 @@ All times are UTC.
    a fill seen only in the history counts once its order is confirmed as a Kokoah order from the account's own
    signed transactions), its recorded account values (for the $10,000 daily average), flows and positions, and the
    accounts linked to it (to name counterparties and detect self-dealing). Every bound account's link and every
-   agent machine are checked.
+   agent machine are checked, and the unlinks the addresses signed are read from the subnet's service (each
+   signature is checked; every unlink seen is kept).
 4. **Scoring.** Eligibility, fee credit, skill, the entry test, the copy rule, agent verification, and the two
    rewards, exactly as the specification states. The day's artifact (every miner's figures) is stored.
 5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
    subnet's settings, including commit-reveal.
 
-A failed read of a miner's fill history, the explorer or the recorded account values fails that day's scoring
+A failed read of a miner's fill history, the explorer, the recorded account values or the unlinks fails that day's scoring
 rather than scoring it with missing data; the validator retries within the hour. Other reads (positions, fee rates,
 stake) fall back, and the failure is recorded.
 
@@ -171,7 +172,8 @@ stake) fall back, and the failure is recorded.
 | `/health` | Liveness and the latest scored day |
 | `/days`, `/days/latest`, `/days/<YYYY-MM-DD>` | The daily artifacts: every miner's figures |
 | `/bindings` | The accepted links between hotkeys and accounts |
-| `/leaderboard` | Ranks and pay |
+| `/leaderboard` | Ranks and pay, with each account's record (90-day return, worst drop, losing days, verified agent days) |
+| `/accounts/<0x address>` | One account's whole record: every stored day with its return, the growth curve and the scored figures |
 
 To publish it, put it behind a reverse proxy with TLS; `deploy/nginx/kokoah-subnet.conf` is a template with a
 request limit. Publishing lets miners and other validators compare figures with yours.

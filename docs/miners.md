@@ -180,6 +180,9 @@ on your hotkey; manage them with `btcli stake`.
   is scored. Any validator's interface serves the same data at `/leaderboard`, with a page at `/`.
 - **Bindings:** `uv run kokoah-subnet miner show --network test --netuid 385`, or `/bindings` on a validator's
   interface.
+- **Your record:** `https://api.kokoah.com/subnet/accounts/<your address>` (or `/accounts/<address>` on any
+  validator's interface): every day's return as the validators score it, the growth curve, the 90-day return and
+  worst drop, and the days your account passed as a verified agent.
 - **Your day in detail:** a validator's `/days/latest` and `/days/<YYYY-MM-DD>` publish every miner's figures:
   eligibility and the reason when not eligible, the day's average account value, qualification progress, credit,
   fees, skill and its parts, the entry test, and both rewards.
@@ -205,6 +208,19 @@ uv run kokoah-subnet miner bind --network test --netuid 385 --address <new> --si
 ```
 
 **After a hotkey swap**, publish the link again: the signed line names the hotkey.
+
+**Unlinking.** The linked address can end its link at any time with one signature, without the hotkey: on
+kokoah.com (Settings, subnet miner), or from the command line:
+
+```bash
+uv run kokoah-subnet miner unlink-message --hotkey <hotkey ss58> --address <0x...>   # prints the line and its time
+# sign the line with the address (personal_sign, EIP-191) within 10 minutes, then:
+uv run kokoah-subnet miner unlink --hotkey <hotkey ss58> --address <0x...> --time-ms <time> --signature <0x...>
+```
+
+From the next UTC day the hotkey earns nothing from the address, its unpaid credit is lost (as when leaving), the
+address can be linked by another hotkey and the hotkey can link another address. This hotkey and this address can
+never be linked again. Penalties stay with the address.
 
 Leaving the subnet forfeits the part of your credit not yet paid out (with the 30% smoothing, most of the last few
 days' fees).

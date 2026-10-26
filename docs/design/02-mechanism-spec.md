@@ -328,6 +328,13 @@ after 60 days.
   hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of that
   day's credit, 49% of the day before, and so on. A new identity never gains on skill: it must pass the 90-day
   entry test again, from its own record.
+- **Unlinking.** The linked address ends its link with one signature, without the hotkey:
+  `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
+  subnet's service, which accepts it only within 10 minutes of its time and publishes it (`GET /unlinks`). Every
+  validator checks each signature, keeps every unlink it has seen and applies it from the first UTC day after its
+  time: the link ends (credit and qualification end with the identity, as when leaving), the address is free for
+  another hotkey and the hotkey for another address, and this hotkey and this address are never accepted together
+  again (the old link signature cannot be republished). Penalties stay with the address.
 - **A mirror report follows the address**, and the addresses its owner controls (hotkeys on the same coldkey, its
   sub-accounts), not the hotkey; a transfer someone else sends never carries it: binding a penalized address to a new
   hotkey keeps the penalty.
