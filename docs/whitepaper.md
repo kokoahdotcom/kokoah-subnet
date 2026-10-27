@@ -298,7 +298,7 @@ join the buyback. The more the subnet's agents are worth to traders, the more va
 
 **What stays the same.** Strategy products never touch scoring. Validators score every miner from public data as
 before; being offered to traders gives an agent no extra weight, and Kokoah cannot promote an agent in the ranking.
-Strategy products are subject to legal review and to regional availability.
+Strategy products are subject to regional availability.
 
 ## 9. Tokenomics and sustainability
 
