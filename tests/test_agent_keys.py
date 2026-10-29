@@ -30,6 +30,7 @@ from kokoah_subnet.agent.keystore import (
     checked_address,
     decrypt_key,
     encrypt_key,
+    parse_permit,
     release_message,
     restore_digest,
     start_message,
@@ -176,6 +177,23 @@ def test_a_key_copy_needs_its_hotkey_owners_start_permission(
     monkeypatch.setattr(service_module, "MAX_COPIES_PER_HOTKEY", 2)
     start(world, master)
     assert refused() == 429  # a hotkey's kept copies are capped
+
+
+def test_a_used_start_permission_stays_used_in_every_spelling(world: dict[str, Any]) -> None:
+    """The signature check reads the hex in either case and with spaces: a used permission spelled another way files
+    no second copy."""
+    master = Account.create()
+    good = permit(world["submission"], master.address)
+    t, signature = good.split(":")
+    start(world, master, permit=good)
+    spaced = " ".join(signature[i : i + 2] for i in range(0, len(signature), 2))
+    for respelled in (f"{t}:{signature.upper()}", f"{t}:0x{signature}", f"{t}:{spaced}"):
+        with pytest.raises(httpx.HTTPStatusError) as e:
+            start(world, master, permit=respelled)
+        assert e.value.response.status_code == 409
+    assert parse_permit(f"{t}:0x{signature.upper()}") == (int(t), signature)
+    with pytest.raises(ValueError):
+        parse_permit(f"{t}:not-hex")
 
 
 def test_validators_never_count_a_released_account() -> None:

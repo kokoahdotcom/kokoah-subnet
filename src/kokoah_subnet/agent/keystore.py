@@ -96,11 +96,17 @@ def start_message(netuid: int, hotkey: str, master: str, submission: str, time_m
 
 
 def parse_permit(permit: str) -> tuple[int, str]:
-    """A start permission as passed to the machine: `<time_ms>:<hex sr25519 signature>`."""
+    """A start permission as passed to the machine: `<time_ms>:<hex sr25519 signature>`. The signature comes back in
+    one spelling (lower-case hex, no 0x), the one the service records as used: the signature check reads the same
+    bytes from upper case or spaced hex too."""
     t, _, signature = permit.strip().partition(":")
-    if not t.isdigit() or not signature:
+    try:
+        raw = bytes.fromhex(signature.removeprefix("0x"))
+    except ValueError:
+        raw = b""
+    if not t.isdigit() or not raw:
         raise ValueError("a start permission looks like <time_ms>:<signature> (from `kokoah-subnet agent authorize`)")
-    return int(t), signature.removeprefix("0x")
+    return int(t), raw.hex()
 
 
 def store_digest(address: str, master: str, blob: bytes, hotkey: str, submission: str, permit: str) -> str:
