@@ -41,14 +41,30 @@ ensure_env() {
   . "$ENV_FILE"
 }
 
-# the read-only role: reads every table, can change nothing (the password goes in on stdin, never as an argument)
+# the read-only role: reads the validator's tables in $DB and nothing else (no other database in the container, such as
+# the agent service's, accepts it), can change nothing (the password goes in on stdin, never as an argument)
 ensure_reader() {
   docker exec -i "$NAME" psql -U "$USER" -d "$DB" -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$READER') THEN CREATE ROLE $READER LOGIN; END IF;
 END \$\$;
 ALTER ROLE $READER WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '$KOKOAH_SUBNET_DB_READER_PASSWORD';
-GRANT pg_read_all_data TO $READER;
+DO \$\$ BEGIN
+  IF EXISTS (SELECT FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.roleid JOIN pg_roles u ON u.oid = m.member
+             WHERE r.rolname = 'pg_read_all_data' AND u.rolname = '$READER') THEN
+    REVOKE pg_read_all_data FROM $READER;
+  END IF;
+END \$\$;
+DO \$\$ DECLARE d text; BEGIN
+  FOR d IN SELECT datname FROM pg_database WHERE datallowconn AND datname <> '$DB' LOOP
+    EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC, $READER', d);
+  END LOOP;
+END \$\$;
+REVOKE ALL ON DATABASE $DB FROM PUBLIC;
+GRANT CONNECT ON DATABASE $DB TO $READER;
+GRANT USAGE ON SCHEMA public TO $READER;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO $READER;
+ALTER DEFAULT PRIVILEGES FOR ROLE $USER IN SCHEMA public GRANT SELECT ON TABLES TO $READER;
 SQL
 }
 
@@ -87,6 +103,8 @@ case "${1:-status}" in
       echo "$new exists" >&2
     else
       docker exec "$NAME" psql -U "$USER" -d "$DB" -qc "CREATE DATABASE $new" && echo "created $new" >&2
-    fi ;;
+    fi
+    # only its owner connects: not PUBLIC, so not the read-only role either
+    docker exec "$NAME" psql -U "$USER" -d "$DB" -qc "REVOKE ALL ON DATABASE $new FROM PUBLIC" ;;
   *) sed -n 2,13p "$0" ;;
 esac

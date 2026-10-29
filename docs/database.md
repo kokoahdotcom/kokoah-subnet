@@ -32,7 +32,8 @@ heights at 12 seconds a block; epoch and submission times are wall-clock at the 
 Connect: `scripts/db.sh psql` opens a shell; the URLs are in `~/.local/share/kokoah/subnet-db.env`:
 `KOKOAH_SUBNET_DB_URL`, which the validator and the burn command read when `--db-url` is not given, and
 `KOKOAH_SUBNET_DB_READER_URL`, the read-only role `kokoah_reader` that the interface, the health check and Grafana
-use (they read the record and never change it).
+use (they read the record and never change it; the role can read this database's tables only, and no other database
+in the container accepts it).
 Back up with `scripts/db.sh backup file.dump`.
 
 Schema changes: `create_all` adds new tables; column changes are numbered steps in
