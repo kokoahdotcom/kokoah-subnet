@@ -378,8 +378,9 @@ after 60 days.
 
 ## 15. Verification
 
-The specification's numerical claims are reproduced by `uv run kokoah-subnet verify` (`scripts/verify_mechanism.py`)
-and by the test suite (`scripts/check.sh`).
+The specification's numerical claims are reproduced by `uv run kokoah-subnet verify`
+(`src/kokoah_subnet/mechanism/verify.py`, part of every install) and by the test suite; `scripts/check.sh`, which CI
+runs, runs both.
 
 ## 16. Sealed-machine agents
 

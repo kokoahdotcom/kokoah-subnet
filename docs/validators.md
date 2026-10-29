@@ -45,7 +45,7 @@ published at launch. Examples use the test network (`--network test`); on mainne
 git clone https://github.com/kokoahdotcom/kokoah-subnet
 cd kokoah-subnet
 uv sync                         # installs the exact versions from uv.lock
-scripts/check.sh                # optional: lint, types and the offline test suite, as CI runs them
+scripts/check.sh                # optional: lint, types, the offline tests and the checks below, as CI runs them
 uv run kokoah-subnet verify     # optional: the specification's numerical checks
 ```
 

@@ -1,4 +1,4 @@
-"""Numerical checks of the claims in the mechanism specification (v6). Run: uv run python scripts/verify_mechanism.py
+"""Numerical checks of the claims in the mechanism specification. Run: uv run kokoah-subnet verify
 
 Each check prints its figures and PASS or FAIL; the exit code is non-zero if any check fails.
 """
@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import random
 import sys
+from collections.abc import Callable
 
-from kokoah_subnet.mechanism import DEFAULT, allocate
+from kokoah_subnet.mechanism import DEFAULT, allocate, ema
 from kokoah_subnet.mechanism.skill import skill_factor, skill_raw
 from kokoah_subnet.mechanism.skillpool import (
     adjusted_skill,
@@ -57,7 +58,7 @@ def volume_pool_sybil() -> None:
 
 def entry_rates() -> None:
     print("3. Entry test (PSR over 90 days >= 0.95): who gets into the skill pool")
-    profiles = {
+    profiles: dict[str, Callable[[random.Random], float]] = {
         "zero edge": lambda r: r.gauss(0, 0.02),
         "lottery": lambda r: 0.004 if r.random() > 0.05 else -0.075,
         "real edge (Sharpe 1.6/yr)": lambda r: r.gauss(0.001, 0.01),
@@ -78,7 +79,7 @@ def entry_rates() -> None:
 
 def luck_weight() -> None:
     print("4. Mean skill weight per account after 90 days (entry test, luck floor, full volume factor)")
-    profiles = {
+    profiles: dict[str, Callable[[random.Random], float]] = {
         "zero edge": lambda r: r.gauss(0, 0.02),
         "lottery": lambda r: 0.004 if r.random() > 0.05 else -0.075,
         "strong edge (Sharpe 3.2/yr)": lambda r: r.gauss(0.002, 0.01),
@@ -93,7 +94,7 @@ def luck_weight() -> None:
             g = 0.0
             for _ in range(90):
                 rets.append(gen(rng))
-                g = 0.7 * g + 0.3 * skill_raw(rets, P).raw
+                g = ema(g, skill_raw(rets, P).raw, P)
             if passes_entry(rets, P):
                 total += skill_weight(skill_factor(g, P), P.skill_volume_cap_usd, False, P)
         means[name] = total / n

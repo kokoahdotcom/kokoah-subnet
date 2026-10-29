@@ -241,6 +241,13 @@ def test_cli_parses_new_commands() -> None:
     assert args.command == "verify"
 
 
+def test_verify_runs_the_checks_shipped_in_the_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.mechanism import verify
+
+    monkeypatch.setattr(verify, "main", lambda: 1)  # a failed check: the command's exit code says so
+    assert main(["verify"]) == 1
+
+
 async def test_rate_limiter_enforces_the_budget() -> None:
     import time
 

@@ -322,12 +322,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "owner":
         return _owner(args)
     if args.command == "verify":
-        import runpy
+        from kokoah_subnet.mechanism import verify
 
-        runpy.run_path(
-            str(Path(__file__).resolve().parents[2] / "scripts" / "verify_mechanism.py"), run_name="__main__"
-        )
-        return 0
+        return verify.main()
     return 2
 
 
