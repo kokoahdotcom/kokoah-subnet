@@ -6,6 +6,6 @@ cd "$(dirname "$0")/.."
 uv sync --locked --quiet
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src tests
+uv run mypy src tests deploy/agent/example
 uv run pytest -q
 uv run kokoah-subnet verify
