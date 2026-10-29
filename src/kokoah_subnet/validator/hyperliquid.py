@@ -202,9 +202,26 @@ async def sub_accounts(client: HyperliquidInfo, user: str) -> list[str]:
     return [str(s["subAccountUser"]).lower() for s in result if "subAccountUser" in s]
 
 
+def transfer_usd(delta: Mapping[str, Any]) -> float:
+    """The USD value a ledger transfer moved: `usdc` for account transfers, `usdcValue` for a token send, and a
+    send's token amount only when the token is USDC (a count of some other token is no USD figure)."""
+
+    def num(key: str) -> float:
+        try:
+            return abs(float(delta.get(key) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    if delta.get("type") in ("internalTransfer", "subAccountTransfer"):
+        return num("usdc")
+    if delta.get("usdcValue") not in (None, ""):
+        return num("usdcValue")
+    return num("amount") if str(delta.get("token", "")).upper().startswith("USDC") else 0.0
+
+
 async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> dict[str, float]:
     """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase,
-    with the USD moved between them both ways."""
+    with the USD moved between them both ways (`transfer_usd`)."""
     updates = await client.post(
         {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
     )
@@ -213,14 +230,7 @@ async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, e
     for u in updates:
         delta = u.get("delta", {})
         if delta.get("type") in ("internalTransfer", "subAccountTransfer", "send", "receive"):
-            moved = 0.0
-            for key in ("usdc", "usdcValue", "amount"):
-                try:
-                    moved = abs(float(delta.get(key) or 0.0))
-                except (TypeError, ValueError):
-                    continue
-                if moved:
-                    break
+            moved = transfer_usd(delta)
             for key in ("destination", "user", "fromUser", "toUser"):
                 other = str(delta.get(key, "")).lower()
                 if other.startswith("0x") and other != me:

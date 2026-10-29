@@ -141,6 +141,37 @@ def test_linked_reads_put_sub_accounts_first_then_the_largest_transfers() -> Non
     assert linked_reads(set(), {}, 25) == ([], 0)
 
 
+async def test_transfer_partners_are_ranked_by_usd_never_by_a_token_count() -> None:
+    """A billion units of a worthless token sent (`usdcValue` 0) moved no USD, so it cannot outrank a real transfer
+    partner in the linked reads."""
+    from kokoah_subnet.validator.hyperliquid import linked_reads, transfer_partners
+
+    me = "0x" + "aa" * 20
+
+    def send(to: str, token: str, amount: str, usd: str | None) -> dict[str, object]:
+        delta = {"type": "send", "user": me, "destination": to, "token": token, "amount": amount}
+        return {"time": 1, "delta": delta | ({"usdcValue": usd} if usd is not None else {})}
+
+    updates = [
+        send("0xdust", "DUST:0x01", "1000000000", "0"),
+        send("0xreal", "USDC", "5000", "5000"),
+        send("0xold", "USDC", "300", None),  # no USD value given: the USDC amount is one
+        send("0xhype", "HYPE:0x02", "10", "400"),
+        send("0xother", "PURR:0x03", "70000", None),  # no USD value, not USDC: nothing known to have moved
+        {"time": 2, "delta": {"type": "internalTransfer", "user": me, "destination": "0xint", "usdc": "50"}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=updates)
+
+    client = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    partners = await transfer_partners(client, me, 0, 10)
+    assert partners == {"0xdust": 0.0, "0xreal": 5000.0, "0xold": 300.0, "0xhype": 400.0, "0xother": 0.0, "0xint": 50.0}
+    assert linked_reads(set(), partners, 2) == (["0xreal", "0xhype"], 4)
+    await client.close()
+
+
 async def test_info_client_retries_then_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     from kokoah_subnet.validator import hyperliquid
 
