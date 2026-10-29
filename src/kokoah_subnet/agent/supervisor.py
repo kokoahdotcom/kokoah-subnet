@@ -1,4 +1,4 @@
-"""The sealed machine's entry point (specification v6, section 16).
+"""The sealed machine's entry point (specification section 16).
 
 Image settings (`/etc/kokoah-agent/image.json`, part of the image and so of its attested digest; never taken
 from the environment, because changing them would change what the guarantees mean): Kokoah's builder address and
@@ -16,7 +16,7 @@ Start settings (environment, passed by the miner when they start the machine):
   KOKOAH_AGENT_PERMIT       the miner's start permission (`kokoah-subnet agent authorize`): signed by the hotkey,
                             needed to file a new account's key copy; a restore does not need it
   KOKOAH_AGENT_RESTORE      after the machine stopped: the account address to resume on this new machine
-  KOKOAH_AGENT_NETWORK      mainnet (default) or testnet
+  KOKOAH_AGENT_NETWORK      mainnet (default) or testnet; any other value stops the machine
 
 The account key lives in memory. A copy encrypted with the miner's secret is stored with the owner's service before
 anything else happens (with this machine's attestation), so a machine that stops can be replaced: a new machine
@@ -39,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,10 +50,18 @@ from cryptography.exceptions import InvalidTag
 from eth_account import Account
 
 from . import sandbox
-from .attest import LAUNCHER_SOCKET, ConfidentialSpaceAttestor, DevelopmentAttestor
+from .attest import KEYSTORE_AUDIENCE, LAUNCHER_SOCKET, ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
-from .keystore import KeyService, check_secret, decrypt_key, encrypt_key, restore_digest, store_digest
+from .keystore import (
+    KeyService,
+    check_secret,
+    checked_address,
+    decrypt_key,
+    encrypt_key,
+    restore_digest,
+    store_digest,
+)
 
 log = logging.getLogger("kokoah_subnet.agent")
 IMAGE_SETTINGS = Path("/etc/kokoah-agent/image.json")
@@ -85,11 +94,48 @@ def env(name: str, default: str | None = None) -> str:
     return value
 
 
+def address_setting(name: str, value: str) -> str:
+    try:
+        return checked_address(value)
+    except ValueError as exc:
+        raise SystemExit(f"{name}: {exc}") from None
+
+
+def mainnet_setting(value: str) -> bool:
+    """KOKOAH_AGENT_NETWORK: exactly mainnet or testnet (anything else stops the machine rather than guess)."""
+    if value not in ("mainnet", "testnet"):
+        raise SystemExit(f"KOKOAH_AGENT_NETWORK must be mainnet or testnet, not {value!r}")
+    return value == "mainnet"
+
+
+START_TRIES = 4  # each call to the owner's service at start: a passing network or service fault is tried again
+START_PAUSE_S = 5.0  # doubled after every failed try
+TRANSIENT_STATUS = frozenset({502, 503, 504})
+
+
+def retried[T](what: str, step: Callable[[], T]) -> T:
+    """`step`, tried again after a connection fault or a gateway or unavailable answer; any other refusal is final."""
+    for attempt in range(1, START_TRIES + 1):
+        try:
+            return step()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in TRANSIENT_STATUS or attempt == START_TRIES:
+                raise
+            reason = f"status {exc.response.status_code}"
+        except httpx.TransportError as exc:
+            if attempt == START_TRIES:
+                raise
+            reason = repr(exc)
+        pause = START_PAUSE_S * 2 ** (attempt - 1)
+        log.warning("%s failed (%s); trying again in %.0f s", what, reason, pause)
+        time.sleep(pause)
+    raise AssertionError("unreachable")
+
+
 def fetch_code(service: str, submission: str, bundle_key: str | None, http: httpx.Client) -> tuple[bytes, str]:
     """The submitted bundle, checked against its id and decrypted; returns (plain zip, code fingerprint)."""
-    r = http.get(f"{service.rstrip('/')}/agents/{submission}/bundle")
-    r.raise_for_status()
-    blob = r.content
+    url = f"{service.rstrip('/')}/agents/{submission}/bundle"
+    blob = retried("fetching the submission", lambda: http.get(url).raise_for_status()).content
     if sha256_hex(blob) != submission:
         raise SystemExit("the fetched bundle does not match the submission id")
     if is_encrypted(blob):
@@ -231,8 +277,12 @@ def account_key(
     the miner's start permission)."""
     if restore:
         address = restore.lower()
-        challenge = keys.challenge(address)
-        blob = keys.restore(address, attestor.token([restore_digest(address, challenge)]))
+
+        def restored() -> bytes:  # a fresh token for every try: a token is accepted once
+            challenge = keys.challenge(address)
+            return keys.restore(address, attestor.token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE))
+
+        blob = retried("restoring the key copy", restored)
         key = decrypt_key(blob, address, secret)
         log.info("restored account %s", address)
         return key
@@ -244,8 +294,22 @@ def account_key(
     address = account.address.lower()
     key = bytes(account.key)
     blob = encrypt_key(key, address, secret)
-    token = attestor.token([store_digest(address, master, blob, hotkey, submission, permit)])
-    keys.store(address, master, hotkey, blob, token, netuid, submission, permit)
+    token = attestor.token([store_digest(address, master, blob, hotkey, submission, permit)], KEYSTORE_AUDIENCE)
+    tried = False
+
+    def stored() -> None:
+        nonlocal tried
+        try:
+            keys.store(address, master, hotkey, blob, token, netuid, submission, permit)
+        except httpx.HTTPStatusError as exc:
+            # an earlier try can have been filed with its answer lost; then the copy is kept under this new address,
+            # which only this machine can file under
+            if not (tried and exc.response.status_code == 409 and keys.kept(address)):
+                raise
+        finally:
+            tried = True
+
+    retried("storing the key copy", stored)
     log.info("created account %s; its encrypted copy is stored", address)
     return key
 
@@ -283,7 +347,11 @@ def main() -> int:
     else:
         attestor = ConfidentialSpaceAttestor()
     hotkey = env("KOKOAH_AGENT_HOTKEY")
-    master = env("KOKOAH_AGENT_MASTER").lower()
+    master = address_setting("KOKOAH_AGENT_MASTER", env("KOKOAH_AGENT_MASTER"))
+    restore = os.environ.get("KOKOAH_AGENT_RESTORE") or None
+    if restore is not None:
+        restore = address_setting("KOKOAH_AGENT_RESTORE", restore)
+    mainnet = mainnet_setting(env("KOKOAH_AGENT_NETWORK", "mainnet"))
     try:
         secret = bytes.fromhex(env("KOKOAH_AGENT_SECRET"))
         check_secret(secret)
@@ -295,7 +363,7 @@ def main() -> int:
         secret,
         master,
         hotkey,
-        os.environ.get("KOKOAH_AGENT_RESTORE") or None,
+        restore,
         int(env("KOKOAH_AGENT_NETUID")),
         submission,
         os.environ.get("KOKOAH_AGENT_PERMIT") or None,
@@ -307,7 +375,7 @@ def main() -> int:
         code_sha256=code,
         builder=image.builder,
         builder_fee_tenths_bps=image.builder_fee_tenths_bps,
-        mainnet=env("KOKOAH_AGENT_NETWORK", "mainnet") != "testnet",
+        mainnet=mainnet,
     )
     runner = AgentRunner(
         agent_command(1024, uid, gid, hidden),

@@ -11,6 +11,10 @@ image is an approved harness, and that both nonces are present: the challenge (s
 binding digest (so the token speaks for exactly this subnet, hotkey, Hyperliquid address and code fingerprint).
 Nothing here trusts the operator or the miner.
 
+**At the key store**: the machine's tokens for storing and restoring its account key carry their own audience
+(`KEYSTORE_AUDIENCE`), which the public `/attestation` never asks for, so an answer to anyone's challenge can never
+stand in for a key-store token.
+
 The binding digest is `sha256("kokoah-agent-1 netuid=<n> hotkey=<ss58> address=<0x..> code=<sha256>")`.
 """
 
@@ -27,6 +31,7 @@ from typing import Any, Protocol
 import jwt
 
 AUDIENCE = "kokoah-subnet-agent"
+KEYSTORE_AUDIENCE = "kokoah-agent-keystore"  # only the supervisor asks for it, for its own key copy
 ISSUER = "https://confidentialcomputing.googleapis.com"
 DISCOVERY = "https://confidentialcomputing.googleapis.com/.well-known/openid-configuration"
 LAUNCHER_SOCKET = "/run/container_launcher/teeserver.sock"

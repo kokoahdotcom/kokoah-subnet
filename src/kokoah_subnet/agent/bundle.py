@@ -2,7 +2,8 @@
 
 - `package(dir)` zips the directory deterministically (sorted paths, fixed timestamps and permissions), so the
   same files always give the same bytes and the same fingerprint. The directory needs an `entry.py`; packages the
-  agent imports go inside it (the agent has no network, so nothing is installed at run time).
+  agent imports go inside it (the agent has no network, so nothing is installed at run time). Version-control and
+  cache folders are left out, and a file that looks like a key or a secret is refused, never packaged.
 - The **code fingerprint** is the sha256 of that zip. The miner commits it on chain; the harness computes it from
   what it actually runs and puts it in the attestation. Private code reveals nothing through it.
 - `encrypt(zip, key)` for private code: AES-256-GCM with a fresh 32-byte key that only the miner holds and passes
@@ -12,6 +13,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import io
 import os
@@ -26,6 +28,30 @@ MAX_BUNDLE_BYTES = 20 * 2**20
 MAX_UNPACKED_BYTES = 200 * 2**20
 MAX_FILES = 5000
 _EPOCH = (1980, 1, 1, 0, 0, 0)
+LEFT_OUT = frozenset({".git", ".hg", ".svn", "__pycache__"})  # folders that are never the agent's code
+SECRET_FILES = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.mnemonic",
+    "*.seed",
+    "secret.hex",
+    "key.txt",
+    "coldkey",  # a Bittensor wallet copied without its wallets folder
+    "coldkeypub.txt",
+    "utc--*",  # an Ethereum keystore file
+)
+SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys"})  # a wallet's hotkeys are not encrypted by default
+
+
+def looks_secret(relative: Path) -> bool:
+    """A wallet, a key or a secret by its name, in any case: the bundle may be published, and the code has no use for
+    one."""
+    name = relative.name.lower()
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES) or bool(
+        SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]}
+    )
 
 
 def sha256_hex(data: bytes) -> str:
@@ -36,7 +62,10 @@ def package(directory: Path) -> bytes:
     root = Path(directory)
     if not (root / "entry.py").is_file():
         raise ValueError("the agent directory needs an entry.py")
-    paths = sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts)
+    paths = sorted(p for p in root.rglob("*") if p.is_file() and not LEFT_OUT & set(p.relative_to(root).parts))
+    secrets = [p.relative_to(root).as_posix() for p in paths if looks_secret(p.relative_to(root))]
+    if secrets:
+        raise ValueError(f"these look like keys or secrets, move them out of the agent directory: {', '.join(secrets)}")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for p in paths:

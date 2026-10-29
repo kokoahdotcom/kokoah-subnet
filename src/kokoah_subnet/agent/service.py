@@ -1,4 +1,4 @@
-"""The subnet owner's agent service (specification v6, section 16): where miners submit agent code, where the
+"""The subnet owner's agent service (specification section 16): where miners submit agent code, where the
 sealed machines fetch it, and where they keep their account key encrypted with the miner's secret.
 
     POST /agents            submit a bundle (raw body; hotkey, sha256 and the hotkey's signature as headers)
@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -146,6 +147,24 @@ SS58_CHARS = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 def submit_message(blob_sha256: str, hotkey: str) -> str:
     return f"kokoah-agent-submit-1 sha256={blob_sha256} hotkey={hotkey}"
+
+
+def used_token(token: str) -> str:
+    """A restore token's record, the same for every spelling of the token. The token's signature covers its header
+    and payload exactly as sent, but the signature itself decodes to the same bytes from many spellings (the unused
+    low bits of its last character, characters the decoder skips), and each one passes the check; so the record is
+    taken over the signature written out again in its one plain form. A token already in that form, as issued, keeps
+    the record it always had."""
+    raw = token.encode()
+    signed, dot, signature = raw.rpartition(b".")
+    if dot:
+        try:  # decoded exactly as the token check decodes it
+            decoded = base64.urlsafe_b64decode(signature + b"=" * (-len(signature) % 4))
+        except ValueError:  # it fails the token check too
+            pass
+        else:
+            raw = signed + b"." + base64.urlsafe_b64encode(decoded).rstrip(b"=")
+    return f"token {hashlib.sha256(raw).hexdigest()}"
 
 
 def default_verifier(message: str, signature: str, hotkey: str) -> bool:
@@ -343,9 +362,13 @@ def create_app(
         return {"images": list(images or [])}
 
     # restore challenges are derived, not stored: the same for everyone asking within a window, so nobody can replace
-    # or use up a machine's challenge; a token that restored a key is not accepted again
-    challenge_key = secrets.token_bytes(32)
-    used_tokens: dict[str, float] = {}
+    # or use up a machine's challenge; a token that restored a key is not accepted again. With the service's own key
+    # both outlast a restart: the challenge key comes from it, and every restore records its token.
+    if wrap_key is not None:
+        challenge_key = hmac.new(wrap_key, b"kokoah-restore-challenge-key-1", hashlib.sha256).digest()
+    else:
+        challenge_key = secrets.token_bytes(32)
+    restore_lock = threading.Lock()
 
     def challenge_value(address: str, window: int) -> str:
         text = f"kokoah-restore-challenge-1 {address} {window}".encode()
@@ -357,12 +380,12 @@ def create_app(
         """Why the token is not a genuine sealed machine's answer to `nonce` (None when it is)."""
         if accept_unverified_machines:
             return None
-        from .attest import AttestationError, google_keys, verify_token
+        from .attest import KEYSTORE_AUDIENCE, AttestationError, google_keys, verify_token
 
         if key_source[0] is None:
             key_source[0] = google_keys()
         try:
-            verify_token(token, key_source[0], list(images or []), [nonce])
+            verify_token(token, key_source[0], list(images or []), [nonce], audience=KEYSTORE_AUDIENCE)
         except AttestationError as exc:
             return str(exc)
         return None
@@ -384,6 +407,7 @@ def create_app(
     @app.put("/key-store/{address}")
     def store_key(address: str, body: StoredKey) -> dict[str, Any]:
         a = check_address(address)
+        master = check_address(body.master)  # the only withdrawal destination: never anything but an address
         if len(body.blob) > MAX_KEY_COPY_CHARS:
             raise HTTPException(status_code=413, detail="not a key copy")
         try:
@@ -422,11 +446,7 @@ def create_app(
                 raise HTTPException(status_code=409, detail="a key is already kept for this address")
             if c.execute(select(permits.c.signature).where(permits.c.signature == signature)).first():
                 raise HTTPException(status_code=409, detail="this start permission was used already: one per machine")
-            c.execute(
-                insert(keys).values(
-                    address=a, hotkey=body.hotkey, master=body.master.lower(), blob=stored, stored_at=clock()
-                )
-            )
+            c.execute(insert(keys).values(address=a, hotkey=body.hotkey, master=master, blob=stored, stored_at=clock()))
             c.execute(insert(permits).values(signature=signature, hotkey=body.hotkey, address=a, used_at=clock()))
             event(c, a, "store", f"hotkey {body.hotkey} submission {body.submission}")
         return {"stored": a}
@@ -460,23 +480,29 @@ def create_app(
         if not body.token or len(body.token) > MAX_TOKEN_CHARS:
             raise HTTPException(status_code=400, detail="bad token")
         now = clock()
-        for seen, until in list(used_tokens.items()):
-            if until < now:
-                del used_tokens[seen]
-        token_id = hashlib.sha256(body.token.encode()).hexdigest()
-        if token_id in used_tokens:
-            raise HTTPException(status_code=403, detail="this token was used already")
+        used = used_token(body.token)
+
+        def used_already(c: Any) -> bool:
+            q = select(key_events.c.id).where(
+                key_events.c.address == a, key_events.c.event == "restore", key_events.c.detail == used
+            )
+            return c.execute(q).first() is not None
+
+        with engine.connect() as c:
+            if used_already(c):
+                raise HTTPException(status_code=403, detail="this token was used already")
         window = int(now // CHALLENGE_TTL_S)  # the current challenge, or the one just before it
         errors = [proof_error(body.token, restore_digest(a, challenge_value(a, w))) for w in (window, window - 1)]
         if all(e is not None for e in errors):
             raise HTTPException(status_code=403, detail=f"not a genuine sealed machine's answer: {errors[0]}")
-        with engine.begin() as c:
+        with restore_lock, engine.begin() as c:  # the token is checked and recorded together
+            if used_already(c):
+                raise HTTPException(status_code=403, detail="this token was used already")
             row = kept(c, a)
             if row["released_at"] is not None:
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
             blob = opened(row)  # before anything is recorded: a copy the service cannot open changes nothing
-            event(c, a, "restore")
-        used_tokens[token_id] = now + 2 * CHALLENGE_TTL_S
+            event(c, a, "restore", used)
         return {"address": a, "blob": blob}
 
     @app.post("/key-store/{address}/release")

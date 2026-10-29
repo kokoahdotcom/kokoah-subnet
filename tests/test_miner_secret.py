@@ -12,7 +12,7 @@ from kokoah_subnet.agent.keystore import check_secret
 from kokoah_subnet.cli import main
 from kokoah_subnet.miner_secret import derive_secret, password_problems, random_secret
 
-MASTER = "0x1c8970117AD600590a21a4d0651865790f7a7253"
+MASTER = "0x1c8970117aD600590a21A4D0651865790F7A7253"
 STRONG = "rapid-olive-tundra-cobalt-mural-ember"
 
 

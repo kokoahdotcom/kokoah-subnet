@@ -3,6 +3,7 @@ from the mid, unoffered methods and other accounts' data refused; withdrawals on
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -130,8 +131,9 @@ def test_attestation_and_binding_speak_for_this_account(setup: Any) -> None:
     b = h.binding()
     assert b["message"] == binding_message(2, "5Hk", h.address)
     assert recover_signer(2, "5Hk", h.address, b["signature"]) == h.address
-    with pytest.raises(ValueError):
-        h.attestation("not hex!")
+    for wrong in ("not hex!", "cd" * 31, "cd" * 33, "cd" * 8):  # a validator's challenge is 32 random bytes
+        with pytest.raises(ValueError, match="64 hex"):
+            h.attestation(wrong)
 
 
 def test_the_two_interfaces(setup: Any) -> None:
@@ -181,3 +183,137 @@ def test_spot_usdc_is_moved_to_perpetuals_within_the_account(setup: Any) -> None
     assert h.fund_perps() is None and len(fake.posted) == count
     with pytest.raises(ValueError, match="not offered"):
         h.call("fund_perps", {})
+
+
+def test_numbers_that_are_not_finite_are_refused_before_signing(setup: Any) -> None:
+    h, fake, _, _ = setup
+    for x in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            hlsign.float_to_wire(x)
+        with pytest.raises(ValueError, match="finite"):
+            hlsign.float_to_int(x)
+    btc = {"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}
+    trigger = {"trigger": {"triggerPx": "NaN", "isMarket": True, "tpsl": "sl"}}
+    for order in (
+        {**btc, "limit_px": "NaN"},
+        {**btc, "sz": float("nan")},
+        {**btc, "sz": "inf"},
+        {**btc, "order_type": trigger},
+    ):
+        with pytest.raises(ValueError):
+            h.call("order", {"orders": [order]})
+    with pytest.raises(ValueError, match="finite"):
+        h.call("update_isolated_margin", {"coin": "BTC", "amount_usd": "inf"})
+    agent = TestClient(agent_app(h))
+    body = '{"method": "update_leverage", "params": {"coin": "BTC", "leverage": Infinity}}'  # JSON parsers accept it
+    answer = agent.post("/call", content=body, headers={"content-type": "application/json"})
+    assert answer.status_code == 200 and answer.json()["ok"] is False
+    assert not fake.posted
+
+
+def test_triggers_are_banded_where_they_execute(setup: Any) -> None:
+    """The mid is 100000. A stop or take-profit that has not fired rests wherever it is placed, and its limit must be
+    near its own trigger; one already past its trigger executes now, so its limit must be near the mid."""
+    h, fake, _, _ = setup
+
+    def order(is_buy: bool, tpsl: str, trigger: float, limit: float) -> Any:
+        o = {"coin": "BTC", "is_buy": is_buy, "sz": 0.01, "limit_px": limit, "reduce_only": True}
+        o["order_type"] = {"trigger": {"triggerPx": trigger, "isMarket": True, "tpsl": tpsl}}
+        return h.call("order", {"orders": [o]})
+
+    order(False, "sl", 80000, 79000)  # a long's stop-loss 20% below the market
+    order(True, "sl", 130000, 131000)  # a short's stop-loss 30% above
+    order(False, "tp", 125000, 124000)  # a long's take-profit 25% above
+    order(True, "tp", 85000, 85500)  # a short's take-profit 15% below
+    assert len(fake.posted) == 4 and fake.posted[0]["action"]["orders"][0]["t"]["trigger"]["triggerPx"] == "80000"
+    with pytest.raises(ValueError, match="from its trigger"):
+        order(False, "sl", 80000, 70000)  # it would execute 12.5% below its trigger
+    with pytest.raises(ValueError, match="from the mid"):
+        order(False, "tp", 85000, 85000)  # a take-profit below the market fires at once, 15% below the mid
+    with pytest.raises(ValueError, match="from the mid"):
+        order(True, "sl", 85000, 85000)  # a stop-buy below the market fires at once too
+    with pytest.raises(ValueError, match="trigger price"):
+        order(False, "sl", 0, 0)
+    for unknown in ("TP", "take_profit", "", None):  # the direction is never guessed
+        with pytest.raises(ValueError, match="tpsl must be tp or sl"):
+            order(False, unknown, 125000, 124000)  # type: ignore[arg-type]
+    assert len(fake.posted) == 4
+    fired = harness_module.trigger_fired
+    assert fired(True, "sl", 100000, 100000) and fired(False, "tp", 100000, 100000)  # at the trigger: it fires
+
+
+def test_signed_requests_read_the_signature_with_or_without_0x(setup: Any) -> None:
+    h, fake, master, _ = setup
+    public = TestClient(public_app(h))
+    t = int(time.time() * 1000)
+    bare = bytes(master.sign_message(encode_defunct(text=withdraw_message(h.address, "5", t))).signature).hex()
+    answer = public.post("/withdraw", json={"time_ms": t, "signature": bare, "amount_usd": "5"})
+    assert answer.status_code == 200 and answer.json()["ok"] and fake.posted[-1]["action"]["type"] == "withdraw3"
+    for unreadable in ("0x" + "00" * 64, "0x" + "00" * 65, "zz"):
+        refused = public.post("/stop", json={"time_ms": t + 1, "signature": unreadable})
+        assert refused.status_code == 403 and "miner" in refused.json()["detail"]
+
+
+def test_each_signed_request_acts_once(setup: Any) -> None:
+    import threading
+
+    h, fake, master, _ = setup
+    t = int(time.time() * 1000)
+
+    def signed(text: str) -> str:
+        return "0x" + bytes(master.sign_message(encode_defunct(text=text)).signature).hex()
+
+    stop_sig, withdraw_sig = signed(stop_message(h.address, t)), signed(withdraw_message(h.address, "3", t))
+    h.stop(t, stop_sig)  # a stop and a withdrawal signed in the same millisecond are two requests
+    h.withdraw("3", t, withdraw_sig)
+    h.withdraw("4", t - 1000, signed(withdraw_message(h.address, "4", t - 1000)))  # signed earlier, sent later
+    with pytest.raises(PermissionError, match="replayed"):
+        h.stop(t, stop_sig)
+    with pytest.raises(PermissionError, match="replayed"):
+        h.withdraw("3", t, withdraw_sig)
+    count = len(fake.posted)
+    twice = signed(withdraw_message(h.address, "7", t + 1))
+    results: list[str] = []
+
+    def send() -> None:
+        try:
+            h.withdraw("7", t + 1, twice)
+            results.append("sent")
+        except PermissionError:
+            results.append("refused")
+
+    threads = [threading.Thread(target=send) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sorted(results) == ["refused"] * 7 + ["sent"] and len(fake.posted) == count + 1
+
+
+def test_an_order_tells_why_the_builder_fee_is_not_approved(setup: Any) -> None:
+    h, fake, _, _ = setup
+    h.builder_approved = False
+    real: Callable[[httpx.Request], httpx.Response] = fake.handler
+
+    def refusing(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/exchange" and json.loads(request.content)["action"]["type"] == "approveBuilderFee":
+            return httpx.Response(200, json={"status": "err", "response": "Must deposit before performing actions."})
+        return real(request)
+
+    h.http = httpx.Client(transport=httpx.MockTransport(refusing), base_url="https://x")
+    with pytest.raises(ValueError, match="Must deposit before performing actions"):
+        h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    h.http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(502)), base_url="https://x")
+    with pytest.raises(ValueError, match="502"):
+        h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    assert not h.builder_approved
+
+
+def test_the_agent_guide_lists_exactly_the_info_requests_answered() -> None:
+    import re
+    from pathlib import Path
+
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "agents.md").read_text()
+    row = next(line for line in guide.splitlines() if line.startswith("| `POST /info"))
+    listed = set(re.findall(r"`([A-Za-z0-9]+)`", row))
+    assert listed == harness_module.PUBLIC_INFO | harness_module.ACCOUNT_INFO

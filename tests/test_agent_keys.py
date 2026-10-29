@@ -5,6 +5,7 @@ on the registration."""
 
 import asyncio
 import base64
+import hashlib
 import time
 from pathlib import Path
 from typing import Any
@@ -20,19 +21,23 @@ from fastapi.testclient import TestClient
 from uploads import upload
 
 from kokoah_subnet.agent import service as service_module
-from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
+from kokoah_subnet.agent import supervisor as supervisor_module
+from kokoah_subnet.agent.attest import KEYSTORE_AUDIENCE, DevelopmentAttestor, StaticKeys, verify_token
 from kokoah_subnet.agent.bundle import package, sha256_hex
+from kokoah_subnet.agent.harness import Harness, HarnessConfig
 from kokoah_subnet.agent.keystore import (
     KeyService,
+    checked_address,
     decrypt_key,
     encrypt_key,
+    parse_permit,
     release_message,
     restore_digest,
     start_message,
     store_digest,
 )
 from kokoah_subnet.agent.service import create_app, submit_message
-from kokoah_subnet.agent.supervisor import account_key
+from kokoah_subnet.agent.supervisor import account_key, address_setting, mainnet_setting
 from kokoah_subnet.binding import AgentRef, Binding
 from kokoah_subnet.chain import RegisteredHotkeys
 from kokoah_subnet.validator.agents import check_agents
@@ -138,7 +143,7 @@ def test_a_restore_needs_a_fresh_challenge(world: dict[str, Any]) -> None:
     keys: KeyService = world["keys"]
     key = start(world, Account.create())
     address = Account.from_key(key).address.lower()
-    replayed = world["machine"].token(["00" * 32])
+    replayed = world["machine"].token(["00" * 32], KEYSTORE_AUDIENCE)
     r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
     assert r.status_code == 403  # it answers no current challenge
     keys.challenge(address)
@@ -172,6 +177,23 @@ def test_a_key_copy_needs_its_hotkey_owners_start_permission(
     monkeypatch.setattr(service_module, "MAX_COPIES_PER_HOTKEY", 2)
     start(world, master)
     assert refused() == 429  # a hotkey's kept copies are capped
+
+
+def test_a_used_start_permission_stays_used_in_every_spelling(world: dict[str, Any]) -> None:
+    """The signature check reads the hex in either case and with spaces: a used permission spelled another way files
+    no second copy."""
+    master = Account.create()
+    good = permit(world["submission"], master.address)
+    t, signature = good.split(":")
+    start(world, master, permit=good)
+    spaced = " ".join(signature[i : i + 2] for i in range(0, len(signature), 2))
+    for respelled in (f"{t}:{signature.upper()}", f"{t}:0x{signature}", f"{t}:{spaced}"):
+        with pytest.raises(httpx.HTTPStatusError) as e:
+            start(world, master, permit=respelled)
+        assert e.value.response.status_code == 409
+    assert parse_permit(f"{t}:0x{signature.upper()}") == (int(t), signature)
+    with pytest.raises(ValueError):
+        parse_permit(f"{t}:not-hex")
 
 
 def test_validators_never_count_a_released_account() -> None:
@@ -299,7 +321,7 @@ def test_made_up_requests_leave_nothing_behind_and_touch_no_real_copy(world: dic
     # even a genuine machine with a valid permission cannot replace a kept copy
     other = base64.b64decode(fake["blob"])
     token = world["machine"].token(
-        [store_digest(address, master.address, other, ALICE.ss58_address, fake["submission"], p)]
+        [store_digest(address, master.address, other, ALICE.ss58_address, fake["submission"], p)], KEYSTORE_AUDIENCE
     )
     assert svc.put(f"/key-store/{address}", json={**fake, "token": token}).status_code == 409
     assert start(world, master, address) == key
@@ -314,7 +336,7 @@ def test_strangers_cannot_stop_a_machine_from_restoring(world: dict[str, Any]) -
     key = start(world, master)
     address = Account.from_key(key).address.lower()
     challenge = keys.challenge(address)
-    token = world["machine"].token([restore_digest(address, challenge)])
+    token = world["machine"].token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE)
     for _ in range(5):
         svc.get(f"/key-store/{address}/challenge")
         svc.post(f"/key-store/{address}/restore", json={"token": "junk"})
@@ -322,3 +344,172 @@ def test_strangers_cannot_stop_a_machine_from_restoring(world: dict[str, Any]) -
     assert blob.status_code == 200
     assert decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
     assert svc.post(f"/key-store/{address}/restore", json={"token": token}).status_code == 403  # used once
+
+
+def test_a_restore_token_works_once_in_every_spelling(world: dict[str, Any]) -> None:
+    """A token's signature reads the same from other spellings (the unused low bits of its last character, padding,
+    characters the decoder skips), and each passes the token check; none of them restores the key a second time."""
+    svc: TestClient = world["svc"]
+    key = start(world, Account.create())
+    address = Account.from_key(key).address.lower()
+    digest = restore_digest(address, world["keys"].challenge(address))
+    token = world["machine"].token([digest], KEYSTORE_AUDIENCE)
+    head, signature = token.rsplit(".", 1)
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    last = alphabet.index(signature[-1])
+    respelled = [
+        f"{head}.{signature[:-1]}{alphabet[last ^ 1]}",  # the last character's low bits carry nothing
+        f"{head}.{signature[:-1]}{alphabet[last ^ 4]}",
+        f"{head}.{signature}==",
+        f"{head}.{signature[:10]}\n\n{signature[10:]}==",  # skipped by the decoder
+    ]
+    machine_keys = StaticKeys(world["machine_key"].public_key())
+    for t in respelled:
+        assert verify_token(t, machine_keys, [IMAGE], [digest], audience=KEYSTORE_AUDIENCE)
+    assert svc.post(f"/key-store/{address}/restore", json={"token": token}).status_code == 200
+    for t in respelled:
+        again = svc.post(f"/key-store/{address}/restore", json={"token": t})
+        assert again.status_code == 403 and "used already" in again.json()["detail"]
+    assert service_module.used_token(token) == "token " + hashlib.sha256(token.encode()).hexdigest()  # as before
+
+
+def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dict[str, Any]) -> None:
+    """A genuine machine answers anyone's challenge at `/attestation`. Asked for a store or restore digest, its answer
+    is still refused by the key store: a key made by hand can never be filed as a machine's own, and a copy is never
+    handed to someone relaying the answer."""
+    svc: TestClient = world["svc"]
+    master = Account.create()
+    key = start(world, master)
+    address = Account.from_key(key).address.lower()
+    config = HarnessConfig(NETUID, ALICE.ss58_address, master.address, "11" * 32, "0x" + "43" * 20)
+    machine = Harness(config, Account.create().key, world["machine"])  # the same genuine machine key and image
+    by_hand = Account.create()
+    blob = encrypt_key(bytes(by_hand.key), by_hand.address, SECRET)
+    p = permit(world["submission"], master.address)
+    digest = store_digest(by_hand.address, master.address, blob, ALICE.ss58_address, world["submission"], p)
+    body = {
+        "blob": base64.b64encode(blob).decode(),
+        "master": master.address,
+        "hotkey": ALICE.ss58_address,
+        "netuid": NETUID,
+        "submission": world["submission"],
+        "permit": p,
+        "token": machine.attestation(digest)["token"],
+    }
+    refused = svc.put(f"/key-store/{by_hand.address}", json=body)
+    assert refused.status_code == 403 and "audience" in refused.json()["detail"].lower()
+    challenge = world["keys"].challenge(address)
+    relayed = machine.attestation(restore_digest(address, challenge))["token"]
+    assert svc.post(f"/key-store/{address}/restore", json={"token": relayed}).status_code == 403
+    assert start(world, master, address) == key  # the machine's own restore still works
+
+
+def test_a_restore_in_progress_survives_a_service_restart(tmp_path: Path) -> None:
+    """With the service's own key, a challenge given before a restart is still answered after it, and a token that
+    restored a key stays used."""
+    wrap = bytes(range(50, 82))
+    w = make_world(tmp_path, wrap_key=wrap)
+    master = Account.create()
+    key = start(w, master)
+    address = Account.from_key(key).address.lower()
+    challenge = w["keys"].challenge(address)
+    token = w["machine"].token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE)
+
+    def restarted() -> TestClient:
+        keys = StaticKeys(w["machine_key"].public_key())
+        app = create_app(tmp_path / "svc", images=[IMAGE], attestation_keys=keys, wrap_key=wrap, netuid=NETUID)
+        return TestClient(app)
+
+    after = restarted()
+    assert after.get(f"/key-store/{address}/challenge").json()["challenge"] == challenge
+    blob = after.post(f"/key-store/{address}/restore", json={"token": token})
+    assert blob.status_code == 200 and decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
+    again = restarted().post(f"/key-store/{address}/restore", json={"token": token})
+    assert again.status_code == 403 and "used already" in again.json()["detail"]
+
+
+def test_the_machine_takes_only_real_addresses_and_a_known_network(world: dict[str, Any]) -> None:
+    from eth_utils.address import to_checksum_address
+
+    plain = Account.create().address.lower()
+    assert checked_address(plain) == plain and checked_address(to_checksum_address(plain)) == plain
+    assert checked_address("0x" + plain[2:].upper()) == plain
+    typo = to_checksum_address(plain).swapcase().replace("X", "x")  # every letter's case flipped
+    for wrong in (typo, plain[:-1], plain[2:], "0x" + "g" * 40, ""):
+        with pytest.raises(ValueError):
+            checked_address(wrong)
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_MASTER"):
+        address_setting("KOKOAH_AGENT_MASTER", plain[:-1])
+    assert mainnet_setting("mainnet") and not mainnet_setting("testnet")
+    for wrong in ("test", "Testnet", "finney", ""):
+        with pytest.raises(SystemExit, match="mainnet or testnet"):
+            mainnet_setting(wrong)
+    p = permit(world["submission"], "nope")  # signed by the hotkey, but for something that is not an address
+    body: dict[str, Any] = {"blob": base64.b64encode(b"KAK1" + bytes(60)).decode(), "master": "nope", "token": "x"}
+    body |= {"hotkey": ALICE.ss58_address, "netuid": NETUID, "submission": world["submission"], "permit": p}
+    assert world["svc"].put(f"/key-store/{plain}", json=body).status_code == 400
+
+
+class Flaky:
+    """The service as a machine reaches it, with the faults listed per method: "down" (no connection), "lost" (the
+    service acts but its answer never arrives) or a status code answered by a gateway in between."""
+
+    def __init__(self, client: TestClient, faults: dict[str, list[Any]]) -> None:
+        self.client, self.faults = client, faults
+        self.calls: list[str] = []
+
+    def request(self, method: str, url: str, **kw: Any) -> httpx.Response:
+        self.calls.append(method)
+        waiting = self.faults.get(method)
+        fault = waiting.pop(0) if waiting else None
+        if fault == "down":
+            raise httpx.ConnectError("no route")
+        if fault == "lost":
+            self.client.request(method, url, **kw)
+            raise httpx.ReadError("connection reset")
+        if isinstance(fault, int):
+            return httpx.Response(fault, request=httpx.Request(method, url))
+        answer: httpx.Response = self.client.request(method, url, **kw)
+        return answer
+
+    def get(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("GET", url, **kw)
+
+    def put(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("PUT", url, **kw)
+
+    def post(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("POST", url, **kw)
+
+
+def test_a_starting_machine_gets_past_a_passing_fault(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import cast
+
+    from kokoah_subnet.agent.supervisor import fetch_code
+
+    monkeypatch.setattr(supervisor_module, "START_PAUSE_S", 0.0)
+
+    def keys(**faults: list[Any]) -> tuple[KeyService, Flaky]:
+        flaky = Flaky(world["svc"], faults)
+        return KeyService("http://svc", cast(httpx.Client, flaky)), flaky
+
+    master = Account.create()
+    down_once, _ = keys(PUT=["down"])
+    key = start(world, master, keys=down_once)
+    address = Account.from_key(key).address.lower()
+    lost, flaky = keys(PUT=["lost"])  # filed, but the answer was lost: the next try finds the copy kept
+    other = Account.from_key(start(world, master, keys=lost)).address.lower()
+    assert flaky.calls == ["PUT", "PUT", "GET"] and world["keys"].kept(other)
+    busy, flaky = keys(GET=[503], POST=[502])
+    assert start(world, master, address, keys=busy) == key
+    refused, flaky = keys(PUT=[403])
+    with pytest.raises(httpx.HTTPStatusError):
+        start(world, master, keys=refused)
+    assert flaky.calls == ["PUT"]  # a refusal is final
+    always_down, flaky = keys(GET=["down"] * 9)
+    with pytest.raises(httpx.ConnectError):
+        start(world, master, address, keys=always_down)
+    assert flaky.calls == ["GET"] * supervisor_module.START_TRIES
+    bundle = Flaky(world["svc"], {"GET": [504]})
+    plain, _ = fetch_code("http://svc", world["submission"], None, cast(httpx.Client, bundle))
+    assert plain[:2] == b"PK" and bundle.calls == ["GET", "GET"]

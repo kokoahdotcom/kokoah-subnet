@@ -16,6 +16,16 @@ from kokoah_subnet import __version__
 from kokoah_subnet.chain import NETWORKS, chain_info
 
 
+def _address(value: str) -> str:
+    """An address option: 0x and 40 hex characters, its checksum right when written in mixed case; lowercase."""
+    from kokoah_subnet.agent.keystore import checked_address
+
+    try:
+        return checked_address(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kokoah-subnet", description="Kokoah's Bittensor subnet tools.")
     parser.add_argument("--version", action="version", version=f"kokoah-subnet {__version__}")
@@ -43,12 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     message = msub.add_parser("message", help="print the exact text the Hyperliquid address must sign")
     message.add_argument("--netuid", required=True, type=int)
     message.add_argument("--hotkey", required=True, help="the hotkey's ss58 address")
-    message.add_argument("--address", required=True, help="the Hyperliquid (EVM) address")
+    message.add_argument("--address", required=True, type=_address, help="the Hyperliquid (EVM) address")
     bind = msub.add_parser("bind", help="publish the binding as the hotkey's on-chain commitment")
     bind.add_argument("--netuid", required=True, type=int)
-    bind.add_argument("--address", required=True)
+    bind.add_argument("--address", required=True, type=_address)
     bind.add_argument("--signature", required=True, help="0x-hex EIP-191 signature of the message by the address")
-    bind.add_argument("--previous-address", help="on a migration: the address the records come from")
+    bind.add_argument("--previous-address", type=_address, help="on a migration: the address the records come from")
     bind.add_argument("--previous-signature", help="its signature of the same message")
     bind.add_argument("--network", default="local")
     bind.add_argument("--wallet", required=True, help="wallet name")
@@ -64,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         u = msub.add_parser(name, help=text)
         u.add_argument("--service", default="https://api.kokoah.com/miners", help="the subnet's service")
         u.add_argument("--hotkey", required=True, help="the linked hotkey's ss58 address")
-        u.add_argument("--address", required=True, help="the linked Hyperliquid address")
+        u.add_argument("--address", required=True, type=_address, help="the linked Hyperliquid address")
         if name == "unlink":
             u.add_argument("--time-ms", required=True, type=int, help="the time printed with the message")
             u.add_argument("--signature", required=True, help="0x-hex EIP-191 signature of the message by the address")
@@ -94,13 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
     abind.add_argument("--wallet-path", default=None)
     amsg = asub.add_parser("message", help="print the text the miner's own address signs (withdraw, stop, release)")
     amsg.add_argument("kind", choices=["withdraw", "stop", "release"])
-    amsg.add_argument("--account", required=True, help="the agent account address")
-    amsg.add_argument("--amount", default="", help="withdraw: USDC amount")
+    amsg.add_argument("--account", required=True, type=_address, help="the agent account address")
+    amsg.add_argument("--amount", default="", help="withdraw (required): the USDC amount, for example 100 or 25.5")
     arel = asub.add_parser(
         "release", help="take the account key out of the service (ends the agent bonus for the account, for good)"
     )
     arel.add_argument("--service", required=True)
-    arel.add_argument("--account", required=True)
+    arel.add_argument("--account", required=True, type=_address)
     arel.add_argument("--time-ms", required=True, type=int, help="from `agent message release`")
     arel.add_argument("--signature", required=True, help="the master address's signature of that message")
     arel_secret = arel.add_mutually_exclusive_group(required=True)
@@ -108,14 +118,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--secret-file", type=Path, help="the file `agent secret` wrote (the secret given at start)"
     )
     arel_secret.add_argument(
-        "--master", help="your master address: asks for the password the secret was made from (`agent secret`)"
+        "--master",
+        type=_address,
+        help="your master address: asks for the password the secret was made from (`agent secret`)",
     )
     arel.add_argument("--out", required=True, type=Path, help="where to write the private key (created, mode 600)")
     asec = asub.add_parser(
         "secret",
         help="make the secret for a sealed machine: from a strong password (checked) or at random (--generate)",
     )
-    asec.add_argument("--master", required=True, help="your own Hyperliquid address (the machine's master)")
+    asec.add_argument(
+        "--master", required=True, type=_address, help="your own Hyperliquid address (the machine's master)"
+    )
     asec.add_argument("--out", required=True, type=Path, help="where to write the secret (created, mode 600)")
     asec.add_argument("--generate", action="store_true", help="a random secret instead of one made from a password")
     asec.add_argument("--hotkey", default="", help="your hotkey, so the password check refuses passwords built on it")
@@ -124,7 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
         "authorize", help="sign the start permission for one sealed machine with your hotkey (one per machine start)"
     )
     aauth.add_argument("--netuid", required=True, type=int)
-    aauth.add_argument("--master", required=True, help="your own Hyperliquid address (the machine's master)")
+    aauth.add_argument(
+        "--master", required=True, type=_address, help="your own Hyperliquid address (the machine's master)"
+    )
     aauth.add_argument("--submission", required=True, help="the submission id the machine runs")
     aauth.add_argument("--out", required=True, type=Path, help="where to write the permission (created)")
     aauth.add_argument("--wallet", required=True)
@@ -273,10 +289,8 @@ def _agent_secret(args: argparse.Namespace) -> int:
             return 1
         secret = derive_secret(password, args.master)
         how = "made from your password and your master address: the same password makes it again any time"
-    try:
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        print(f"{args.out} already exists: choose another --out (an existing secret is never overwritten)")
+    fd = _new_file(args.out, "choose another --out (an existing secret is never overwritten)")
+    if fd is None:
         return 1
     with os.fdopen(fd, "w") as f:
         f.write(secret.hex())  # no newline: the file is passed as is to the machine's start settings
@@ -486,9 +500,17 @@ def _miner(args: argparse.Namespace) -> int:
             else bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
         )
         hotkey = wallet.hotkey.ss58_address
-        binding = Binding(args.address, args.signature, args.previous_address, args.previous_signature)
+        try:
+            binding = Binding(args.address, args.signature, args.previous_address, args.previous_signature)
+        except ValueError as exc:
+            print(f"{exc}: give --previous-address and --previous-signature together")
+            return 1
         if not verify_binding(args.netuid, hotkey, binding):
-            print(f"the signature does not match the message for hotkey {hotkey}; sign exactly:")
+            if binding.previous_address and verify_binding(args.netuid, hotkey, Binding(args.address, args.signature)):
+                who = f"the previous address {binding.previous_address}"  # it signs the same line as the new one
+            else:
+                who = f"the address {binding.address}"
+            print(f"the signature of {who} does not match the message for hotkey {hotkey}; sign exactly:")
             print(binding_message(args.netuid, hotkey, args.address))
             return 1
 
@@ -517,21 +539,45 @@ def _miner(args: argparse.Namespace) -> int:
         import httpx
 
         base = args.service.rstrip("/")
-        if args.miner_command == "unlink-message":
-            r = httpx.get(
-                f"{base}/unlinks/message", params={"hotkey": args.hotkey, "address": args.address}, timeout=30
-            )
-        else:
-            body = {
-                "hotkey": args.hotkey,
-                "address": args.address,
-                "time_ms": args.time_ms,
-                "signature": args.signature,
-            }
-            r = httpx.post(f"{base}/unlinks", json=body, timeout=30)
+        try:
+            if args.miner_command == "unlink-message":
+                r = httpx.get(
+                    f"{base}/unlinks/message", params={"hotkey": args.hotkey, "address": args.address}, timeout=30
+                )
+            else:
+                body = {
+                    "hotkey": args.hotkey,
+                    "address": args.address,
+                    "time_ms": args.time_ms,
+                    "signature": args.signature,
+                }
+                r = httpx.post(f"{base}/unlinks", json=body, timeout=30)
+        except httpx.HTTPError as exc:
+            print(f"cannot reach the service at {base}: {exc!r}")
+            return 1
         print(r.text)
         return 0 if r.status_code == 200 else 1
     return 2
+
+
+def _new_file(path: Path, exists: str) -> int | None:
+    """A new file for a secret or a key (created, mode 600, never over an existing one): its descriptor, or None with
+    the reason printed."""
+    try:
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print(f"{path} already exists: {exists}")
+    except OSError as exc:
+        print(f"cannot create {path}: {exc.strerror} (does its folder exist?)")
+    return None
+
+
+def _detail(response: Any) -> str:
+    """The reason in a service's error answer (FastAPI's `detail`), else the answer's text."""
+    try:
+        return str(response.json()["detail"])
+    except (ValueError, KeyError, TypeError):
+        return str(response.text)[:300]
 
 
 def _wallet(args: argparse.Namespace) -> Any:
@@ -551,44 +597,58 @@ def _agent(args: argparse.Namespace) -> int:
     from kokoah_subnet.agent.bundle import encrypt, new_key, package, sha256_hex
 
     if args.agent_command == "package":
-        plain = package(args.directory)
+        try:
+            plain = package(args.directory)
+        except (OSError, ValueError) as exc:
+            print(f"not packaged: {exc}")
+            return 1
         data = plain
         if not args.public:
             key = new_key()
             data = encrypt(plain, key)
             key_file = args.out.with_name(args.out.name + ".key")
-            try:
-                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                print(f"{key_file} already exists: choose another --out")
+            fd = _new_file(key_file, "choose another --out")
+            if fd is None:
                 return 1
             with os.fdopen(fd, "w") as f:
                 f.write(key.hex())
             print(f"bundle key in {key_file} (mode 600): the sealed machine needs it, nobody else should have it")
         else:
             print("public code: anyone can download it from the service and copy your strategy")
-        args.out.write_bytes(data)
+        try:
+            args.out.write_bytes(data)
+        except OSError as exc:
+            print(f"cannot write {args.out}: {exc.strerror}")
+            return 1
         print(f"code fingerprint (commit this): {sha256_hex(plain)}")
         print(f"submission id: {sha256_hex(data)}  ({len(data)} bytes, {'plain' if args.public else 'encrypted'})")
         return 0
     if args.agent_command == "submit":
         from kokoah_subnet.agent.service import submit_message
 
-        blob = args.bundle.read_bytes()
+        try:
+            blob = args.bundle.read_bytes()
+        except OSError as exc:
+            print(f"cannot read {args.bundle}: {exc.strerror}")
+            return 1
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address
         signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
-        r = httpx.post(
-            f"{args.service.rstrip('/')}/agents",
-            content=blob,
-            headers={
-                "content-type": "application/octet-stream",
-                "x-kokoah-hotkey": hotkey,
-                "x-kokoah-bundle-sha256": sha256_hex(blob),
-                "x-kokoah-signature": signature,
-            },
-            timeout=120,
-        )
+        try:
+            r = httpx.post(
+                f"{args.service.rstrip('/')}/agents",
+                content=blob,
+                headers={
+                    "content-type": "application/octet-stream",
+                    "x-kokoah-hotkey": hotkey,
+                    "x-kokoah-bundle-sha256": sha256_hex(blob),
+                    "x-kokoah-signature": signature,
+                },
+                timeout=120,
+            )
+        except httpx.HTTPError as exc:
+            print(f"cannot reach the service at {args.service}: {exc!r}")
+            return 1
         print(r.status_code, r.text)
         return 0 if r.status_code == 200 else 1
     if args.agent_command == "bind":
@@ -596,16 +656,39 @@ def _agent(args: argparse.Namespace) -> int:
 
         from kokoah_subnet.binding import AgentRef, Binding, publish_binding, verify_binding
 
+        url = urlparse(args.endpoint.strip())
+        try:
+            port = url.port or 0
+        except ValueError:
+            port = 0
+        host = url.hostname or ""
+        if url.scheme != "http" or not host or not 0 < port < 65536 or url.path.strip("/") or url.query:
+            print(f"--endpoint {args.endpoint} is not http://<host>:<port>: validators reach the machine over plain")
+            print("http at exactly the host and port you publish (the harness listens on port 8080)")
+            return 1
+        if len(host.encode()) > 51:
+            print(f"--endpoint {args.endpoint}: the host name is longer than the binding holds (51 bytes)")
+            return 1
+        base = f"http://{url.netloc}"
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address
-        status = httpx.get(f"{args.endpoint.rstrip('/')}/status", timeout=20).json()
-        signed = httpx.get(f"{args.endpoint.rstrip('/')}/binding", timeout=20).json()
-        if status["hotkey"] != hotkey or int(status["netuid"]) != args.netuid:
-            print(f"the machine is set up for hotkey {status['hotkey']} on netuid {status['netuid']}")
+        try:
+            status = httpx.get(f"{base}/status", timeout=20).raise_for_status().json()
+            signed = httpx.get(f"{base}/binding", timeout=20).raise_for_status().json()
+            code, machine_hotkey, machine_netuid = str(status["code_sha256"]), status["hotkey"], int(status["netuid"])
+            address, signature = str(signed["address"]), str(signed["signature"])
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            print(f"cannot read the machine's status and binding at {base}: {exc!r}")
             return 1
-        url = urlparse(args.endpoint)
-        ref = AgentRef(status["code_sha256"], url.hostname or "", url.port or 80)
-        binding = Binding(signed["address"], signed["signature"], agent=ref)
+        if machine_hotkey != hotkey or machine_netuid != args.netuid:
+            print(f"the machine is set up for hotkey {machine_hotkey} on netuid {machine_netuid}")
+            return 1
+        try:
+            ref = AgentRef(code, host, port)
+            binding = Binding(address, signature, agent=ref)
+        except ValueError as exc:
+            print(f"the machine's answer cannot be published: {exc}")
+            return 1
         if not verify_binding(args.netuid, hotkey, binding):
             print("the machine's binding signature does not verify")
             return 1
@@ -619,24 +702,39 @@ def _agent(args: argparse.Namespace) -> int:
 
         return asyncio.run(_publish())
     if args.agent_command == "message":
-        from kokoah_subnet.agent.harness import stop_message, withdraw_message
+        from datetime import UTC, datetime
+
+        from kokoah_subnet.agent import service
+        from kokoah_subnet.agent.harness import SIGNED_REQUEST_WINDOW_MS, stop_message, withdraw_message
         from kokoah_subnet.agent.keystore import release_message
 
         t = int(time.time() * 1000)
+        window_ms = service.SIGNED_REQUEST_WINDOW_MS if args.kind == "release" else SIGNED_REQUEST_WINDOW_MS
+        deadline = datetime.fromtimestamp((t + window_ms) / 1000, UTC).strftime("%H:%M:%S UTC")
+        minutes = f"{window_ms // 60_000} minutes"
         if args.kind == "withdraw":
+            import re
+            from decimal import Decimal
+
+            if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", args.amount) or Decimal(args.amount) <= 0:
+                print("withdraw needs --amount: a USDC amount such as 100 or 25.5 (it is part of the signed message)")
+                return 1
             text = withdraw_message(args.account, args.amount, t)
         elif args.kind == "stop":
             text = stop_message(args.account, t)
         else:
             text = release_message(args.account, t)
-        print(json.dumps({"message": text, "time_ms": t}))
+        print(json.dumps({"message": text, "time_ms": t, "deadline_ms": t + window_ms}))
         if args.kind == "release":
             print("taking the key out ends the agent bonus for this account for good, and the release is public;")
-            print("sign it with your master address (EIP-191), then within 5 minutes run `kokoah-subnet agent release`")
+            print("sign it with your master address (EIP-191), then run `kokoah-subnet agent release`")
+            print(f"before {deadline} ({minutes} from now; after that, print a new message)")
             return 0
-        fields = "time_ms, signature, amount_usd" if args.kind == "withdraw" else "time_ms, signature"
+        fields = f'"time_ms": {t}, "signature": "<0x signature>"'
+        if args.kind == "withdraw":
+            fields += f', "amount_usd": "{args.amount}"'
         print(f"sign the message with your own address (EIP-191) and POST {{{fields}}} to <endpoint>/{args.kind}")
-        print("within 5 minutes")
+        print(f"before {deadline} ({minutes} from now; after that, print a new message)")
         return 0
     if args.agent_command == "secret":
         return _agent_secret(args)
@@ -650,10 +748,8 @@ def _agent(args: argparse.Namespace) -> int:
         t = int(time.time() * 1000)
         message = start_message(args.netuid, hotkey, args.master, args.submission, t)
         permit = f"{t}:{bytes(wallet.hotkey.sign(message.encode())).hex()}"
-        try:
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            print(f"{args.out} already exists: a permission is good for one machine start, write a new file")
+        fd = _new_file(args.out, "a permission is good for one machine start, write a new file")
+        if fd is None:
             return 1
         with os.fdopen(fd, "w") as f:
             f.write(permit)
@@ -663,10 +759,8 @@ def _agent(args: argparse.Namespace) -> int:
         print(f"start the machine with --metadata-from-file=tee-env-KOKOAH_AGENT_PERMIT={args.out}")
         return 0
     if args.agent_command == "service-key":
-        try:
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            print(f"{args.out} already exists: the service key is never replaced (every stored copy depends on it)")
+        fd = _new_file(args.out, "the service key is never replaced (every stored copy depends on it)")
+        if fd is None:
             return 1
         with os.fdopen(fd, "w") as f:
             f.write(os.urandom(32).hex() + "\n")
@@ -674,19 +768,52 @@ def _agent(args: argparse.Namespace) -> int:
         print("without it no stored key copy can be restored or released, and with the backups it opens one layer.")
         return 0
     if args.agent_command == "release":
-        from kokoah_subnet.agent.keystore import KeyService, decrypt_key
+        from cryptography.exceptions import InvalidTag
 
+        from kokoah_subnet.agent.keystore import MIN_SECRET_BYTES, KeyService, decrypt_key
+
+        # everything that can be checked here is checked before the release, which cannot be undone
         if args.secret_file is not None:
-            secret = bytes.fromhex(args.secret_file.read_text().strip())
+            try:
+                secret = bytes.fromhex(args.secret_file.read_text().strip())
+            except (OSError, ValueError) as exc:
+                print(f"cannot read a hex secret from {args.secret_file}: {exc}")
+                return 1
+            if len(secret) < MIN_SECRET_BYTES:
+                print(f"{args.secret_file} is not a secret from `agent secret` (it holds {len(secret)} bytes)")
+                return 1
         else:
             from kokoah_subnet.miner_secret import derive_secret
 
             secret = derive_secret(getpass.getpass("password the secret was made from: "), args.master)
-        blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
-        key = decrypt_key(blob, args.account, secret)
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write("0x" + key.hex() + "\n")
+        fd = _new_file(args.out, "choose another --out (nothing was released)")
+        if fd is None:
+            return 1
+        private: bytes | None = None
+        written = False
+        try:  # whatever happens, the file is closed, and removed unless the key is in it
+            with os.fdopen(fd, "w") as f:
+                try:
+                    blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
+                except httpx.HTTPStatusError as exc:
+                    print(f"the service refused the release ({exc.response.status_code}): {_detail(exc.response)}")
+                except (httpx.HTTPError, httpx.InvalidURL, ValueError, KeyError) as exc:
+                    print(f"no usable answer from the service at {args.service}: {exc!r}")
+                else:
+                    try:
+                        private = decrypt_key(blob, args.account, secret)
+                    except (InvalidTag, ValueError):
+                        print("the key was released, but this secret does not open it: run the command again with")
+                        print("the password or secret file the machine was started with (once 5 minutes have")
+                        print("passed, sign a new release message first)")
+                if private is not None:
+                    f.write("0x" + private.hex() + "\n")
+            written = private is not None
+        finally:
+            if not written:
+                args.out.unlink(missing_ok=True)
+        if not written:
+            return 1
         print(f"the private key of {args.account.lower()} is in {args.out} (mode 600); the agent bonus has ended")
         return 0
     if args.agent_command == "service":
