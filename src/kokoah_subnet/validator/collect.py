@@ -388,21 +388,20 @@ async def collect_and_score(
     builder = cfg.builder.lower()
 
     marks_cache: dict[str, dict[int, float]] = {}
-    marks_lock = asyncio.Lock()
+    marks_locks: dict[str, asyncio.Lock] = {}
 
     async def marks_for(coin: str) -> dict[int, float]:
-        """Minute marks for a perp coin over the day (one candle request per coin, shared by every address)."""
-        async with marks_lock:
-            if coin in marks_cache:
-                return marks_cache[coin]
-        try:
-            marks = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
-        except Exception as exc:  # noqa: BLE001 - without marks the clip and the transfer check skip this coin
-            log.warning("no minute candles for %s: %s", coin, exc)
-            marks = {}
-        async with marks_lock:
-            marks_cache[coin] = marks
-        return marks
+        """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
+        first address to ask reads them, the others wait for that answer), so every address is clipped against the
+        same marks."""
+        async with marks_locks.setdefault(coin, asyncio.Lock()):
+            if coin not in marks_cache:
+                try:
+                    marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
+                except Exception as exc:  # noqa: BLE001 - without marks the clip and the transfer check skip this coin
+                    log.warning("no minute candles for %s: %s", coin, exc)
+                    marks_cache[coin] = {}
+        return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
         """Everything for one bound address. Every exchange read has a fallback: an API failure never costs the

@@ -549,6 +549,25 @@ async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path, monkeypa
     await hl.close()
 
 
+async def test_minute_candles_are_read_once_per_coin(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    asked: list[str] = []
+
+    async def counting(request: httpx.Request) -> httpx.Response:
+        import asyncio
+
+        body = json.loads(request.content)
+        if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m":
+            asked.append(body["req"]["coin"])
+            await asyncio.sleep(0.2)  # a slow answer: the other address asks for the same coin meanwhile
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(counting))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert sorted(asked) == ["BTC", "ETH"]  # both addresses traded BTC; one read serves both
+    await hl.close()
+
+
 KO = "0x6b6f0101" + "cd" * 12
 
 
