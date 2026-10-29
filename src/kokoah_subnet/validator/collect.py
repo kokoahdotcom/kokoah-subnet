@@ -445,8 +445,10 @@ async def collect_and_score(
         return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
-        """Everything for one bound address. Every exchange read has a fallback: an API failure never costs the
-        trader the day's fee credit, it only delays the figures that depend on the failed read."""
+        """Everything for one bound address. A failed read of the account's recorded history fails the day (it is
+        retried within the hour). A failed read of the fill history, the explorer, the minute candles or a linked
+        account fails the day until the deadline; after it, only what needed the failed read goes uncounted. The
+        other reads (account state, ledger, fee rates, stake) fall back. Every failure is recorded."""
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
         # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
