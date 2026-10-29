@@ -96,8 +96,9 @@ under your hotkey, and nobody can use up anything of yours. A restore does not n
 ## 4. Start the sealed machine
 
 On your own Google Cloud project (you pay for the machine; Kokoah runs nothing for you). The harness image is
-published as `docker.io/kokoahdotcom/kokoah-subnet-agent`; its digest must be one of the approved images
-(`src/kokoah_subnet/agent/images.py`). The machine runs as a service account with the Confidential Computing Workload
+published as `docker.io/kokoahdotcom/kokoah-subnet-agent`; start from the newest approved image
+(`src/kokoah_subnet/agent/images.py`): an older approved digest still passes the daily checks, but the key store only
+accepts the newest harness, so a new machine on an older one stops at its first key copy. The machine runs as a service account with the Confidential Computing Workload
 User role (the default compute account lacks it, and without it the machine cannot get its proof).
 
 The image is reproducible: `deploy/agent/build.sh <commit>` (the commit listed next to the digest in `images.py`)
