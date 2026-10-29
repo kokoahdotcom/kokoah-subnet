@@ -36,8 +36,7 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
   registered by the operator on a coldkey of its own and bound to no trader, whose alpha the operator's burn
   process destroys with `burn_alpha(hotkey, amount, netuid)`; without a registered burn hotkey that day goes to the
   owner hotkey. The owner hotkey is avoided where possible because the chain records incentive directed to owner
-  hotkeys as `MinerBurned` and scales the subnet's TAO emission share by that fraction next tempo (research note 05,
-  section 9).
+  hotkeys as `MinerBurned` and scales the subnet's TAO emission share by that fraction next tempo.
 - **Buyback.** `add_stake_burn(hotkey, netuid, amount, limit)` buys alpha with TAO and burns it in one
   transaction, emitting `TokensBurned`; every buyback is one verifiable on-chain event.
 
@@ -59,8 +58,8 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
 ## 3. What counts, and what never counts
 
 Only the bound address's Hyperliquid data is used: perpetual fills with the Kokoah builder code (credit), the
-address's daily account value and flows (skill), the hotkey's stake (holding). Fills without the builder code count
-for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
+address's daily account value and flows (skill); the hotkey's stake is recorded for information only (§8). Fills
+without the builder code count for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
 exchange charges it on sells; spot fills (pairs like `PURR/USDC` or index names like `@107`) are recorded but never
 counted. No other platform is ever read.
 
@@ -72,8 +71,8 @@ Data plane. Two public sources, for every bound address and day:
   does not name the builder.
 - **The per-builder daily file** (`builder_fills/{builder}/{YYYYMMDD}.csv.lz4`: time to the second, user, coin,
   side, px, sz, crossed, special trade type, tif, trigger flag, **counterparty**, closed PnL, TWAP id, builder fee),
-  which names the builder but has held only about the first twelve hours of each UTC day. It is fetched by every
-  validator, its hash is recorded and committed on chain by the owner, and it confirms fills and names their
+  which names the builder but may not cover the whole day, so the history is the primary source. It is fetched by
+  every validator, its hash is recorded and committed on chain by the owner, and it confirms fills and names their
   counterparties where it has them.
 
 The two are merged per address on (coin, side, price, size, second), identical rows one to one. A fill in both is
@@ -88,9 +87,10 @@ a modify carries no builder field), or, for a taker fill, when the transaction t
 decides, and it cannot be changed after the fact. Counterparties of history fills come from trade ids: the
 validator reads the day's fills of every bound address and of up to 25 linked accounts per address (its
 sub-accounts first, then its transfer partners by the amount moved, largest first), and a fill whose trade id
-appears among another known address's fills traded with that address. A failed read of the history or of the explorer fails the day's scoring (retried within the hour) rather
-than scoring the day without it. Checked against the exchange's own report of the builder's earnings: the confirmed
-fills add up to what the exchange reports as earned, to the cent, with no genuine fill refused.
+appears among another known address's fills traded with that address. A failed read of the history, of the
+explorer or of a linked account fails the day's scoring until the file deadline (12 hours after the day ends;
+retried within the hour); after the deadline the day is scored, and only the fills that needed the failed read go
+uncounted for that address (the failure is recorded).
 
 **Earnings check.** The exchange reports what the builder has earned (`referral`: `builderRewards`). The validator
 records it at every scoring run, and the health check raises an alarm when the builder fees of all counted fills
@@ -99,10 +99,10 @@ other traders pay fees too, so earnings exceed the credited fees in normal opera
 
 Removed before anything is computed:
 
-1. fills whose counterparty is the same address or another address of the same cluster (same coldkey, sub-accounts
-   of the master, addresses funded by the same bridge depositor or transferring between each other);
+1. fills whose counterparty is the same address or another address of the same cluster (bound addresses whose
+   hotkeys share a coldkey, sub-accounts of the master, addresses transferring between each other);
 2. fills priced more than 0.5% from the mark (the close of the exchange's minute candle for the coin): valued at the
-   mark for credit; and for skill, the money an off-market fill moves into the account (buying below the mark or
+   mark (their notional counts at the mark price; their builder fee, the credit, is the fee they paid); and for skill, the money an off-market fill moves into the account (buying below the mark or
    selling above it) is removed from the day's return like a deposit, over all of the address's perpetual fills,
    builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices;
 3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
@@ -112,8 +112,9 @@ Removed before anything is computed:
    series over the last 30 days; correlation below −0.8 on at least 10 overlapping days marks the overlapping
    notional as mirrored.
    For both rules: mirrored notional above 25% of an address's notional is removed from credit (fills against
-   bound counterparties are removed whatever the share); above 50%, both addresses get `g' = h' = 0` for 30 days
-   and are reported. These rules protect the leaderboard's integrity.
+   bound counterparties are removed whatever the share); an address with more than 50% mirrored is reported, and
+   for 30 days it and the addresses its owner controls (§14a) take no part in the skill pool. These rules protect
+   the leaderboard's integrity.
 
 ## 4. Daily fee credit, smoothed
 
@@ -327,10 +328,10 @@ after 60 days.
   off the subnet (nothing can be paid to it); they resume when it is registered again, as a fresh identity for
   credit and qualification (§9a): the new registration must qualify again.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
-  new hotkey starts fresh (no credit tail, no skill history, gates to pass again). The unpaid credit tail of the old
-  hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of that
-  day's credit, 49% of the day before, and so on. A new identity never gains on skill: it must pass the 90-day
-  entry test again, from its own record.
+  new hotkey starts with no credit tail, no qualification and no smoothed skill (`g = 0`). The unpaid credit tail of
+  the old hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of
+  that day's credit, 49% of the day before, and so on. The activity gates, the entry test and the copy rule read the
+  address's own record, which stays with the address, as do its penalties.
 - **Unlinking.** The linked address ends its link with one signature, without the hotkey:
   `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
   subnet's service, which accepts it only within 10 minutes of its time and publishes it (`GET /unlinks`). Every
@@ -356,11 +357,12 @@ after 60 days.
 
 ### 14b. Robustness rules
 
-- An exchange API failure never costs a trader the day's fee credit: credit always advances from the builder file;
-  only the figures that depend on the failed read (account value, flows, positions, fee rates, stake) fall back,
-  and the failure is recorded. The one exception is the account's recorded history behind the equity floor
-  (§9a): a failed read fails the day's scoring, which is retried within the hour, so a trader is never made
-  ineligible by an API failure.
+- An exchange API failure never costs a trader the day's fee credit by itself. The account's recorded history
+  behind the equity floor (§9a) is always needed: a failed read fails the day's scoring, which is retried within
+  the hour, so a trader is never made ineligible by an API failure. A failed read of the fill history, the explorer,
+  a linked account or the unlinks fails the day's scoring until the file deadline; after it, the day is scored and
+  only what depends on the failed read goes uncounted (§3). The other reads (account value, flows, positions, fee
+  rates, stake) fall back. Every failure is recorded.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is

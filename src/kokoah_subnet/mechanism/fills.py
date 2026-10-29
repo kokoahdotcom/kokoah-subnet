@@ -230,8 +230,8 @@ def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> t
 def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: float) -> list[Fill]:
     """One address's builder fills for a day from both sources (specification section 3).
 
-    The exchange's per-builder daily file is incomplete (it has held about the first twelve hours of each UTC day),
-    so the address's own fill history is the primary source. A fill in both is taken from the history (exact time,
+    The exchange's per-builder daily file may not cover the whole day, so the address's own fill history is the
+    primary source. A fill in both is taken from the history (exact time,
     total fee, trade id) with the file's counterparty and builder fee; a fill only in the file is kept as it is
     (beyond the history's 10,000-fill reach); a fill only in the history is kept as a candidate when it paid a
     builder fee within the rate (`history_candidate`), to be confirmed by `confirm_builder`."""

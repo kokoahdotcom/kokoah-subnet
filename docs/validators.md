@@ -31,9 +31,10 @@ published at launch. Examples use the test network (`--network test`); on mainne
 
 - **A hotkey registered on the subnet with a validator permit.** The chain grants permits to the subnet's top
   validators by stake; weights from a hotkey without one are not accepted.
-- **A small Linux server.** Two CPU cores, 4 GB of memory and 20 GB of disk are plenty. Only outbound HTTPS is
-  needed (Hyperliquid's public API, its explorer and data files, and a Bittensor endpoint); no inbound port has to
-  be open unless you publish the interface (section 8).
+- **A small Linux server.** Two CPU cores, 4 GB of memory and 20 GB of disk are plenty. Outbound only: HTTPS to
+  Hyperliquid's public API, its explorer and data files and the subnet's service, a websocket to a Bittensor
+  endpoint, and plain HTTP to each agent machine at the host and port its binding publishes (the agent check). No
+  inbound port has to be open unless you publish the interface (section 8).
 - **Python 3.12 and [uv](https://docs.astral.sh/uv/)**; **Docker** for the PostgreSQL record and the optional
   dashboards.
 - **A reliable clock** (NTP): days are UTC days.
@@ -96,7 +97,7 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 
 ## 6. Run
 
-**One pass**, to check the configuration: score the pending days, submit weights, exit.
+**One pass**, to check the configuration: score the oldest pending day, submit weights, exit.
 
 ```bash
 uv run kokoah-subnet validator run --network test --netuid 385 \
@@ -162,9 +163,10 @@ All times are UTC.
 5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
    subnet's settings, including commit-reveal.
 
-A failed read of a miner's fill history, the explorer, the recorded account values or the unlinks fails that day's scoring
-rather than scoring it with missing data; the validator retries within the hour. Other reads (positions, fee rates,
-stake) fall back, and the failure is recorded.
+A failed read of a miner's recorded account values fails that day's scoring; the validator retries within the
+hour. A failed read of a fill history, the explorer, a linked account or the unlinks fails the day's scoring until
+12 hours after the day ends; after that the day is scored and only the fills that needed the failed read go
+uncounted. Other reads (positions, fee rates, stake) fall back. Every failure is recorded.
 
 ## 8. The public interface
 
