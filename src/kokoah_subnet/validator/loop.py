@@ -12,6 +12,8 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy.engine import make_url
+
 from kokoah_subnet import __version__
 from kokoah_subnet.mechanism import DEFAULT, SPEC_VERSION, Params
 
@@ -186,6 +188,17 @@ async def submit_weights(
     return {"day": latest[0], "uids": uids, "ok": ok, "message": message}
 
 
+def run_config(cfg: ValidatorConfig) -> dict[str, str]:
+    """The settings kept in the run record (`runs.config`), with the database password hidden."""
+    out = {k: str(v) for k, v in cfg.__dict__.items() if k != "extra"}
+    if cfg.db_url:
+        try:
+            out["db_url"] = make_url(cfg.db_url).render_as_string(hide_password=True)
+        except Exception:  # noqa: BLE001 - not a URL SQLAlchemy reads: keep none of it
+            out["db_url"] = "(hidden)"
+    return out
+
+
 async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False, day: str | None = None) -> None:
     import bittensor as bt
 
@@ -212,7 +225,7 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
                             burn_hotkey=cfg.burn_hotkey,
                             spec_version=SPEC_VERSION,
                             code_version=__version__,
-                            config={k: str(v) for k, v in cfg.__dict__.items() if k not in ("extra",)},
+                            config=run_config(cfg),
                         )
                         started = True
                     while True:

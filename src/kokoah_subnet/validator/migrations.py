@@ -4,6 +4,7 @@ Steps must be idempotent on both PostgreSQL and SQLite (SQLite ignores what it c
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from sqlalchemy import text
@@ -18,6 +19,23 @@ def _pg(sql: str) -> Step:
             c.execute(text(sql))
 
     return run
+
+
+def _hide_run_passwords(c: Connection, is_postgres: bool) -> None:
+    """Runs recorded before the password was hidden: hide it in their stored settings too."""
+    from sqlalchemy.engine import make_url
+
+    for run_id, config in c.execute(text("SELECT id, config FROM runs")).all():
+        settings = json.loads(config) if isinstance(config, str) else config
+        if not isinstance(settings, dict) or not settings.get("db_url"):
+            continue
+        try:
+            hidden = make_url(str(settings["db_url"])).render_as_string(hide_password=True)
+        except Exception:  # noqa: BLE001 - not a URL SQLAlchemy reads: keep none of it
+            hidden = "(hidden)"
+        if hidden != settings["db_url"]:
+            settings["db_url"] = hidden
+            c.execute(text("UPDATE runs SET config = :c WHERE id = :i"), {"c": json.dumps(settings), "i": run_id})
 
 
 STEPS: list[tuple[int, str, Step]] = [
@@ -91,6 +109,7 @@ STEPS: list[tuple[int, str, Step]] = [
         ),
     ),
     (9, "equity.return_known", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS return_known boolean")),
+    (10, "runs.config: the database password hidden", _hide_run_passwords),
 ]
 
 

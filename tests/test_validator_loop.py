@@ -1131,3 +1131,34 @@ async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: 
     store = Store(tmp_path / "validator.sqlite")
     assert store.execute_sql("select message from errors where stage = 'loop'") == [{"message": "websocket closed"}]
     assert store.execute_sql("select count(*) as n from runs") == [{"n": 1}]
+
+
+def test_the_run_record_hides_the_database_password(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.loop import run_config
+
+    url = "postgresql+psycopg://kokoah:s3cret-pw@127.0.0.1:48110/kokoah_subnet"
+    cfg = ValidatorConfig(network="test", netuid=385, builder="0xbuilder", data_dir=tmp_path, db_url=url)
+    config = run_config(cfg)
+    assert "s3cret-pw" not in json.dumps(config)
+    assert config["db_url"] == "postgresql+psycopg://kokoah:***@127.0.0.1:48110/kokoah_subnet"
+    assert config["netuid"] == "385" and "extra" not in config
+    assert run_config(ValidatorConfig(network="test", netuid=1, builder="0xb", data_dir=tmp_path))["db_url"] == ""
+
+
+def test_runs_recorded_with_a_password_have_it_hidden_by_the_migration(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    from kokoah_subnet.validator.migrations import STEPS
+
+    path = tmp_path / "old.sqlite"
+    store = Store(path)
+    url = "postgresql+psycopg://kokoah:s3cret-pw@127.0.0.1:48110/kokoah_subnet"
+    store.start_run(network="test", netuid=385, config={"db_url": url, "netuid": "385"})
+    with store._engine.begin() as c:  # a record from before the step
+        c.execute(text("UPDATE meta SET value = '9' WHERE key = 'schema_version'"))
+    store.close()
+    again = Store(path)
+    assert again.migrations_applied == [f"10: {STEPS[9][1]}"]
+    (row,) = again.execute_sql("select config from runs")
+    config = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+    assert config == {"db_url": "postgresql+psycopg://kokoah:***@127.0.0.1:48110/kokoah_subnet", "netuid": "385"}
