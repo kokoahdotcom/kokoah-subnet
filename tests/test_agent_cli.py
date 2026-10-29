@@ -117,3 +117,16 @@ def test_the_withdraw_message_needs_a_real_amount(capsys: pytest.CaptureFixture[
     message = json.loads(printed.splitlines()[0])["message"]
     assert message.startswith(f"kokoah-agent-withdraw-1 account={account} amount=25.5 time=")
     assert '"amount_usd": "25.5"' in printed
+
+
+def test_every_agent_message_shows_its_deadline(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+    from datetime import UTC, datetime
+
+    for kind in (["withdraw", "--amount", "1"], ["stop"], ["release"]):
+        assert main(["agent", "message", *kind, "--account", "0x" + "cd" * 20]) == 0
+        printed = capsys.readouterr().out
+        first = json.loads(printed.splitlines()[0])
+        assert first["deadline_ms"] - first["time_ms"] == 300_000  # what the harness and the service accept
+        deadline = datetime.fromtimestamp(first["deadline_ms"] / 1000, UTC).strftime("%H:%M:%S UTC")
+        assert f"before {deadline}" in printed

@@ -618,10 +618,16 @@ def _agent(args: argparse.Namespace) -> int:
 
         return asyncio.run(_publish())
     if args.agent_command == "message":
-        from kokoah_subnet.agent.harness import stop_message, withdraw_message
+        from datetime import UTC, datetime
+
+        from kokoah_subnet.agent import service
+        from kokoah_subnet.agent.harness import SIGNED_REQUEST_WINDOW_MS, stop_message, withdraw_message
         from kokoah_subnet.agent.keystore import release_message
 
         t = int(time.time() * 1000)
+        window_ms = service.SIGNED_REQUEST_WINDOW_MS if args.kind == "release" else SIGNED_REQUEST_WINDOW_MS
+        deadline = datetime.fromtimestamp((t + window_ms) / 1000, UTC).strftime("%H:%M:%S UTC")
+        minutes = f"{window_ms // 60_000} minutes"
         if args.kind == "withdraw":
             import re
             from decimal import Decimal
@@ -634,16 +640,17 @@ def _agent(args: argparse.Namespace) -> int:
             text = stop_message(args.account, t)
         else:
             text = release_message(args.account, t)
-        print(json.dumps({"message": text, "time_ms": t}))
+        print(json.dumps({"message": text, "time_ms": t, "deadline_ms": t + window_ms}))
         if args.kind == "release":
             print("taking the key out ends the agent bonus for this account for good, and the release is public;")
-            print("sign it with your master address (EIP-191), then within 5 minutes run `kokoah-subnet agent release`")
+            print("sign it with your master address (EIP-191), then run `kokoah-subnet agent release`")
+            print(f"before {deadline} ({minutes} from now; after that, print a new message)")
             return 0
         fields = f'"time_ms": {t}, "signature": "<0x signature>"'
         if args.kind == "withdraw":
             fields += f', "amount_usd": "{args.amount}"'
         print(f"sign the message with your own address (EIP-191) and POST {{{fields}}} to <endpoint>/{args.kind}")
-        print("within 5 minutes")
+        print(f"before {deadline} ({minutes} from now; after that, print a new message)")
         return 0
     if args.agent_command == "secret":
         return _agent_secret(args)
