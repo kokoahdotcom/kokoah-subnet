@@ -96,3 +96,24 @@ def test_release_checks_everything_it_can_before_taking_the_key_out(
     answer[0] = encrypt_key(bytes(account.key), account.address, secret)
     assert run() == 0 and Account.from_key(out.read_text().strip()).address == account.address
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
+
+
+def test_the_withdraw_message_needs_a_real_amount(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    account = "0x" + "ab" * 20
+    for amount in (
+        [],
+        ["--amount", ""],
+        ["--amount", "ten"],
+        ["--amount", "0"],
+        ["--amount", "-5"],
+        ["--amount", "1e3"],
+    ):
+        assert main(["agent", "message", "withdraw", "--account", account, *amount]) == 1
+        assert "--amount" in capsys.readouterr().out
+    assert main(["agent", "message", "withdraw", "--account", account, "--amount", "25.5"]) == 0
+    printed = capsys.readouterr().out
+    message = json.loads(printed.splitlines()[0])["message"]
+    assert message.startswith(f"kokoah-agent-withdraw-1 account={account} amount=25.5 time=")
+    assert '"amount_usd": "25.5"' in printed

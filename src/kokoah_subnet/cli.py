@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     amsg = asub.add_parser("message", help="print the text the miner's own address signs (withdraw, stop, release)")
     amsg.add_argument("kind", choices=["withdraw", "stop", "release"])
     amsg.add_argument("--account", required=True, help="the agent account address")
-    amsg.add_argument("--amount", default="", help="withdraw: USDC amount")
+    amsg.add_argument("--amount", default="", help="withdraw (required): the USDC amount, for example 100 or 25.5")
     arel = asub.add_parser(
         "release", help="take the account key out of the service (ends the agent bonus for the account, for good)"
     )
@@ -623,6 +623,12 @@ def _agent(args: argparse.Namespace) -> int:
 
         t = int(time.time() * 1000)
         if args.kind == "withdraw":
+            import re
+            from decimal import Decimal
+
+            if not re.fullmatch(r"\d+(\.\d+)?", args.amount) or Decimal(args.amount) <= 0:
+                print("withdraw needs --amount: a USDC amount such as 100 or 25.5 (it is part of the signed message)")
+                return 1
             text = withdraw_message(args.account, args.amount, t)
         elif args.kind == "stop":
             text = stop_message(args.account, t)
@@ -633,7 +639,9 @@ def _agent(args: argparse.Namespace) -> int:
             print("taking the key out ends the agent bonus for this account for good, and the release is public;")
             print("sign it with your master address (EIP-191), then within 5 minutes run `kokoah-subnet agent release`")
             return 0
-        fields = "time_ms, signature, amount_usd" if args.kind == "withdraw" else "time_ms, signature"
+        fields = f'"time_ms": {t}, "signature": "<0x signature>"'
+        if args.kind == "withdraw":
+            fields += f', "amount_usd": "{args.amount}"'
         print(f"sign the message with your own address (EIP-191) and POST {{{fields}}} to <endpoint>/{args.kind}")
         print("within 5 minutes")
         return 0
