@@ -601,6 +601,7 @@ async def collect_and_score(
                 credited_notional_prior_usd=store.credited_notional(hk, day, params.skill_volume_days - 1),
                 dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days)),
                 agent_verified=bool(agent_status.get(hk, False)),
+                record_start=store.first_scored_day(address, day) or day,
             )
         )
 

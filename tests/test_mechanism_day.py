@@ -1,6 +1,7 @@
 """A whole scoring day through `score_day` (spec v6): the two pools, the skill pool rules, a mirrored pair."""
 
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -119,6 +120,19 @@ def test_copies_share_one_skill_weight_through_the_day() -> None:
     ra, rb = score_day(inputs, DEFAULT).records
     assert ra.copy_group == ("hkA", "hkB") == rb.copy_group
     assert ra.skill_weight + rb.skill_weight == pytest.approx(ra.skill_adjusted * ra.volume_factor)
+
+
+def test_the_older_record_leads_a_copy_group_without_matched_fills() -> None:
+    """Two correlated records, no fills to tell who trades first: the account scored since earlier keeps the weight,
+    though the copier's hotkey sorts first and both return series cover the same 90 days."""
+    rec = strong_record(1)
+    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
+    copier = replace(miner("hkA", A, list(rec)), record_start="2026-09-01")
+    original = replace(miner("hkB", B, rec), record_start="2026-03-15")
+    inputs = DayInputs(day_index=5, price_usd=1.0, fills=[], states=states, miners=[copier, original])
+    ra, rb = score_day(inputs, DEFAULT).records
+    assert ra.copy_group == ("hkA", "hkB")
+    assert ra.skill_weight == 0.0 and rb.skill_weight > 0
 
 
 def test_fresh_miner_earns_volume_pay_but_not_yet_skill_pay() -> None:

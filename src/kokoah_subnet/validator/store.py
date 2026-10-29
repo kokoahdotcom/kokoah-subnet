@@ -239,6 +239,16 @@ class Store:
             ).scalar()
         return float(total or 0.0)
 
+    def first_scored_day(self, address: str, through: str) -> str | None:
+        """The earliest day up to `through` on which the address was scored (None if it never was)."""
+        with self._engine.connect() as c:
+            first = c.execute(
+                select(func.min(S.miner_days.c.day)).where(
+                    S.miner_days.c.address == address.lower(), S.miner_days.c.day <= through
+                )
+            ).scalar()
+        return str(first) if first is not None else None
+
     def dated_returns(self, address: str, days: int) -> dict[str, float]:
         """The last `days` known daily returns by day, oldest first (the same series as `returns`). A return needs two
         consecutive stored days whose values are known; a day without one is skipped and the series reaches further
