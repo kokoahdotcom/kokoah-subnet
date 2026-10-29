@@ -5,6 +5,9 @@ started from Kokoah's published harness image. The machine creates your agent's 
 never lets its key out, so nobody (you included) can trade that account by hand; every validator checks the machine
 every day, and a verified agent earns 10% more skill weight (specification v6, sections 7a and 16).
 
+**Networks.** The subnet runs on the Bittensor test network as **netuid 385** today, and the examples below use it
+(`--netuid 385`, `--network test`). On mainnet use `--network finney` and the mainnet netuid, published at launch.
+
 ## 1. Write the agent
 
 A directory with an `entry.py` at its top. Everything it imports must be inside the directory: the agent has no
@@ -30,11 +33,16 @@ trailing stops, withdrawals, transfers, approvals. Main perpetuals only.
 
 ## 2. Package and submit
 
+The commands below run from the repository checkout, but they write your agent's keys and secrets to a folder of
+their own, outside it, so that no later commit from the checkout can pick them up:
+
 ```bash
-uv run kokoah-subnet agent package ./my-agent --out my-agent.bundle
-# encrypted: writes the bundle key to my-agent.bundle.key (keep it secret); prints the code fingerprint and the
-# submission id
-uv run kokoah-subnet agent submit --service https://api.kokoah.com/miners --bundle my-agent.bundle --wallet <wallet> --wallet-hotkey <hotkey>
+mkdir -p -m 700 ~/kokoah-agent
+uv run kokoah-subnet agent package ./my-agent --out ~/kokoah-agent/my-agent.bundle
+# encrypted: writes the bundle key to ~/kokoah-agent/my-agent.bundle.key (keep it secret); prints the code
+# fingerprint and the submission id
+uv run kokoah-subnet agent submit --service https://api.kokoah.com/miners --bundle ~/kokoah-agent/my-agent.bundle \
+  --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
 The same files always give the same fingerprint. Version-control and cache folders (`.git`, `__pycache__`) are left
@@ -55,7 +63,8 @@ The machine keeps a copy of the account key with Kokoah, encrypted with a secret
 the copy and your secret could take the account's money, so make the secret with the tool:
 
 ```bash
-uv run kokoah-subnet agent secret --master <your own Hyperliquid address> --hotkey <your hotkey ss58> --out secret.hex
+uv run kokoah-subnet agent secret --master <your own Hyperliquid address> --hotkey <your hotkey ss58> \
+  --out ~/kokoah-agent/secret.hex
 ```
 
 It asks for a password and refuses a weak one: at least 16 characters and hard to guess (five or more random words
@@ -69,8 +78,8 @@ opens nothing either.
 Then sign the start permission with your hotkey, on your own computer (your wallet never goes to the machine):
 
 ```bash
-uv run kokoah-subnet agent authorize --netuid <netuid> --master <your own Hyperliquid address> \
-  --submission <submission id> --wallet <wallet> --wallet-hotkey <hotkey> --out permit.txt
+uv run kokoah-subnet agent authorize --netuid 385 --master <your own Hyperliquid address> \
+  --submission <submission id> --wallet <wallet> --wallet-hotkey <hotkey> --out ~/kokoah-agent/permit.txt
 ```
 
 It names the subnet, your hotkey, your master address and the code, and is good for one machine start within 7
@@ -93,17 +102,19 @@ a harness with your money.
 gcloud compute instances create kokoah-agent \
   --zone=us-central1-a --machine-type=c3-standard-4 \
   --confidential-compute-type=TDX --maintenance-policy=TERMINATE --shielded-secure-boot \
-  --image-project=confidential-space-images --image-family=confidential-space \
+  --image-project=confidential-space-images --image-family=confidential-space --tags=kokoah-agent \
   --service-account=<service account with the Confidential Computing Workload User role> --scopes=cloud-platform \
   --metadata="^~^tee-image-reference=docker.io/kokoahdotcom/kokoah-subnet-agent@sha256:<approved digest>\
 ~tee-env-KOKOAH_AGENT_SERVICE=https://api.kokoah.com/miners\
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
-~tee-env-KOKOAH_AGENT_NETUID=<netuid>\
+~tee-env-KOKOAH_AGENT_NETUID=385\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
 ~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>" \
-  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=secret.hex,tee-env-KOKOAH_AGENT_PERMIT=permit.txt,\
-tee-env-KOKOAH_AGENT_BUNDLE_KEY=my-agent.bundle.key   # leave the bundle key out for a --public bundle
-gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080   # validators reach the machine here
+  --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=$HOME/kokoah-agent/secret.hex,\
+tee-env-KOKOAH_AGENT_PERMIT=$HOME/kokoah-agent/permit.txt,\
+tee-env-KOKOAH_AGENT_BUNDLE_KEY=$HOME/kokoah-agent/my-agent.bundle.key   # leave the bundle key out for a --public bundle
+# validators reach the machine on port 8080: open it to this machine only (its tag), not to every machine you run
+gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080 --target-tags=kokoah-agent
 ```
 
 Use the production `confidential-space` image family, never `confidential-space-debug`: a debug machine is refused
@@ -121,15 +132,16 @@ good, and the release is public:
 ```bash
 uv run kokoah-subnet agent message release --account <account>   # sign the printed message with your MASTER address
 uv run kokoah-subnet agent release --service https://api.kokoah.com/miners --account <account> --time-ms <time_ms> \
-  --signature <0x signature> --master <your master address> --out key.txt   # asks for your password
-# or --secret-file secret.hex instead of --master, for a generated secret
+  --signature <0x signature> --master <your master address> --out ~/kokoah-agent/key.txt   # asks for your password
+# or --secret-file ~/kokoah-agent/secret.hex instead of --master, for a generated secret
 ```
 
 ## 5. Bind and fund
 
 ```bash
 curl http://<machine>:8080/status          # the account address, the code fingerprint, the hotkey
-uv run kokoah-subnet agent bind --netuid <netuid> --endpoint http://<machine>:8080 --network finney --wallet <wallet> --wallet-hotkey <hotkey>
+uv run kokoah-subnet agent bind --netuid 385 --network test --endpoint http://<machine>:8080 \
+  --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
 `agent bind` reads the binding line the machine signed with the account's key and publishes it from your hotkey
