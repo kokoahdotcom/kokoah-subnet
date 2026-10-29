@@ -149,6 +149,24 @@ def submit_message(blob_sha256: str, hotkey: str) -> str:
     return f"kokoah-agent-submit-1 sha256={blob_sha256} hotkey={hotkey}"
 
 
+def used_token(token: str) -> str:
+    """A restore token's record, the same for every spelling of the token. The token's signature covers its header
+    and payload exactly as sent, but the signature itself decodes to the same bytes from many spellings (the unused
+    low bits of its last character, characters the decoder skips), and each one passes the check; so the record is
+    taken over the signature written out again in its one plain form. A token already in that form, as issued, keeps
+    the record it always had."""
+    raw = token.encode()
+    signed, dot, signature = raw.rpartition(b".")
+    if dot:
+        try:  # decoded exactly as the token check decodes it
+            decoded = base64.urlsafe_b64decode(signature + b"=" * (-len(signature) % 4))
+        except ValueError:  # it fails the token check too
+            pass
+        else:
+            raw = signed + b"." + base64.urlsafe_b64encode(decoded).rstrip(b"=")
+    return f"token {hashlib.sha256(raw).hexdigest()}"
+
+
 def default_verifier(message: str, signature: str, hotkey: str) -> bool:
     from bittensor.wallets import verify_message
 
@@ -462,7 +480,7 @@ def create_app(
         if not body.token or len(body.token) > MAX_TOKEN_CHARS:
             raise HTTPException(status_code=400, detail="bad token")
         now = clock()
-        used = f"token {hashlib.sha256(body.token.encode()).hexdigest()}"
+        used = used_token(body.token)
 
         def used_already(c: Any) -> bool:
             q = select(key_events.c.id).where(

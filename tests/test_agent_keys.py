@@ -5,6 +5,7 @@ on the registration."""
 
 import asyncio
 import base64
+import hashlib
 import time
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from uploads import upload
 
 from kokoah_subnet.agent import service as service_module
 from kokoah_subnet.agent import supervisor as supervisor_module
-from kokoah_subnet.agent.attest import KEYSTORE_AUDIENCE, DevelopmentAttestor, StaticKeys
+from kokoah_subnet.agent.attest import KEYSTORE_AUDIENCE, DevelopmentAttestor, StaticKeys, verify_token
 from kokoah_subnet.agent.bundle import package, sha256_hex
 from kokoah_subnet.agent.harness import Harness, HarnessConfig
 from kokoah_subnet.agent.keystore import (
@@ -325,6 +326,33 @@ def test_strangers_cannot_stop_a_machine_from_restoring(world: dict[str, Any]) -
     assert blob.status_code == 200
     assert decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
     assert svc.post(f"/key-store/{address}/restore", json={"token": token}).status_code == 403  # used once
+
+
+def test_a_restore_token_works_once_in_every_spelling(world: dict[str, Any]) -> None:
+    """A token's signature reads the same from other spellings (the unused low bits of its last character, padding,
+    characters the decoder skips), and each passes the token check; none of them restores the key a second time."""
+    svc: TestClient = world["svc"]
+    key = start(world, Account.create())
+    address = Account.from_key(key).address.lower()
+    digest = restore_digest(address, world["keys"].challenge(address))
+    token = world["machine"].token([digest], KEYSTORE_AUDIENCE)
+    head, signature = token.rsplit(".", 1)
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    last = alphabet.index(signature[-1])
+    respelled = [
+        f"{head}.{signature[:-1]}{alphabet[last ^ 1]}",  # the last character's low bits carry nothing
+        f"{head}.{signature[:-1]}{alphabet[last ^ 4]}",
+        f"{head}.{signature}==",
+        f"{head}.{signature[:10]}\n\n{signature[10:]}==",  # skipped by the decoder
+    ]
+    machine_keys = StaticKeys(world["machine_key"].public_key())
+    for t in respelled:
+        assert verify_token(t, machine_keys, [IMAGE], [digest], audience=KEYSTORE_AUDIENCE)
+    assert svc.post(f"/key-store/{address}/restore", json={"token": token}).status_code == 200
+    for t in respelled:
+        again = svc.post(f"/key-store/{address}/restore", json={"token": t})
+        assert again.status_code == 403 and "used already" in again.json()["detail"]
+    assert service_module.used_token(token) == "token " + hashlib.sha256(token.encode()).hexdigest()  # as before
 
 
 def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dict[str, Any]) -> None:
