@@ -621,7 +621,14 @@ async def collect_and_score(
             )
         )
 
-    await asyncio.gather(*(one(hk, a) for hk, a in address_of_hotkey.items()))
+    # one address that cannot be read fails the day: the other reads are cancelled with it, so nothing more is
+    # fetched or written for a day that is retried anyway
+    try:
+        async with asyncio.TaskGroup() as group:
+            for hk, a in address_of_hotkey.items():
+                group.create_task(one(hk, a))
+    except ExceptionGroup as failed:
+        raise failed.exceptions[0] from None
     miners.sort(key=lambda m: m.hotkey)
     for a in address_of_hotkey.values():
         fills_by_address[a] = assign_counterparties(fills_by_address.get(a, []), tid_owners)

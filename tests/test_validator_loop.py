@@ -519,6 +519,36 @@ async def test_a_retried_day_keeps_its_binding_events(tmp_path: Path) -> None:
     await hl.close()
 
 
+async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from kokoah_subnet.validator import hyperliquid
+
+    async def instant(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    cancelled: list[str] = []
+
+    async def slow_b(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "portfolio" and body["user"].lower() == addr_b:
+            try:
+                await asyncio.Event().wait()  # B's history answers only after A's has failed for good
+            except asyncio.CancelledError:
+                cancelled.append(addr_b)
+                raise
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(slow_b))
+    with pytest.raises(RuntimeError, match="portfolio history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert cancelled == [addr_b] and store.equity_series(addr_b, 5) == []
+    await hl.close()
+
+
 KO = "0x6b6f0101" + "cd" * 12
 
 
