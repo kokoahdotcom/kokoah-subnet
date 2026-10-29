@@ -180,10 +180,17 @@ def weights_by_uid(fractions: Mapping[str, float], uid_of: Mapping[str, int]) ->
     return uids, [by_uid[u] for u in uids]
 
 
-async def set_weights(client: Any, wallet: Any, netuid: int, uids: Sequence[int], values: Sequence[int]) -> Any:
-    """Submit weights with the SDK intent (hotkey-signed, conformed to the subnet's hyperparameters)."""
+async def set_weights(
+    client: Any, wallet: Any, netuid: int, uids: Sequence[int], values: Sequence[int]
+) -> bt.ExtrinsicResult:
+    """Submit weights with the SDK intent (hotkey-signed, conformed to the subnet's hyperparameters). The SDK waits
+    for the extrinsic to be finalized and returns an `ExtrinsicResult`, whose `success` says whether the chain
+    accepted it; a policy refusal or a failed submit raises."""
     intent = bt.SetWeights(netuid=netuid, uids=list(uids), weights=[float(v) for v in values])
-    return await client.execute(intent, wallet)
+    result = await client.execute(intent, wallet)
+    if not isinstance(result, bt.ExtrinsicResult):
+        raise TypeError(f"the SDK returned {type(result).__name__}, not an ExtrinsicResult")
+    return result
 
 
 async def weights_rate_limit(client: Any, netuid: int) -> int | None:

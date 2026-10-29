@@ -185,8 +185,7 @@ async def submit_weights(
         return {"day": latest[0], "skipped": f"rate limit: set {snap.block - me.last_update} blocks ago"}
     try:
         result = await set_weights(client, wallet, cfg.netuid, uids, values)
-        ok = bool(getattr(result, "success", False))
-        message = str(getattr(result, "message", ""))
+        ok, message = bool(result.success), str(result.message)
     except Exception as exc:  # noqa: BLE001 - a refused submission is recorded and retried a tempo later
         ok, message = False, str(exc)[:500]
     store.put_weights_submission(latest[0], snap.block, uids, values, ok, message)

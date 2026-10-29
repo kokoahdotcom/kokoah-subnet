@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import bittensor as bt
 import httpx
 import lz4.frame
 import pytest
@@ -105,15 +106,9 @@ class _FakeChain:
     async def stake(self, coldkey: str, hotkey: str, netuid: int, block: int | None = None) -> _Balance:
         return _Balance(100 * 10**9 if hotkey == HK_A else 0)
 
-    async def execute(self, intent: Any, wallet: Any) -> Any:
+    async def execute(self, intent: Any, wallet: Any) -> bt.ExtrinsicResult:
         self.executed.append(intent)
-
-        @dataclass
-        class R:
-            success: bool = True
-            message: str = "Success"
-
-        return R()
+        return bt.ExtrinsicResult(success=True, message="Success")  # what the pinned SDK returns
 
 
 @dataclass
@@ -428,6 +423,28 @@ async def test_step_survives_a_refused_submission(tmp_path: Path) -> None:
 
         rows = c.execute(S.weights_submitted.select()).all()
     assert [r.ok for r in rows] == [False, True]
+    await hl.close()
+
+
+async def test_the_sdk_result_decides_whether_a_submission_counts(tmp_path: Path) -> None:
+    """The SDK's result says whether the chain accepted the weights: an accepted one moves `weights:block` on, a
+    refused one is recorded as failed and waits a tempo."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+
+    async def refused(intent: Any, wallet: Any) -> bt.ExtrinsicResult:
+        return bt.ExtrinsicResult(success=False, message="SettingWeightsTooFast")
+
+    chain.execute = refused  # type: ignore[method-assign]
+    now = DAY_MS / 1000 + 86_400 + 600
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
+    assert report["weights"]["ok"] is False and report["weights"]["message"] == "SettingWeightsTooFast"
+    assert store.get_meta("weights:block", "0") == "0" and store.get_meta("weights:failed_block") == str(chain._block)
+    chain.execute = _FakeChain.execute.__get__(chain)  # type: ignore[method-assign]
+    chain._block += 360
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
+    assert report["weights"]["ok"] is True and store.get_meta("weights:block") == str(chain._block)
+    rows = store.execute_sql("select ok from weights_submitted order by id")
+    assert [bool(r["ok"]) for r in rows] == [False, True]
     await hl.close()
 
 
