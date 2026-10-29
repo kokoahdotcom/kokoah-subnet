@@ -197,8 +197,8 @@ Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no 
   (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
   whose trades come first: each member's fills of the day are matched with the nearest fill of another member on the
   same coin and side within 10 minutes, and the member whose fill comes first most often leads (a copier trades
-  after what it copies). With fewer than 5 matched fills, the member with the longest record (the earliest scored
-  day) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another miner
+  after what it copies). With fewer than 5 matched fills, the member with the longest record (the account whose
+  history on the exchange begins first, the same for every validator) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another miner
   earns nothing, and splitting one account above the volume cap into several gains nothing.
 - **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
   pay; proving an edge from daily returns takes months by design.

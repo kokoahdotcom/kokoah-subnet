@@ -696,7 +696,11 @@ async def collect_and_score(
                 credited_notional_prior_usd=store.credited_notional(hk, day, params.skill_volume_days - 1),
                 dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days), day),
                 agent_verified=bool(agent_status.get(hk, False)),
-                record_start=store.first_scored_day(address, day) or day,
+                # the copy rule's longest record: where the account's history on the exchange begins, which every
+                # validator reads the same (not the days this validator happens to have scored)
+                record_start=(
+                    datetime.fromtimestamp(origin / 1000, tz=UTC).strftime("%Y-%m-%d") if origin is not None else day
+                ),
             )
         )
 

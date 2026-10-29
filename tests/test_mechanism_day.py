@@ -123,8 +123,8 @@ def test_copies_share_one_skill_weight_through_the_day() -> None:
 
 
 def test_the_older_record_leads_a_copy_group_without_matched_fills() -> None:
-    """Two correlated records, no fills to tell who trades first: the account scored since earlier keeps the weight,
-    though the copier's hotkey sorts first and both return series cover the same 90 days."""
+    """Two correlated records, no fills to tell who trades first: the account whose history on the exchange begins
+    earlier keeps the weight, though the copier's hotkey sorts first and both return series cover the same 90 days."""
     rec = strong_record(1)
     states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
     copier = replace(miner("hkA", A, list(rec)), record_start="2026-09-01")

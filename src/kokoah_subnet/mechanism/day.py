@@ -63,7 +63,7 @@ class MinerInputs:
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days
     dated_returns: Mapping[str, float] = field(default_factory=dict)  # day -> return, for the copy rule
     agent_verified: bool = False  # a verified sealed-machine agent account (the skill bonus)
-    record_start: str | None = None  # the address's earliest scored day (the copy rule's longest record)
+    record_start: str | None = None  # the day the address's exchange history begins (the copy rule's longest record)
 
 
 @dataclass(frozen=True)

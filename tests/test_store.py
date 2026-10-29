@@ -128,7 +128,6 @@ def test_an_accounts_record_is_the_series_the_validator_scores_on(tmp_path: Path
     for day, agent in (("2026-10-05", False), ("2026-10-06", True)):
         s.put_miner_days(day, [{"hotkey": "hk", "address": a, "notional": 5000.0, "fills": 3, "pay_alpha": 1.5,
                                 "eligible": True, "agent_verified": agent, "avg_equity_usd": 1100.0}])  # fmt: skip
-    assert s.first_scored_day(a, "2026-10-06") == "2026-10-05" and s.first_scored_day(a, "2026-10-04") is None
     rec = s.account_record(a.upper().replace("0X", "0x"))
     assert rec is not None and rec["hotkey"] == "hk" and rec["linked"] is False
     r = rec["record"]

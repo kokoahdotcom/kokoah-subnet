@@ -94,7 +94,7 @@ def copy_leader(
     """The member a copy group follows. Whoever trades first leads: every fill of one member is matched with the
     nearest fill of another member on the same coin and side within `window_s`, and the member whose fills come
     first most often leads (a copier always trades after what it copies). Without `min_pairs` matched fills the
-    longest record leads (its first scored day), then the hotkey order."""
+    longest record leads (the day its account history on the exchange begins), then the hotkey order."""
     index: dict[str, dict[tuple[str, str], list[int]]] = {}
     for k in group:
         by_key: dict[tuple[str, str], list[int]] = {}

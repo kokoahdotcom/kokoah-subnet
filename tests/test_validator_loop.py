@@ -1102,6 +1102,32 @@ def _sends(user: str, amounts: dict[str, float]) -> list[dict[str, Any]]:
     ]
 
 
+async def test_the_copy_rule_reads_the_same_record_start_on_every_validator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The longest record is where the account's history on the exchange begins (90 days before the day in the fake
+    history), not the first day this validator scored it: a validator that scored A since September and one that
+    starts today give the copy rule the same record start."""
+    from kokoah_subnet.mechanism.day import score_day
+    from kokoah_subnet.validator import collect
+
+    seen: list[dict[str, str | None]] = []
+    real = score_day
+
+    def capture(inputs: Any, params: Any) -> Any:
+        seen.append({m.hotkey: m.record_start for m in inputs.miners})
+        return real(inputs, params)
+
+    monkeypatch.setattr(collect, "score_day", capture)
+    for started_early in (True, False):
+        cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / str(started_early))
+        if started_early:
+            store.put_miner_days("2026-09-01", [{"hotkey": HK_A, "address": addr_a}])
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await hl.close()
+    assert seen == [{HK_A: "2026-07-23", HK_B: "2026-07-23"}] * 2
+
+
 async def test_dust_transfers_cannot_push_a_sub_account_out_of_the_linked_reads(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     sub = "0x" + "ff" * 20
