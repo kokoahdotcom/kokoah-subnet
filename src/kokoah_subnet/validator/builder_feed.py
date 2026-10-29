@@ -1,4 +1,5 @@
-"""Hyperliquid's per-builder daily fill file: the canonical list of scored fills.
+"""Hyperliquid's per-builder daily fill file: it names the builder and each fill's counterparty, and may not cover
+the whole day (the addresses' own fill histories are the primary source, specification section 3).
 
 `https://stats-data.hyperliquid.xyz/Mainnet/builder_fills/{builder}/{YYYYMMDD}.csv.lz4` (LZ4 frame). Unknown
 builders and days not yet published answer 403 or 404; files can appear late, so a validator retries.

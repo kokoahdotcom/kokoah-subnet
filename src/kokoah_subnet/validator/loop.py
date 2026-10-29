@@ -1,4 +1,5 @@
-"""The validator daemon: score each completed UTC day once its builder file is published, and keep the weights set.
+"""The validator daemon: score each completed UTC day in order (waiting for its builder file until the deadline), and
+keep the weights set.
 
 `step` is one pass and takes its clients as arguments, so it runs against fakes in tests; `run` wires the real ones.
 """

@@ -458,10 +458,10 @@ async def collect_and_score(
         if not store.equity_series(address, 1):
             # first time this address is scored: the exchange's own history gives the returns from day one
             history = daily_equity_from_portfolio(windows)
-            for h_day, value, flows in history:
-                if h_day < day:
-                    store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
-            log.info("backfilled %d days of account value for %s", len(history), address)
+            earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
+            for h_day, value, flows in earlier:
+                store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
+            log.info("backfilled %d days of account value for %s", len(earlier), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
         # fills beyond the file go unconfirmed, and every other address is scored as usual
@@ -620,7 +620,7 @@ async def collect_and_score(
             stakes = await stake_samples(client, cfg.netuid, coldkey_of[hk], hk, blocks)
             store.put_stake_samples(day, hk, stakes)
             staked = min((v for _, v in stakes), default=0.0)
-        except Exception as exc:  # noqa: BLE001 - no stake read: holding is 0 today
+        except Exception as exc:  # noqa: BLE001 - no stake read: recorded as 0 (stake does not affect pay)
             errors[hk] = f"stake: {str(exc)[:160]}"
             store.put_error(day, hk, address, "stake", str(exc))
         miners.append(

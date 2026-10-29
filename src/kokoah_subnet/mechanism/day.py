@@ -1,4 +1,4 @@
-"""One scoring day, end to end, as a pure function (specification v6).
+"""One scoring day, end to end, as a pure function (the specification).
 
 `score_day` takes everything a validator fetched for the day and returns the allocation, the weights and the new
 per-miner states. It never touches a network, so a replay of recorded days is the same code path as production.

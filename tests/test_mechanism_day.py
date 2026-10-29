@@ -1,4 +1,4 @@
-"""A whole scoring day through `score_day` (spec v6): the two pools, the skill pool rules, a mirrored pair."""
+"""A whole scoring day through `score_day`: the two pools, the skill pool rules, a mirrored pair."""
 
 import random
 from dataclasses import replace

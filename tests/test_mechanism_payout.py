@@ -1,4 +1,5 @@
-"""The two pools (spec v6): 80% by eligible smoothed builder fees, 20% by skill weight, nothing capped or burned."""
+"""The two pools (specification section 5): 80% by eligible smoothed builder fees, 20% by skill weight, nothing
+capped or burned."""
 
 import pytest
 

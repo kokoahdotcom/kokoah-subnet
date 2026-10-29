@@ -1,4 +1,4 @@
-"""The incentive mechanism as pure functions (specification v6). Nothing here touches a network."""
+"""The incentive mechanism as pure functions (the specification). Nothing here touches a network."""
 
 from .credit import DayFees, day_fees, ema
 from .exclusions import (

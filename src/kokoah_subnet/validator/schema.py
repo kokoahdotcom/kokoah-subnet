@@ -69,7 +69,7 @@ days = Table(
     Column("result_json", Text),
 )
 
-agent_checks = Table(  # each day's check of every agent account (spec v6, section 16)
+agent_checks = Table(  # each day's check of every agent account (specification section 16)
     "agent_checks",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),

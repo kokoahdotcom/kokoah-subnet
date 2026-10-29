@@ -1,4 +1,4 @@
-"""The skill pool's entry rules and weight (spec v6, section 7a)."""
+"""The skill pool's entry rules and weight (specification section 7a)."""
 
 import random
 

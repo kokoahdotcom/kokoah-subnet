@@ -1,5 +1,6 @@
-"""Close a day whose builder file the exchange never published: scored as a day with no fills, so the smoothing
-advances once with zero credit and the next days can follow. Used only by announcement, so that every validator
+"""Close a day whose builder file the exchange never published: the smoothing advances once with zero credit and
+zero skill (so the smoothed skill decays too, unlike a real day without fills, whose skill comes from the returns),
+and the next days can follow. Used only by announcement, so that every validator
 closes the same day the same way; the day's artifact says so."""
 
 from __future__ import annotations
