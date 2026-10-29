@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Daily backup (kokoah-subnet-backup.timer): the validator's record and, where the agent service runs, its database
-# and stored agent code. 14 of each are kept.
+# and stored agent code. 14 of each are kept, in $KOKOAH_SUBNET_BACKUP_DIR (default ~/.local/share/kokoah/backups).
 set -euo pipefail
 shopt -s nullglob
-dir="$HOME/.local/share/kokoah/backups"
+dir="${KOKOAH_SUBNET_BACKUP_DIR:-$HOME/.local/share/kokoah/backups}"
 day="$(date -u +%Y%m%d)"
 here="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$dir"

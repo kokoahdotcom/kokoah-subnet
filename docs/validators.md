@@ -113,6 +113,7 @@ sudo useradd --system --home-dir /var/lib/kokoah-subnet --create-home --shell /u
 # in the repository; Python goes under /opt too, so the service user can run it
 sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
     uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
+sudo install -d -m 755 /opt/kokoah-subnet/scripts && sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/
 sudo chmod -R a+rX /opt/kokoah-subnet
 
 # data and the hotkey only (never the coldkey): the wallet's hotkey file and its coldkeypub.txt
@@ -188,7 +189,7 @@ request limit. Publishing lets miners and other validators compare figures with 
   has earned; the health check alarms if they do.
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source
   and the dashboards in `dashboards/`.
-- **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `~/.local/share/kokoah/backups/`;
+- **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `/var/backups/kokoah-subnet/`;
   `scripts/db.sh backup <file>` does it by hand.
 
 ## 10. Choosing the start day
@@ -203,11 +204,16 @@ by day; each account's earlier daily values are backfilled from the exchange whe
 git pull
 sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
     uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
+sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/
 sudo chmod -R a+rX /opt/kokoah-subnet
+sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
+        deploy/systemd/kokoah-subnet-check.* deploy/systemd/kokoah-subnet-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 ```
 
 `--reinstall-package` makes the sync install the pulled code even when the package's version number is unchanged.
+The scripts and unit files are copied again, so changes to them take effect too.
 
 - **Parameter changes** are versioned in the code, announced at least seven days before they take effect, and
   published in every daily artifact as the mechanism's version. Nothing changes until you update.
