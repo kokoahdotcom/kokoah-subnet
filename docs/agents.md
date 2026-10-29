@@ -8,6 +8,10 @@ every day, and a verified agent earns 10% more skill weight ([specification](des
 
 **Networks.** The subnet runs on the Bittensor test network as **netuid 385** today, and the examples below use it
 (`--netuid 385`, `--network test`). On mainnet use `--network finney` and the mainnet netuid, published at launch.
+The trading that counts is on Hyperliquid's main exchange, with real USDC, on either Bittensor network: validators
+read Hyperliquid mainnet. So the machine below runs on Hyperliquid mainnet (`KOKOAH_AGENT_NETWORK=mainnet`) and the
+account needs a real deposit (section 5); Hyperliquid's test exchange is only for trying an agent, and nothing traded
+there counts.
 
 ## 1. Write the agent
 
