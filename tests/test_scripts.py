@@ -49,3 +49,42 @@ def test_the_read_only_role_reads_the_validator_database_only(tmp_path: Path) ->
     assert "REVOKE ALL ON DATABASE kokoah_subnet_agents FROM PUBLIC" in _run_db(
         tmp_path, "create-db", "kokoah_subnet_agents"
     )
+
+
+def test_a_failed_or_unfinished_archive_is_never_kept_or_counted(tmp_path: Path) -> None:
+    """The bundles archive fails half-way: nothing named *.tmp stays behind. A *.tmp file another run is still
+    writing is not one of the 14 kept, and one left by a killed run is swept once it is a day old."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "backup.sh").write_text((SCRIPTS / "backup.sh").read_text())
+    (scripts / "db.sh").write_text('#!/usr/bin/env bash\n: > "$2"\n')  # `db.sh backup FILE [DB]`
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "tar").write_text('#!/usr/bin/env bash\n: > "$2"\n[ -z "${FAIL_TAR:-}" ]\n')  # `tar czf FILE ...`
+    for p in (scripts / "db.sh", bin_dir / "tar"):
+        p.chmod(0o755)
+    backups, agents = tmp_path / "backups", tmp_path / "agents"
+    (agents / "bundles").mkdir(parents=True)
+    backups.mkdir()
+    for d in range(1, 15):
+        (backups / f"kokoah_subnet_agents_bundles-202601{d:02d}.tgz").write_bytes(b"x")
+    writing = backups / "kokoah_subnet_agents_bundles-20260120.tgz.tmp"  # another run, still writing
+    writing.write_bytes(b"")
+    killed = backups / "kokoah_subnet-20260115.dump.tmp.4242"  # a killed run, two days ago
+    killed.write_bytes(b"")
+    os.utime(killed, (killed.stat().st_mtime - 2 * 86_400,) * 2)
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "HOME": str(tmp_path),
+        "KOKOAH_SUBNET_BACKUP_DIR": str(backups),
+        "KOKOAH_SUBNET_AGENT_DATA": str(agents),
+    }
+
+    def run(**extra: str) -> int:
+        return subprocess.run(["bash", str(scripts / "backup.sh")], env=env | extra, capture_output=True).returncode
+
+    assert run(FAIL_TAR="1") != 0
+    assert sorted(p.name for p in backups.glob("*.tmp*")) == [writing.name]  # its own removed, the killed one swept
+    assert run() == 0
+    bundles = sorted(p.name for p in backups.glob("kokoah_subnet_agents_bundles-*.tgz"))
+    assert len(bundles) == 14 and bundles[0] == "kokoah_subnet_agents_bundles-20260102.tgz" and writing.exists()
