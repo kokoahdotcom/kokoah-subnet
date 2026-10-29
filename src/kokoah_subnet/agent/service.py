@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -343,9 +344,13 @@ def create_app(
         return {"images": list(images or [])}
 
     # restore challenges are derived, not stored: the same for everyone asking within a window, so nobody can replace
-    # or use up a machine's challenge; a token that restored a key is not accepted again
-    challenge_key = secrets.token_bytes(32)
-    used_tokens: dict[str, float] = {}
+    # or use up a machine's challenge; a token that restored a key is not accepted again. With the service's own key
+    # both outlast a restart: the challenge key comes from it, and every restore records its token.
+    if wrap_key is not None:
+        challenge_key = hmac.new(wrap_key, b"kokoah-restore-challenge-key-1", hashlib.sha256).digest()
+    else:
+        challenge_key = secrets.token_bytes(32)
+    restore_lock = threading.Lock()
 
     def challenge_value(address: str, window: int) -> str:
         text = f"kokoah-restore-challenge-1 {address} {window}".encode()
@@ -460,23 +465,29 @@ def create_app(
         if not body.token or len(body.token) > MAX_TOKEN_CHARS:
             raise HTTPException(status_code=400, detail="bad token")
         now = clock()
-        for seen, until in list(used_tokens.items()):
-            if until < now:
-                del used_tokens[seen]
-        token_id = hashlib.sha256(body.token.encode()).hexdigest()
-        if token_id in used_tokens:
-            raise HTTPException(status_code=403, detail="this token was used already")
+        used = f"token {hashlib.sha256(body.token.encode()).hexdigest()}"
+
+        def used_already(c: Any) -> bool:
+            q = select(key_events.c.id).where(
+                key_events.c.address == a, key_events.c.event == "restore", key_events.c.detail == used
+            )
+            return c.execute(q).first() is not None
+
+        with engine.connect() as c:
+            if used_already(c):
+                raise HTTPException(status_code=403, detail="this token was used already")
         window = int(now // CHALLENGE_TTL_S)  # the current challenge, or the one just before it
         errors = [proof_error(body.token, restore_digest(a, challenge_value(a, w))) for w in (window, window - 1)]
         if all(e is not None for e in errors):
             raise HTTPException(status_code=403, detail=f"not a genuine sealed machine's answer: {errors[0]}")
-        with engine.begin() as c:
+        with restore_lock, engine.begin() as c:  # the token is checked and recorded together
+            if used_already(c):
+                raise HTTPException(status_code=403, detail="this token was used already")
             row = kept(c, a)
             if row["released_at"] is not None:
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
             blob = opened(row)  # before anything is recorded: a copy the service cannot open changes nothing
-            event(c, a, "restore")
-        used_tokens[token_id] = now + 2 * CHALLENGE_TTL_S
+            event(c, a, "restore", used)
         return {"address": a, "blob": blob}
 
     @app.post("/key-store/{address}/release")

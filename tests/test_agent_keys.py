@@ -354,3 +354,27 @@ def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dic
     relayed = machine.attestation(restore_digest(address, challenge))["token"]
     assert svc.post(f"/key-store/{address}/restore", json={"token": relayed}).status_code == 403
     assert start(world, master, address) == key  # the machine's own restore still works
+
+
+def test_a_restore_in_progress_survives_a_service_restart(tmp_path: Path) -> None:
+    """With the service's own key, a challenge given before a restart is still answered after it, and a token that
+    restored a key stays used."""
+    wrap = bytes(range(50, 82))
+    w = make_world(tmp_path, wrap_key=wrap)
+    master = Account.create()
+    key = start(w, master)
+    address = Account.from_key(key).address.lower()
+    challenge = w["keys"].challenge(address)
+    token = w["machine"].token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE)
+
+    def restarted() -> TestClient:
+        keys = StaticKeys(w["machine_key"].public_key())
+        app = create_app(tmp_path / "svc", images=[IMAGE], attestation_keys=keys, wrap_key=wrap, netuid=NETUID)
+        return TestClient(app)
+
+    after = restarted()
+    assert after.get(f"/key-store/{address}/challenge").json()["challenge"] == challenge
+    blob = after.post(f"/key-store/{address}/restore", json={"token": token})
+    assert blob.status_code == 200 and decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
+    again = restarted().post(f"/key-store/{address}/restore", json={"token": token})
+    assert again.status_code == 403 and "used already" in again.json()["detail"]
