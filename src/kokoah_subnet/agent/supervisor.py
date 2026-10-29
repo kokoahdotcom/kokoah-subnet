@@ -1,4 +1,4 @@
-"""The sealed machine's entry point (specification v6, section 16).
+"""The sealed machine's entry point (specification section 16).
 
 Image settings (`/etc/kokoah-agent/image.json`, part of the image and so of its attested digest; never taken
 from the environment, because changing them would change what the guarantees mean): Kokoah's builder address and

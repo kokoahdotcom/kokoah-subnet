@@ -1,4 +1,4 @@
-"""The subnet owner's agent service (specification v6, section 16): where miners submit agent code, where the
+"""The subnet owner's agent service (specification section 16): where miners submit agent code, where the
 sealed machines fetch it, and where they keep their account key encrypted with the miner's secret.
 
     POST /agents            submit a bundle (raw body; hotkey, sha256 and the hotkey's signature as headers)

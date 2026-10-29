@@ -1,4 +1,4 @@
-"""The approved harness images (spec v6, section 16): container image digests of released, reproducible builds of
+"""The approved harness images (spec section 16): container image digests of released, reproducible builds of
 `deploy/agent`. A sealed machine counts as an agent only when its attested image is one of these. The list is part
 of the validator code, so every validator approves the same images; a release adds its digest here, with the commit
 it is built from: `deploy/agent/build.sh <commit>` rebuilds it and prints the same digest (this file is left out of

@@ -1,4 +1,4 @@
-"""The account key's copy, encrypted with the miner's secret and kept by the owner's service (spec v6, section 16).
+"""The account key's copy, encrypted with the miner's secret and kept by the owner's service (spec section 16).
 
 - **Store.** When a sealed machine creates an account it encrypts the key (AES-256-GCM under a key derived from a
   secret only the miner holds, given to the machine at start) and sends the ciphertext to the owner's service,

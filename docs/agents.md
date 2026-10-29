@@ -3,7 +3,8 @@
 An agent is your trading code running in a **sealed machine**: a Google Cloud Confidential Space virtual machine
 started from Kokoah's published harness image. The machine creates your agent's Hyperliquid account inside itself and
 never lets its key out, so nobody (you included) can trade that account by hand; every validator checks the machine
-every day, and a verified agent earns 10% more skill weight (specification v6, sections 7a and 16).
+every day, and a verified agent earns 10% more skill weight ([specification](design/02-mechanism-spec.md), sections
+7a and 16).
 
 **Networks.** The subnet runs on the Bittensor test network as **netuid 385** today, and the examples below use it
 (`--netuid 385`, `--network test`). On mainnet use `--network finney` and the mainnet netuid, published at launch.

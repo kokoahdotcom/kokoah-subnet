@@ -1,4 +1,4 @@
-# The sealed machine image (specification v6, section 16): the trusted harness, the sandbox and nothing else.
+# The sealed machine image (specification section 16): the trusted harness, the sandbox and nothing else.
 # Build with deploy/agent/build.sh: a reproducible build from a clean export of a commit, so the same commit always
 # gives the same digest and anyone can rebuild an approved image and compare. Its digest is what validators approve
 # (src/kokoah_subnet/agent/images.py, which is left out of the image so that approving an image does not change it).

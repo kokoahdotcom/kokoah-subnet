@@ -41,7 +41,7 @@ def recover_signer(netuid: int, hotkey: str, address: str, signature: str) -> st
 
 @dataclass(frozen=True)
 class AgentRef:
-    """An agent account's sealed machine (spec v6, section 16): the code fingerprint the miner commits to, and
+    """An agent account's sealed machine (spec section 16): the code fingerprint the miner commits to, and
     where validators reach the machine to challenge it."""
 
     code_sha256: str  # 64 hex characters

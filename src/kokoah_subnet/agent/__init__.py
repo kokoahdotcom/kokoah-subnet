@@ -1,4 +1,4 @@
-"""The sealed-machine agent (specification v6, section 16): the trusted harness that miners run in a cloud
+"""The sealed-machine agent (specification section 16): the trusted harness that miners run in a cloud
 confidential VM, the sandbox their agent code runs in, attestation, and the owner's submission service.
 
 The harness is the only code here that holds a Hyperliquid key and writes to the exchange: it creates the

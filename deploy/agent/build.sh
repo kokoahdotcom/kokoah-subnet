@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproducible build of the sealed machine image (specification v6, section 16). Builds from a clean export of a
+# Reproducible build of the sealed machine image (specification section 16). Builds from a clean export of a
 # commit (never the working tree), with every timestamp set to the commit's time and no build record attached, and
 # prints the image digest: the same commit gives the same digest, so anyone can check an approved image.
 #   deploy/agent/build.sh [commit] [image name]        (defaults: HEAD, kokoahdotcom/kokoah-subnet-agent)

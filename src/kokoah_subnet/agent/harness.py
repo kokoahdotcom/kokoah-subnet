@@ -1,4 +1,4 @@
-"""The trusted harness inside the sealed machine (specification v6, section 16).
+"""The trusted harness inside the sealed machine (specification section 16).
 
 It holds the account's only key, which it creates inside the machine and never exports; nobody else can sign for
 the account, so every action on it comes from here. It offers the miner's agent a narrow trading interface over a

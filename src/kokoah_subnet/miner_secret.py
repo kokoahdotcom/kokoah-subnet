@@ -1,4 +1,4 @@
-"""The miner's secret for a sealed machine (spec v6, section 16): what encrypts the stored copy of the agent account's
+"""The miner's secret for a sealed machine (spec section 16): what encrypts the stored copy of the agent account's
 key. Whoever has that copy and the secret can take the account's money, so the secret is either random or made
 from a strong password with a slow, memory-hard derivation (scrypt, 128 MiB per try), salted with the miner's own
 address so no two miners share a table of guesses. The password never leaves the miner's computer; only the
