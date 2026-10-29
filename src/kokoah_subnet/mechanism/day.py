@@ -1,4 +1,4 @@
-"""One scoring day, end to end, as a pure function (specification v6).
+"""One scoring day, end to end, as a pure function (the specification).
 
 `score_day` takes everything a validator fetched for the day and returns the allocation, the weights and the new
 per-miner states. It never touches a network, so a replay of recorded days is the same code path as production.
@@ -63,6 +63,7 @@ class MinerInputs:
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days
     dated_returns: Mapping[str, float] = field(default_factory=dict)  # day -> return, for the copy rule
     agent_verified: bool = False  # a verified sealed-machine agent account (the skill bonus)
+    record_start: str | None = None  # the day the address's exchange history begins (the copy rule's longest record)
 
 
 @dataclass(frozen=True)
@@ -253,7 +254,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
     group_of = {k: tuple(g) for g in groups for k in g}
     fills_of = {w.m.hotkey: bound_fills.get(w.m.address, []) for w in work}
-    record_start = {w.m.hotkey: min(w.m.dated_returns, default=None) for w in work}
+    record_start = {w.m.hotkey: w.m.record_start or min(w.m.dated_returns, default=None) for w in work}
     leaders = {tuple(g): copy_leader(g, fills_of, record_start) for g in groups}
     skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}

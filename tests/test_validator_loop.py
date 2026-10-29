@@ -2,23 +2,25 @@
 
 import json
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+import bittensor as bt
 import httpx
 import lz4.frame
 import pytest
 from eth_account import Account
 
 from kokoah_subnet.binding import AcceptedBinding, Binding, encode_binding, sign_binding, sign_unlink
-from kokoah_subnet.mechanism import DEFAULT
+from kokoah_subnet.mechanism import DEFAULT, MinerState
 from kokoah_subnet.validator.collect import ValidatorConfig, collect_and_score, day_index, day_strings
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
 from kokoah_subnet.validator.loop import step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
 
-HK_A, HK_B, OWNER, BURN = "hkA", "hkB", "hkOwner", "hkBurn"
+HK_A, HK_B, OWNER, BURN, VAL = "hkA", "hkB", "hkOwner", "hkBurn", "hkValidator"
 EQUITY: dict[str, float] = {}  # address -> recorded account value in the fake history (default $25,000)
 PORTFOLIO_FAILS: set[str] = set()  # addresses whose history read fails
 HISTORY: dict[str, list[dict[str, Any]]] = {}  # address -> extra fills in its own history (not in the builder file)
@@ -31,6 +33,9 @@ PNL_DAY: dict[str, float] = {}  # address -> recorded profit over the scored day
 LEDGER: dict[str, list[dict[str, Any]]] = {}  # address -> ledger records of the scored day
 EXPLORER_FAILS: set[str] = set()  # addresses whose explorer reads fail
 TX_LOOKUPS: list[str] = []  # every txDetails hash asked
+SUBS: dict[str, list[str]] = {}  # address -> its sub-accounts
+FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
+FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -46,6 +51,9 @@ class _Neuron:
     hotkey: str
     coldkey: str
     collateral_min: _Balance | None = None
+    block_at_registration: int = 0
+    validator_permit: bool = False
+    last_update: int = 0
 
 
 @dataclass
@@ -73,18 +81,24 @@ class _FakeChain:
         self.executed: list[Any] = []
         self.subnets = self
         self.staking = self
+        self.hyperparameters = self
+        self.rate_limit = 100
+        self.neurons = [
+            _Neuron(0, OWNER, "ckOwner"),
+            _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
+            _Neuron(2, HK_B, "ckB", _Balance(10 * 10**9)),
+            _Neuron(3, BURN, "ckBurn"),
+            _Neuron(4, VAL, "ckVal", validator_permit=True),
+        ]
+
+    async def weights_rate_limit(self, netuid: int, block: int | None = None) -> int:
+        return self.rate_limit
 
     async def block(self) -> int:
         return self._block
 
     async def metagraph(self, netuid: int, block: int | None = None, commitments: bool = True) -> _Metagraph:
-        neurons = [
-            _Neuron(0, OWNER, "ckOwner"),
-            _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
-            _Neuron(2, HK_B, "ckB", _Balance(10 * 10**9)),
-            _Neuron(3, BURN, "ckBurn"),
-        ]
-        return _Metagraph(block or self._block, 360, OWNER, neurons, 0.5)
+        return _Metagraph(block or self._block, 360, OWNER, list(self.neurons), 0.5)
 
     async def commitments(self, netuid: int) -> dict[str, _Commitment]:
         return self._commitments
@@ -92,15 +106,22 @@ class _FakeChain:
     async def stake(self, coldkey: str, hotkey: str, netuid: int, block: int | None = None) -> _Balance:
         return _Balance(100 * 10**9 if hotkey == HK_A else 0)
 
-    async def execute(self, intent: Any, wallet: Any) -> Any:
+    async def execute(self, intent: Any, wallet: Any) -> bt.ExtrinsicResult:
         self.executed.append(intent)
+        return bt.ExtrinsicResult(success=True, message="Success")  # what the pinned SDK returns
 
-        @dataclass
-        class R:
-            success: bool = True
-            message: str = "Success"
 
-        return R()
+@dataclass
+class _Hotkey:
+    ss58_address: str
+
+
+@dataclass
+class _Wallet:
+    hotkey: _Hotkey
+
+
+WALLET = _Wallet(_Hotkey(VAL))  # the validator's own hotkey, registered as uid 4
 
 
 def _csv(addr_a: str, addr_b: str) -> str:
@@ -146,6 +167,10 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=dict(EARNED))
     if t == "extraAgents":
         return httpx.Response(200, json=[])
+    if t == "userFillsByTime":
+        FILLS_READ.append(body["user"].lower())
+        if body["user"].lower() in FILLS_FAIL:
+            return httpx.Response(500, json={"error": "down"})
     if t == "userFillsByTime" and body["user"].lower() in HISTORY and body.get("startTime") == DAY_MS:
         return httpx.Response(200, json=HISTORY[body["user"].lower()])
     if t == "userFillsByTime":
@@ -216,6 +241,8 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
                 ["perpAllTime", all_time],
             ],
         )
+    if t == "subAccounts" and body["user"].lower() in SUBS:
+        return httpx.Response(200, json=[{"subAccountUser": sub} for sub in SUBS[body["user"].lower()]])
     if t == "subAccounts":
         return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
     return httpx.Response(400, json={"error": t})
@@ -229,6 +256,9 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     LEDGER.clear()
     EXPLORER_FAILS.clear()
     TX_LOOKUPS.clear()
+    SUBS.clear()
+    FILLS_FAIL.clear()
+    FILLS_READ.clear()
     PORTFOLIO_FAILS.clear()
     HISTORY.clear()
     OTHER_BUILDER.clear()
@@ -245,8 +275,8 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         weights_every_blocks=360,
         retry_missing_s=3600,
     )
-    cache = tmp_path / "fills"
-    cache.mkdir()
+    cache = tmp_path / "fills" / "0xbuilder"
+    cache.mkdir(parents=True)
     (cache / "20261021.csv.lz4").write_bytes(lz4.frame.compress(_csv(a.address.lower(), b.address.lower()).encode()))
     commitments = {
         HK_A: _Commitment(encode_binding(Binding(a.address, sign_binding(a.key, 2, HK_A, a.address))), 9000),
@@ -254,7 +284,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         OWNER: _Commitment("not a binding", 1),
     }
     store = Store(tmp_path / "v.sqlite")
-    hl = HyperliquidInfo(rate_limit_s=0.0)
+    hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)  # retries without waiting
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(_info_handler))
     return cfg, store, hl, _FakeChain(commitments), a.address.lower(), b.address.lower()
 
@@ -276,7 +306,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, pytest.approx(2000.0))]
     assert store.returns(addr_a, 5) == [pytest.approx((25000 - 24000 - 2000) / 24000)]
     assert store.position_series([addr_a], [DAY])[addr_a] == {"BTC": [50000.0]}
-    assert store.activity_window(addr_a, 30) == (10, 1, 1_000_000.0)
+    assert store.activity_window(addr_a, 30, DAY) == (10, 1, 1_000_000.0)
     assert set(store.bindings()) == {HK_A, HK_B}
     assert set(store.states()) == {HK_A, HK_B}
     published = json.loads(store.day(DAY) or "{}")
@@ -289,28 +319,28 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
 async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     now = DAY_MS / 1000 + 86_400 + 600  # ten minutes into the next UTC day
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == DAY and report["weights"]["ok"]
     assert sorted(report["weights"]["uids"]) == [1, 2]
     assert len(chain.executed) == 1
     # a second pass in the same tempo: nothing scored again, no second submission
-    report = await step(cfg, store, hl, chain, wallet=None, now=now + 60)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
     assert report["scored"] is None and report["weights"] is None
     # a tempo later the same weights are submitted again
     chain._block += 360
-    report = await step(cfg, store, hl, chain, wallet=None, now=now + 120)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 120)
     assert report["weights"]["ok"] and len(chain.executed) == 2
     await hl.close()
 
 
 async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
-    (tmp_path / "fills" / "20261021.csv.lz4").unlink()
+    (tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4").unlink()
     cfg = ValidatorConfig(**{**cfg.__dict__, "builder_base_url": "http://127.0.0.1:9/none"})
     now = DAY_MS / 1000 + 86_400 + 600
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == DAY and ("missing" in report["scored"] or "error" in report["scored"])
-    report = await step(cfg, store, hl, chain, wallet=None, now=now + 60)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
     assert report["scored"] is None  # not retried within the hour
     await hl.close()
 
@@ -378,15 +408,68 @@ async def test_step_survives_a_refused_submission(tmp_path: Path) -> None:
 
     chain.execute = refuse  # type: ignore[method-assign]
     now = DAY_MS / 1000 + 86_400 + 600
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["weights"]["ok"] is False and "rate limit" in report["weights"]["message"]
-    assert store.get_meta("weights:rate_limit") == "100"
+    assert store.get_meta("weights:rate_limit") == "100"  # the subnet's hyperparameter
+    # the next passes do not try again until a tempo has passed since the failure
+    chain._block += 50
+    assert (await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60))["weights"] is None
+    chain.execute = _FakeChain.execute.__get__(chain)  # type: ignore[method-assign]
+    chain._block += 310
+    assert (await step(cfg, store, hl, chain, wallet=WALLET, now=now + 120))["weights"]["ok"] is True
     # the failure is on the record and the loop goes on
     with store._engine.connect() as c:
         from kokoah_subnet.validator import schema as S
 
         rows = c.execute(S.weights_submitted.select()).all()
-    assert len(rows) == 1 and rows[0].ok is False
+    assert [r.ok for r in rows] == [False, True]
+    await hl.close()
+
+
+async def test_the_sdk_result_decides_whether_a_submission_counts(tmp_path: Path) -> None:
+    """The SDK's result says whether the chain accepted the weights: an accepted one moves `weights:block` on, a
+    refused one is recorded as failed and waits a tempo."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+
+    async def refused(intent: Any, wallet: Any) -> bt.ExtrinsicResult:
+        return bt.ExtrinsicResult(success=False, message="SettingWeightsTooFast")
+
+    chain.execute = refused  # type: ignore[method-assign]
+    now = DAY_MS / 1000 + 86_400 + 600
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
+    assert report["weights"]["ok"] is False and report["weights"]["message"] == "SettingWeightsTooFast"
+    assert store.get_meta("weights:block", "0") == "0" and store.get_meta("weights:failed_block") == str(chain._block)
+    chain.execute = _FakeChain.execute.__get__(chain)  # type: ignore[method-assign]
+    chain._block += 360
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
+    assert report["weights"]["ok"] is True and store.get_meta("weights:block") == str(chain._block)
+    rows = store.execute_sql("select ok from weights_submitted order by id")
+    assert [bool(r["ok"]) for r in rows] == [False, True]
+    await hl.close()
+
+
+async def test_an_unregistered_validator_does_not_submit(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    now = DAY_MS / 1000 + 86_400 + 600
+    report = await step(cfg, store, hl, chain, wallet=_Wallet(_Hotkey("hkNotHere")), now=now)
+    assert report["scored"]["day"] == DAY and "is not registered" in report["weights"]["skipped"]
+    assert chain.executed == [] and store.execute_sql("select count(*) as n from weights_submitted") == [{"n": 0}]
+    await hl.close()
+
+
+async def test_catching_up_does_not_submit_each_old_day(tmp_path: Path) -> None:
+    """Two days to catch up: the first scored day is submitted (the first submission), the second one scored in the
+    same tempo is not, until no older day is pending."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    store.put_day("2026-10-20", 1, json.dumps({"weights": {HK_A: 1.0}}))
+    store.set_meta("weights:block", str(chain._block))  # weights were set this tempo
+    store.set_meta("weights:day", "2026-10-20")
+    now = DAY_MS / 1000 + 2 * 86_400 + 600  # 2026-10-21 and 2026-10-22 are pending
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
+    assert report["scored"]["day"] == DAY and report["weights"] is None and chain.executed == []
+    store.put_day("2026-10-22", 3, json.dumps({"weights": {HK_B: 1.0}}))  # caught up
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
+    assert report["weights"]["day"] == "2026-10-22" and report["weights"]["ok"]
     await hl.close()
 
 
@@ -398,10 +481,45 @@ async def test_pending_days_are_scored_in_order_and_a_missing_file_blocks(tmp_pa
     # two days are due (10-20 and 10-21); 10-20 has no file, so the loop waits on it and never jumps to 10-21
     now = DAY_MS / 1000 + 86_400 + 600
     assert pending_days(store, "2026-10-20", "2026-10-21") == ["2026-10-20", "2026-10-21"]
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == "2026-10-20" and report["pending_days"] == ["2026-10-20", "2026-10-21"]
     assert store.day("2026-10-21") is None
     await hl.close()
+
+
+async def test_days_are_scored_only_in_order(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.loop import pending_days
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-20"})
+    now = DAY_MS / 1000 + 86_400 + 600
+    # 2026-10-20 is pending: asking for 2026-10-21 first is refused, nothing is scored
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now, day=DAY)
+    assert report["scored"] == {"day": DAY, "error": f"{DAY} is out of order: the oldest pending day is 2026-10-20"}
+    assert store.days_list() == []
+    # an unscored day before the latest scored one is never pending again
+    store.put_day(DAY, 2, "{}")
+    assert pending_days(store, "2026-10-19", "2026-10-23") == ["2026-10-22", "2026-10-23"]
+    await hl.close()
+
+
+async def test_nothing_is_scored_before_the_start_day(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-25"})  # after yesterday
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=DAY_MS / 1000 + 86_400 + 600)
+    assert report["scored"] is None and store.days_list() == []
+    await hl.close()
+
+
+def test_skip_day_refuses_a_day_out_of_order(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.skip import skip_day
+
+    store = Store(tmp_path / "o.sqlite")
+    store.put_day("2026-10-20", 1, "{}")
+    for day in ("2026-10-19", "2026-10-22"):
+        with pytest.raises(ValueError, match="the next day to score or close is 2026-10-21"):
+            skip_day(store, day, 3, BURN, "never published", DEFAULT)
+    assert "closed as skipped" in skip_day(store, "2026-10-21", 2, BURN, "never published", DEFAULT)
 
 
 def test_skip_day_advances_states_with_zero_credit(tmp_path: Path) -> None:
@@ -453,6 +571,110 @@ async def test_a_failed_history_read_fails_the_day_instead_of_zeroing_the_trader
     with pytest.raises(RuntimeError, match="portfolio history"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert store.day(DAY) is None  # not scored: the loop retries within the hour
+    await hl.close()
+
+
+async def test_a_retried_day_keeps_its_binding_events(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    with pytest.raises(RuntimeError, match="portfolio history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.bindings() == {}  # nothing accepted on a day that was not scored
+    PORTFOLIO_FAILS.clear()
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    events = store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}' order by hotkey")
+    assert events == [{"event": "accepted", "hotkey": HK_A}, {"event": "accepted", "hotkey": HK_B}]
+    assert set(store.bindings()) == {HK_A, HK_B}
+    await hl.close()
+
+
+async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path) -> None:
+    import asyncio
+
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    cancelled: list[str] = []
+
+    async def slow_b(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "portfolio" and body["user"].lower() == addr_b:
+            try:
+                await asyncio.Event().wait()  # B's history answers only after A's has failed for good
+            except asyncio.CancelledError:
+                cancelled.append(addr_b)
+                raise
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(slow_b))
+    with pytest.raises(RuntimeError, match="portfolio history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert cancelled == [addr_b] and store.equity_series(addr_b, 5) == []
+    await hl.close()
+
+
+async def test_minute_candles_are_read_once_per_coin(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    asked: list[str] = []
+
+    async def counting(request: httpx.Request) -> httpx.Response:
+        import asyncio
+
+        body = json.loads(request.content)
+        if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m":
+            asked.append(body["req"]["coin"])
+            await asyncio.sleep(0.2)  # a slow answer: the other address asks for the same coin meanwhile
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(counting))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert sorted(asked) == ["BTC", "ETH"]  # both addresses traded BTC; one read serves both
+    await hl.close()
+
+
+async def test_failed_minute_candles_wait_for_the_deadline_then_leave_the_coin_uncounted(tmp_path: Path) -> None:
+    """BTC's minute candles cannot be read: the day waits until the deadline (the clip is an anti-wash rule); after
+    it, the BTC builder fills go uncounted, the return of an address that traded BTC is unknown, ETH is untouched."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+
+    def btc_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m" and body["req"]["coin"] == "BTC":
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_down))
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="minute candles of BTC"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    assert [e["stage"] for e in store.execute_sql("select stage from errors where level = 'error'")] == ["marks"]
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10  # A traded BTC only, B traded ETH
+    excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+    assert excluded == [{"excluded": "no_mark"}]
+    known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
+    assert {r["address"]: bool(r["return_known"]) for r in known} == {addr_a: False, addr_b: False}  # both: BTC history
+    await hl.close()
+
+
+async def test_a_truncated_cached_file_is_downloaded_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import collect
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cached = tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4"
+    whole = cached.read_bytes()
+    cached.write_bytes(whole[: len(whole) // 2])  # a write cut short
+    asked: list[tuple[str, str]] = []
+
+    async def download(builder: str, day: str, base_url: str) -> bytes:
+        asked.append((builder, day))
+        return whole
+
+    monkeypatch.setattr(collect, "download", download)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert asked == [("0xbuilder", DAY)] and cached.read_bytes() == whole
+    assert sum(r.fees.fills for r in result.records) == 30
+    assert [p.name for p in cached.parent.iterdir()] == [cached.name]  # no partial file left behind
     await hl.close()
 
 
@@ -565,8 +787,8 @@ async def test_an_order_that_paid_another_builder_is_not_counted(tmp_path: Path)
     with store._engine.connect() as c:
         from kokoah_subnet.validator import schema as S
 
-        stages = [r.stage for r in c.execute(S.errors.select()).all()]
-    assert "builder" in stages
+        rows = c.execute(S.errors.select()).all()
+    assert ("builder", "note") in [(r.stage, r.level) for r in rows]  # another builder's orders: routine
     await hl.close()
 
 
@@ -739,15 +961,7 @@ async def test_cheap_tiny_orders_cannot_flood_the_validator_with_lookups(
     await hl.close()
 
 
-async def test_one_accounts_explorer_failure_affects_only_that_account_after_the_deadline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from kokoah_subnet.validator import hyperliquid
-
-    async def instant(_: float) -> None:
-        return None
-
-    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
+async def test_one_accounts_explorer_failure_affects_only_that_account_after_the_deadline(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
     HISTORY[addr_a] = _history_of_file_fills()
     HISTORY[addr_b] = _taker_fills_after_midday(3)
@@ -806,4 +1020,309 @@ async def test_a_validator_waits_for_the_unlink_list_until_the_deadline(tmp_path
         late = DAY_MS / 1000 + 86_400 + (DEFAULT.file_deadline_hours + 1) * 3600
         result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=late)
     assert {r.hotkey for r in result.records} == {HK_A, HK_B}
+    await hl.close()
+
+
+def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int]) -> None:
+    """The day before, uid 1 was hotkey A (registered at `registered[0]`), with a smoothed skill of 0.4; today uid 1
+    on the same coldkey is hotkey A2 (registered at `registered[1]`), bound to the same account."""
+    store.put_neurons(
+        "2026-10-20", 9_000, [{"uid": 1, "hotkey": HK_A, "coldkey": "ckA", "block_at_registration": registered[0]}]
+    )
+    store.put_states({HK_A: MinerState(g=0.4, phi_hat=50.0, qualified=True)}, day="2026-10-20")
+    a = ACCOUNTS["a"]
+    chain.neurons[1] = _Neuron(1, "hkA2", "ckA", _Balance(10 * 10**9), block_at_registration=registered[1])
+    chain._commitments["hkA2"] = _Commitment(
+        encode_binding(Binding(a.address, sign_binding(a.key, 2, "hkA2", a.address))), 9500
+    )
+    del chain._commitments[HK_A]
+    # a failed earlier attempt of the same day recorded today's metagraph already: it is not the previous day
+    store.put_neurons(
+        DAY, 9_900, [{"uid": 1, "hotkey": "hkA2", "coldkey": "ckA", "block_at_registration": registered[1]}]
+    )
+
+
+async def test_a_hotkey_swap_is_detected_between_two_scored_days(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    _swap_hotkey_a(store, chain, (100, 100))
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.swaps_through(DAY) == [(DAY, HK_A, "hkA2")]
+    events = store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}'")
+    assert {"event": "swapped", "hotkey": "hkA2"} in events
+    a2 = next(r for r in result.records if r.hotkey == "hkA2")
+    assert a2.g == pytest.approx(0.7 * 0.4 + 0.3 * a2.skill_raw)  # the skill record follows the new hotkey
+    assert a2.phi_hat == pytest.approx(0.3 * a2.credited.credit)  # the credit does not
+    await hl.close()
+
+
+async def test_a_new_registration_on_the_same_uid_is_not_a_swap(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    _swap_hotkey_a(store, chain, (100, 200))  # uid 1 was deregistered and registered again by the same coldkey
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.swaps_through(DAY) == []
+    a2 = next(r for r in result.records if r.hotkey == "hkA2")
+    assert a2.g == pytest.approx(0.3 * a2.skill_raw)  # a fresh hotkey: no skill record carried over
+    await hl.close()
+
+
+async def test_one_missing_day_keeps_a_long_record_in_the_entry_test(tmp_path: Path) -> None:
+    """A's 120 stored days miss one day ten days ago (an account read that failed): the entry test still has its 90
+    returns."""
+    import random
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    rng = random.Random(5)
+    value = 25_000.0
+    for back in range(120, 0, -1):
+        value *= 1 + rng.gauss(0.002, 0.01)
+        if back != 10:
+            store.put_equity(addr_a, (date.fromisoformat(DAY) - timedelta(days=back)).isoformat(), value, 0.0)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    a = next(r for r in result.records if r.hotkey == HK_A)
+    assert a.entry_psr is not None and a.returns_days == 90
+    await hl.close()
+
+
+def _sends(user: str, amounts: dict[str, float]) -> list[dict[str, Any]]:
+    """Ledger records of USDC sent from `user` to each address."""
+    return [
+        {
+            "time": DAY_MS + i,
+            "hash": f"0x{i:064x}",
+            "delta": {
+                "type": "send",
+                "user": user,
+                "destination": to,
+                "token": "USDC",
+                "amount": str(usd),
+                "usdcValue": str(usd),
+            },
+        }
+        for i, (to, usd) in enumerate(amounts.items())
+    ]
+
+
+async def test_the_copy_rule_reads_the_same_record_start_on_every_validator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The longest record is where the account's history on the exchange begins (90 days before the day in the fake
+    history), not the first day this validator scored it: a validator that scored A since September and one that
+    starts today give the copy rule the same record start."""
+    from kokoah_subnet.mechanism.day import score_day
+    from kokoah_subnet.validator import collect
+
+    seen: list[dict[str, str | None]] = []
+    real = score_day
+
+    def capture(inputs: Any, params: Any) -> Any:
+        seen.append({m.hotkey: m.record_start for m in inputs.miners})
+        return real(inputs, params)
+
+    monkeypatch.setattr(collect, "score_day", capture)
+    for started_early in (True, False):
+        cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / str(started_early))
+        if started_early:
+            store.put_miner_days("2026-09-01", [{"hotkey": HK_A, "address": addr_a}])
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await hl.close()
+    assert seen == [{HK_A: "2026-07-23", HK_B: "2026-07-23"}] * 2
+
+
+async def test_dust_transfers_cannot_push_a_sub_account_out_of_the_linked_reads(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    sub = "0x" + "ff" * 20
+    SUBS[addr_a] = [sub]
+    dust = {f"0x{i:040x}": 0.01 for i in range(1, 31)}  # 30 addresses that sort before the sub-account
+    partner = "0x" + "ee" * 20
+    LEDGER[addr_a] = _sends(addr_a, {**dust, partner: 5_000.0})
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    linked = [u for u in FILLS_READ if u not in (addr_a, ACCOUNTS["b"].address.lower())]
+    assert len(linked) == DEFAULT.max_linked_accounts and linked[:2] == [sub, partner]
+    messages = [e["message"] for e in store.execute_sql("select message from errors")]
+    assert "7 linked accounts beyond the cap not read" in messages
+    await hl.close()
+
+
+async def test_one_linked_account_read_failure_does_not_skip_the_others(tmp_path: Path) -> None:
+    """A sent money to two accounts: the first one's fills cannot be read. Until the deadline the day waits; after
+    it, the second account's fills are still read and name the counterparty of A's afternoon trade."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    broken, partner = "0x" + "e1" * 20, "0x" + "e2" * 20
+    LEDGER[addr_a] = _sends(addr_a, {broken: 9_000.0, partner: 5_000.0})
+    FILLS_FAIL.add(broken)
+    HISTORY[partner] = [dict(HISTORY[addr_a][-1], side="B", cloid=None)]  # the other side of A's last trade
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="linked to"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    traded = store.execute_sql(f"select counterparty, excluded from fills where tid = 1003 and address = '{addr_a}'")
+    assert traded == [{"counterparty": partner, "excluded": "cluster"}]  # a transfer partner: the same cluster
+    await hl.close()
+
+
+async def test_a_fill_that_needed_a_failed_linked_read_goes_uncounted(tmp_path: Path) -> None:
+    """The only linked account on the other side of A's afternoon trade cannot be read: after the deadline, A's
+    history fills with no named counterparty go uncounted; the fills the file names stay as they were."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    broken = "0x" + "e1" * 20
+    LEDGER[addr_a] = _sends(addr_a, {broken: 9_000.0})
+    FILLS_FAIL.add(broken)
+    HISTORY[broken] = [dict(HISTORY[addr_a][-1], side="B", cloid=None)]  # the other side of A's last trade
+    end = DAY_MS + 86_400_000
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    ra = next(r for r in result.records if r.hotkey == HK_A)
+    assert ra.fees.fills == 20 and ra.credited.fills == 18  # the four history-only fills are not counted
+    rows = store.execute_sql(f"select tid, excluded from fills where address = '{addr_a}' and tid >= 1000")
+    assert sorted((r["tid"], r["excluded"]) for r in rows) == [(1000 + i, "unchecked_counterparty") for i in range(4)]
+    messages = [e["message"] for e in store.execute_sql("select message from errors where stage = 'clusters'")]
+    assert any("fills of" in m for m in messages) and "4 fills uncounted: their counterparty could not be checked" in (
+        messages
+    )
+    assert store.activity_window(addr_a, 30, DAY)[2] == pytest.approx(1_000_000.0)  # the file's 20 fills only
+    await hl.close()
+
+
+async def test_a_failed_transfer_read_keeps_the_sub_accounts_and_leaves_open_counterparties_uncounted(
+    tmp_path: Path,
+) -> None:
+    """A's ledger cannot be read after the deadline: its sub-account stays in its cluster, and every fill of A
+    whose counterparty is not a bound address goes uncounted (it may be a transfer partner). B is untouched."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    sub = "0x" + "ff" * 20
+    SUBS[addr_a] = [sub]
+
+    def ledger_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userNonFundingLedgerUpdates" and body["user"].lower() == addr_a:
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(ledger_down))
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="transfer partners"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10
+    excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+    assert excluded == [{"excluded": "unchecked_counterparty"}]
+    edges = store.execute_sql(f"select b, source from cluster_edges where a = '{addr_a}'")
+    assert edges == [{"b": sub, "source": "subaccount"}]
+    await hl.close()
+
+
+async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chain connection drops during a pass: the failure is recorded, the connection is opened again and the
+    next pass runs."""
+    import asyncio
+
+    import bittensor as bt
+
+    from kokoah_subnet.validator import loop
+
+    opened: list[str] = []
+
+    class Subtensor:
+        def __init__(self, network: str) -> None:
+            opened.append(network)
+
+        async def __aenter__(self) -> str:
+            return f"client {len(opened)}"
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    passes: list[str] = []
+
+    async def one_pass(cfg: Any, store: Any, hl: Any, client: str, wallet: Any, params: Any, day: Any = None) -> Any:
+        passes.append(client)
+        if len(passes) == 1:
+            raise RuntimeError("websocket closed")
+        raise asyncio.CancelledError  # ends the test's loop
+
+    monkeypatch.setattr(bt, "Subtensor", Subtensor)
+    monkeypatch.setattr(bt, "Wallet", lambda **_: WALLET)
+    monkeypatch.setattr(loop, "step", one_pass)
+    cfg = ValidatorConfig(network="fake", netuid=2, builder="0xbuilder", data_dir=tmp_path, poll_s=0)
+    with pytest.raises(asyncio.CancelledError):
+        await loop.run(cfg)
+    assert passes == ["client 1", "client 2"] and opened == ["fake", "fake"]
+    store = Store(tmp_path / "validator.sqlite")
+    assert store.execute_sql("select message from errors where stage = 'loop'") == [{"message": "websocket closed"}]
+    assert store.execute_sql("select count(*) as n from runs") == [{"n": 1}]
+
+
+def test_the_run_record_hides_the_database_password(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.loop import run_config
+
+    url = "postgresql+psycopg://kokoah:s3cret-pw@127.0.0.1:48110/kokoah_subnet"
+    cfg = ValidatorConfig(network="test", netuid=385, builder="0xbuilder", data_dir=tmp_path, db_url=url)
+    config = run_config(cfg)
+    assert "s3cret-pw" not in json.dumps(config)
+    assert config["db_url"] == "postgresql+psycopg://kokoah:***@127.0.0.1:48110/kokoah_subnet"
+    assert config["netuid"] == "385" and "extra" not in config
+    assert run_config(ValidatorConfig(network="test", netuid=1, builder="0xb", data_dir=tmp_path))["db_url"] == ""
+
+
+def test_runs_recorded_with_a_password_have_it_hidden_by_the_migration(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    from kokoah_subnet.validator.migrations import STEPS
+
+    path = tmp_path / "old.sqlite"
+    store = Store(path)
+    url = "postgresql+psycopg://kokoah:s3cret-pw@127.0.0.1:48110/kokoah_subnet"
+    store.start_run(network="test", netuid=385, config={"db_url": url, "netuid": "385"})
+    with store._engine.begin() as c:  # a record from before the step
+        c.execute(text("UPDATE meta SET value = '9' WHERE key = 'schema_version'"))
+    store.close()
+    again = Store(path)
+    assert again.migrations_applied[0] == f"10: {STEPS[9][1]}"
+    (row,) = again.execute_sql("select config from runs")
+    config = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+    assert config == {"db_url": "postgresql+psycopg://kokoah:***@127.0.0.1:48110/kokoah_subnet", "netuid": "385"}
+
+
+async def test_the_file_recheck_waits_an_hour_between_tries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import loop
+    from kokoah_subnet.validator.builder_feed import NotPublished
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    tries: list[float] = []
+
+    async def unpublished(builder: str, day: str, base_url: str) -> bytes:
+        tries.append(1.0)
+        raise NotPublished(day)
+
+    monkeypatch.setattr(loop, "download", unpublished)
+    late = DAY_MS / 1000 + 86_400 + 7 * 3600  # 07:00 UTC the next day
+    await step(cfg, store, hl, chain, wallet=WALLET, now=late)  # scores the day, then the first re-check
+    for minutes in (1, 2, 30):
+        await step(cfg, store, hl, chain, wallet=WALLET, now=late + minutes * 60)
+    assert len(tries) == 1  # not once a pass
+    await step(cfg, store, hl, chain, wallet=WALLET, now=late + 3700)
+    assert len(tries) == 2
+    await hl.close()
+
+
+async def test_a_file_published_after_scoring_is_recorded_as_such(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import loop
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    late = DAY_MS / 1000 + 86_400 + 600  # scored before 06:00 UTC: no re-check yet
+    await step(cfg, store, hl, chain, wallet=WALLET, now=late)
+    store.put_file(DAY, "", 0)  # as if the day had been scored past the deadline without a file
+
+    async def published(builder: str, day: str, base_url: str) -> bytes:
+        return b"the late file"
+
+    monkeypatch.setattr(loop, "download", published)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=late + 7 * 3600)
+    assert report["file_recheck"] == {"day": DAY, "changed": False}
+    rows = store.execute_sql("select level, message from errors where stage = 'file recheck'")
+    assert len(rows) == 1 and rows[0]["level"] == "note" and rows[0]["message"].startswith("published after scoring")
     await hl.close()

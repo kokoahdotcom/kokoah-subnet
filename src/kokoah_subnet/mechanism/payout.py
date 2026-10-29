@@ -1,4 +1,4 @@
-"""The two pools, the pay and the weights (specification v6, sections 5 and 6).
+"""The two pools, the pay and the weights (specification sections 5 and 6).
 
 The day's miner emission `A` is split into a volume pool (`volume_share`, shared by eligible smoothed builder fees)
 and a skill pool (`skill_share`, shared by skill weight). Nothing is capped and nothing is burned: when nobody has a

@@ -19,7 +19,7 @@ class MinerState:
     fee_hat: float = 0.0  # smoothed total fees on the builder leg, USD
     g: float = 0.0  # smoothed skill
     paid: tuple[float, ...] = ()  # alpha paid per scored day, newest last (`paid_days` is authoritative)
-    zero_until_day: int | None = None  # day index until which g' = h' = 0 (mirror report)
+    zero_until_day: int | None = None  # day index until which the miner is out of the skill pool (mirror report)
     paid_days: tuple[tuple[int, float], ...] = ()  # (day index, alpha paid), so the window follows calendar days
     last_day: int | None = None  # the last day index this state was advanced on
     # eligibility (section 9a): belongs to one identity (hotkey + bound address + registration), never carried over

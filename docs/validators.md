@@ -31,9 +31,10 @@ published at launch. Examples use the test network (`--network test`); on mainne
 
 - **A hotkey registered on the subnet with a validator permit.** The chain grants permits to the subnet's top
   validators by stake; weights from a hotkey without one are not accepted.
-- **A small Linux server.** Two CPU cores, 4 GB of memory and 20 GB of disk are plenty. Only outbound HTTPS is
-  needed (Hyperliquid's public API, its explorer and data files, and a Bittensor endpoint); no inbound port has to
-  be open unless you publish the interface (section 8).
+- **A small Linux server.** Two CPU cores, 4 GB of memory and 20 GB of disk are plenty. Outbound only: HTTPS to
+  Hyperliquid's public API, its explorer and data files and the subnet's service, a websocket to a Bittensor
+  endpoint, and plain HTTP to each agent machine at the host and port its binding publishes (the agent check). No
+  inbound port has to be open unless you publish the interface (section 8).
 - **Python 3.12 and [uv](https://docs.astral.sh/uv/)**; **Docker** for the PostgreSQL record and the optional
   dashboards.
 - **A reliable clock** (NTP): days are UTC days.
@@ -44,7 +45,7 @@ published at launch. Examples use the test network (`--network test`); on mainne
 git clone https://github.com/kokoahdotcom/kokoah-subnet
 cd kokoah-subnet
 uv sync                         # installs the exact versions from uv.lock
-scripts/check.sh                # optional: lint, types and the offline test suite, as CI runs them
+scripts/check.sh                # optional: lint, types, the offline tests and the checks below, as CI runs them
 uv run kokoah-subnet verify     # optional: the specification's numerical checks
 ```
 
@@ -67,11 +68,13 @@ miner's figures with the parts behind them, every account value point, every age
 The tables are described in the [record guide](database.md).
 
 ```bash
-scripts/db.sh start      # PostgreSQL in Docker on 127.0.0.1:48110; writes the URL to ~/.local/share/kokoah/subnet-db.env
+scripts/db.sh start      # PostgreSQL in Docker on 127.0.0.1:48110; writes the URLs to ~/.local/share/kokoah/subnet-db.env
 set -a; . ~/.local/share/kokoah/subnet-db.env; set +a     # exports KOKOAH_SUBNET_DB_URL for the commands below
 ```
 
-Without a database URL the validator uses a SQLite file in its data directory, which is fine for trials.
+The env file holds two connections: `KOKOAH_SUBNET_DB_URL` for the validator, which writes the record, and
+`KOKOAH_SUBNET_DB_READER_URL`, a read-only role for the interface, the health check and the dashboards, which only
+read it. Without a database URL the validator uses a SQLite file in its data directory, which is fine for trials.
 
 ## 5. Configuration
 
@@ -94,7 +97,7 @@ Without a database URL the validator uses a SQLite file in its data directory, w
 
 ## 6. Run
 
-**One pass**, to check the configuration: score the pending days, submit weights, exit.
+**One pass**, to check the configuration: score the oldest pending day, submit weights, exit.
 
 ```bash
 uv run kokoah-subnet validator run --network test --netuid 385 \
@@ -113,6 +116,7 @@ sudo useradd --system --home-dir /var/lib/kokoah-subnet --create-home --shell /u
 # in the repository; Python goes under /opt too, so the service user can run it
 sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
     uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
+sudo install -d -m 755 /opt/kokoah-subnet/scripts && sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/
 sudo chmod -R a+rX /opt/kokoah-subnet
 
 # data and the hotkey only (never the coldkey): the wallet's hotkey file and its coldkeypub.txt
@@ -126,6 +130,8 @@ sudo install -o kokoah-subnet -g kokoah-subnet -m 600 ~/.bittensor/wallets/valid
 # settings (readable by the service's group only) and logs
 sudo install -d -m 755 /etc/kokoah-subnet && sudo install -d -g kokoah-subnet -m 775 /var/log/kokoah-subnet
 sudo install -g kokoah-subnet -m 640 ~/.local/share/kokoah/subnet-db.env /etc/kokoah-subnet/db.env
+grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
+    | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
 echo 'KOKOAH_SUBNET_ARGS=--network test --netuid 385 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/validator-main.env
 
@@ -157,9 +163,11 @@ All times are UTC.
 5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
    subnet's settings, including commit-reveal.
 
-A failed read of a miner's fill history, the explorer, the recorded account values or the unlinks fails that day's scoring
-rather than scoring it with missing data; the validator retries within the hour. Other reads (positions, fee rates,
-stake) fall back, and the failure is recorded.
+A failed read of a miner's recorded account values fails that day's scoring; the validator retries within the
+hour. A failed read of a fill history, the explorer, a linked account, the minute candles or the unlinks fails the
+day's scoring until 12 hours after the day ends; after that the day is scored and only the fills that needed the
+failed read go uncounted (without a coin's candles, also the day's return of an account that traded it). Other reads
+(positions, fee rates, stake) fall back. Every failure is recorded.
 
 ## 8. The public interface
 
@@ -181,14 +189,17 @@ request limit. Publishing lets miners and other validators compare figures with 
 ## 9. Monitoring, alerts and backups
 
 - **Health check.** `uv run kokoah-subnet validator check` prints the latest scored day, the last weights, the last
-  epoch, errors in the last 24 hours and the builder-earnings check, and exits 1 on a problem. The
+  epoch, errors in the last 24 hours (routine notes are counted apart and are no problem) and the builder-earnings
+  check, and exits 1 on a problem. The
   `kokoah-subnet-check.timer` runs it hourly and posts to a webhook only when something is wrong: put
-  `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `/etc/kokoah-subnet/alert.env`.
+  `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `/etc/kokoah-subnet/alert.env`. A run that finds a
+  problem also leaves the unit failed, so `systemctl --failed` and any monitor of systemd units show it; a webhook
+  that refuses the report is noted in `/var/log/kokoah-subnet/check.log`.
 - **The earnings check.** The builder fees credited to miners must never exceed what Hyperliquid reports the builder
   has earned; the health check alarms if they do.
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source
-  and the dashboards in `dashboards/`.
-- **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `~/.local/share/kokoah/backups/`;
+  (through the read-only role) and the dashboards in `dashboards/`.
+- **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `/var/backups/kokoah-subnet/`;
   `scripts/db.sh backup <file>` does it by hand.
 
 ## 10. Choosing the start day
@@ -201,13 +212,21 @@ by day; each account's earlier daily values are backfilled from the exchange whe
 
 ```bash
 git pull
+scripts/db.sh start      # already running: only makes sure the read-only role and its URL exist
+grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
+    | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
 sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
     uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
+sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/
 sudo chmod -R a+rX /opt/kokoah-subnet
+sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
+        deploy/systemd/kokoah-subnet-check.* deploy/systemd/kokoah-subnet-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 ```
 
 `--reinstall-package` makes the sync install the pulled code even when the package's version number is unchanged.
+The scripts and unit files are copied again, so changes to them take effect too.
 
 - **Parameter changes** are versioned in the code, announced at least seven days before they take effect, and
   published in every daily artifact as the mechanism's version. Nothing changes until you update.
@@ -233,4 +252,4 @@ sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 | "no TAO perpetual" | Pass `--tao-usd-fallback <price>`. |
 | No verified agents | `--agent-service https://api.kokoah.com/miners` must be set and reachable. |
 | Different figures from another validator | Compare the `/days/<day>` artifacts, and check that both run the same release. |
-| The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`. |
+| The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`. Days are scored and closed in order only: the day must be the one after the latest scored day. |

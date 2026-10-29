@@ -36,8 +36,7 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
   registered by the operator on a coldkey of its own and bound to no trader, whose alpha the operator's burn
   process destroys with `burn_alpha(hotkey, amount, netuid)`; without a registered burn hotkey that day goes to the
   owner hotkey. The owner hotkey is avoided where possible because the chain records incentive directed to owner
-  hotkeys as `MinerBurned` and scales the subnet's TAO emission share by that fraction next tempo (research note 05,
-  section 9).
+  hotkeys as `MinerBurned` and scales the subnet's TAO emission share by that fraction next tempo.
 - **Buyback.** `add_stake_burn(hotkey, netuid, amount, limit)` buys alpha with TAO and burns it in one
   transaction, emitting `TokensBurned`; every buyback is one verifiable on-chain event.
 
@@ -59,8 +58,8 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
 ## 3. What counts, and what never counts
 
 Only the bound address's Hyperliquid data is used: perpetual fills with the Kokoah builder code (credit), the
-address's daily account value and flows (skill), the hotkey's stake (holding). Fills without the builder code count
-for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
+address's daily account value and flows (skill); the hotkey's stake is recorded for information only (§8). Fills
+without the builder code count for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
 exchange charges it on sells; spot fills (pairs like `PURR/USDC` or index names like `@107`) are recorded but never
 counted. No other platform is ever read.
 
@@ -72,8 +71,8 @@ Data plane. Two public sources, for every bound address and day:
   does not name the builder.
 - **The per-builder daily file** (`builder_fills/{builder}/{YYYYMMDD}.csv.lz4`: time to the second, user, coin,
   side, px, sz, crossed, special trade type, tif, trigger flag, **counterparty**, closed PnL, TWAP id, builder fee),
-  which names the builder but has held only about the first twelve hours of each UTC day. It is fetched by every
-  validator, its hash is recorded and committed on chain by the owner, and it confirms fills and names their
+  which names the builder but may not cover the whole day, so the history is the primary source. It is fetched by
+  every validator, its hash is recorded and committed on chain by the owner, and it confirms fills and names their
   counterparties where it has them.
 
 The two are merged per address on (coin, side, price, size, second), identical rows one to one. A fill in both is
@@ -86,11 +85,14 @@ its client order id belongs to an order the address placed with Kokoah's builder
 a modify carries no builder field), or, for a taker fill, when the transaction that placed and filled it
 (`txDetails` of the fill's hash) is such an order. Builder approvals are not used: the order's own builder field
 decides, and it cannot be changed after the fact. Counterparties of history fills come from trade ids: the
-validator reads the day's fills of every bound address and of up to 25 linked accounts per address (sub-accounts
-and transfer partners), and a fill whose trade id appears among another known address's fills traded with that
-address. A failed read of the history or of the explorer fails the day's scoring (retried within the hour) rather
-than scoring the day without it. Checked against the exchange's own report of the builder's earnings: the confirmed
-fills add up to what the exchange reports as earned, to the cent, with no genuine fill refused.
+validator reads the day's fills of every bound address and of up to 25 linked accounts per address (its
+sub-accounts first, then its transfer partners by the amount moved, largest first), and a fill whose trade id
+appears among another known address's fills traded with that address. A failed read of the history, of the
+explorer or of a linked account fails the day's scoring until the file deadline (12 hours after the day ends;
+retried within the hour); after the deadline the day is scored, and only the fills that needed the failed read go
+uncounted for that address (the failure is recorded): when its sub-accounts or transfer partners cannot be read,
+every fill whose counterparty is not a bound address; when a linked account's fills cannot be read, the history
+fills whose counterparty stays unnamed.
 
 **Earnings check.** The exchange reports what the builder has earned (`referral`: `builderRewards`). The validator
 records it at every scoring run, and the health check raises an alarm when the builder fees of all counted fills
@@ -99,12 +101,14 @@ other traders pay fees too, so earnings exceed the credited fees in normal opera
 
 Removed before anything is computed:
 
-1. fills whose counterparty is the same address or another address of the same cluster (same coldkey, sub-accounts
-   of the master, addresses funded by the same bridge depositor or transferring between each other);
+1. fills whose counterparty is the same address or another address of the same cluster (bound addresses whose
+   hotkeys share a coldkey, sub-accounts of the master, addresses transferring between each other);
 2. fills priced more than 0.5% from the mark (the close of the exchange's minute candle for the coin): valued at the
-   mark for credit; and for skill, the money an off-market fill moves into the account (buying below the mark or
+   mark (their notional counts at the mark price; their builder fee, the credit, is the fee they paid); and for skill, the money an off-market fill moves into the account (buying below the mark or
    selling above it) is removed from the day's return like a deposit, over all of the address's perpetual fills,
-   builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices;
+   builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices.
+   A failed read of a coin's minute candles fails the day's scoring until the file deadline; after it, the coin's
+   builder fills go uncounted and the day's return of every address that traded the coin is unknown;
 3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill), measured as a share of the address's notional, then removed from credit: the subnet
    does not pay for volume between its own miners. Exact, so an honest trader is never flagged by coincidence;
@@ -112,8 +116,9 @@ Removed before anything is computed:
    series over the last 30 days; correlation below −0.8 on at least 10 overlapping days marks the overlapping
    notional as mirrored.
    For both rules: mirrored notional above 25% of an address's notional is removed from credit (fills against
-   bound counterparties are removed whatever the share); above 50%, both addresses get `g' = h' = 0` for 30 days
-   and are reported. These rules protect the leaderboard's integrity.
+   bound counterparties are removed whatever the share); an address with more than 50% mirrored is reported, and
+   for 30 days it and the addresses its owner controls (§14a) take no part in the skill pool. These rules protect
+   the leaderboard's integrity.
 
 ## 4. Daily fee credit, smoothed
 
@@ -157,7 +162,9 @@ r_d = (E_d − E_{d−1} − flows_d − offmarket_d) / E_{d−1}       r̃_d = 
 ```
 
 `flows_d` are deposits, withdrawals, account and vault transfers; `offmarket_d` is the money moved in through
-off-market fills that day (§3, item 2).
+off-market fills that day (§3, item 2). A day has a return only when its account value and the previous day's are
+both known; the windows below count known returns, so a day without one (an account value that could not be read,
+or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 
 Confidence, last 60 days: `PSR` = probabilistic Sharpe ratio of `r̃` (Bailey and López de Prado 2012; skew- and
 kurtosis-adjusted) against a benchmark daily Sharpe ratio of 0.03 (about 0.5 annualized); 0.5 if fewer than 10
@@ -184,14 +191,14 @@ w_i = s_i × v_i × (1.1 if a verified agent account, §16)    skill weight
 `V_i,30d` is the credited notional (eligible trades only, §9a) of the last 30 days, today included. A miner takes
 part only when all of these hold: eligible today (§9a); the activity gates pass (§9); no mirror penalty (§3); and
 the **entry test**: the probabilistic Sharpe ratio of the last 90 capped daily returns against the benchmark daily
-Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 days recorded: no entry). Then:
+Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no entry). Then:
 
 - **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
   (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
   whose trades come first: each member's fills of the day are matched with the nearest fill of another member on the
   same coin and side within 10 minutes, and the member whose fill comes first most often leads (a copier trades
-  after what it copies). With fewer than 5 matched fills, the member with the longest record (the earliest scored
-  day) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another miner
+  after what it copies). With fewer than 5 matched fills, the member with the longest record (the account whose
+  history on the exchange begins first, the same for every validator) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another miner
   earns nothing, and splitting one account above the volume cap into several gains nothing.
 - **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
   pay; proving an edge from daily returns takes months by design.
@@ -205,8 +212,9 @@ Stakes are sampled and recorded for information; they do not affect pay.
 
 ## 9. Activity gates (for the skill pool and the leaderboard)
 
-Over the last 30 days: at least 10 completed round trips, at least 7 days with a builder-code fill, mean account
-value at least $500. A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
+Over the last 30 calendar days, today included: at least 10 completed round trips, at least 7 days with a
+builder-code fill, mean account value at least $500 (over the days whose end-of-day value is the exchange's
+recorded one). A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
 
 ## 9a. Eligibility: the equity floor and the qualifying trades
 
@@ -324,10 +332,10 @@ after 60 days.
   off the subnet (nothing can be paid to it); they resume when it is registered again, as a fresh identity for
   credit and qualification (§9a): the new registration must qualify again.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
-  new hotkey starts fresh (no credit tail, no skill history, gates to pass again). The unpaid credit tail of the old
-  hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of that
-  day's credit, 49% of the day before, and so on. A new identity never gains on skill: it must pass the 90-day
-  entry test again, from its own record.
+  new hotkey starts with no credit tail, no qualification and no smoothed skill (`g = 0`). The unpaid credit tail of
+  the old hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of
+  that day's credit, 49% of the day before, and so on. The activity gates, the entry test and the copy rule read the
+  address's own record, which stays with the address, as do its penalties.
 - **Unlinking.** The linked address ends its link with one signature, without the hotkey:
   `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
   subnet's service, which accepts it only within 10 minutes of its time and publishes it (`GET /unlinks`). Every
@@ -338,10 +346,11 @@ after 60 days.
 - **A mirror report follows the address**, and the addresses its owner controls (hotkeys on the same coldkey, its
   sub-accounts), not the hotkey; a transfer someone else sends never carries it: binding a penalized address to a new
   hotkey keeps the penalty.
-- **Hotkey swap on chain** (same UID and coldkey, new hotkey): the pay history, skill and penalties follow the new
-  hotkey, the credit and qualification do not (the swap is recorded in `hotkey_swaps` and applied when the
-  day is scored, so a re-score applies it again); the binding must be published again because the signed line
-  names the hotkey.
+- **Hotkey swap on chain** (same UID, coldkey and registration block as on the previous scored day, new hotkey):
+  the pay history, skill and penalties follow the new hotkey, the credit and qualification do not (the swap is
+  recorded in `hotkey_swaps` and applied when the day is scored, so a re-score applies it again); the binding must
+  be published again because the signed line names the hotkey. A UID registered again, even by the same coldkey,
+  is a new registration, not a swap.
 - **Trading before joining.** Fills of a day scored before the binding was accepted are recorded as unbound and
   never pay. The bindings are read when a day is scored and the day's file is scored as a whole, so a binding
   accepted before a day is scored covers that whole day, including its earlier fills (they also count toward
@@ -352,11 +361,12 @@ after 60 days.
 
 ### 14b. Robustness rules
 
-- An exchange API failure never costs a trader the day's fee credit: credit always advances from the builder file;
-  only the figures that depend on the failed read (account value, flows, positions, fee rates, stake) fall back,
-  and the failure is recorded. The one exception is the account's recorded history behind the equity floor
-  (§9a): a failed read fails the day's scoring, which is retried within the hour, so a trader is never made
-  ineligible by an API failure.
+- An exchange API failure never costs a trader the day's fee credit by itself. The account's recorded history
+  behind the equity floor (§9a) is always needed: a failed read fails the day's scoring, which is retried within
+  the hour, so a trader is never made ineligible by an API failure. A failed read of the fill history, the explorer,
+  a linked account, the minute candles or the unlinks fails the day's scoring until the file deadline; after it, the
+  day is scored and only what depends on the failed read goes uncounted (§3). The other reads (account value, flows, positions, fee
+  rates, stake) fall back. Every failure is recorded.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
@@ -372,8 +382,9 @@ after 60 days.
 
 ## 15. Verification
 
-The specification's numerical claims are reproduced by `uv run kokoah-subnet verify` (`scripts/verify_mechanism.py`)
-and by the test suite (`scripts/check.sh`).
+The specification's numerical claims are reproduced by `uv run kokoah-subnet verify`
+(`src/kokoah_subnet/mechanism/verify.py`, part of every install) and by the test suite; `scripts/check.sh`, which CI
+runs, runs both.
 
 ## 16. Sealed-machine agents
 
@@ -387,7 +398,8 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   the owner's service, which accepts it only with the machine's attestation. **Restore:** a new sealed machine
   started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
   service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
-  and the account stays an agent account. **Release:** the miner can take the copy themselves with a request
+  and the account stays an agent account. The key store accepts only tokens made for its own audience, which the
+  machine's public `/attestation` never asks for, so no answer to a validator's challenge can stand in for one. **Release:** the miner can take the copy themselves with a request
   signed by the machine's master address (`agent release`); the service records it publicly (`GET /key-store/released`),
   and from then on the account never earns the agent bonus again, whatever its machine says. The operator cannot
   read the copy (it lacks the secret); the miner cannot get it without a public release. **The secret** is 32 bytes
@@ -408,8 +420,10 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   an attestation token; the harness starts it only after a probe, run exactly as the agent, sees nothing there.
 - **Offers the agent a narrow interface**: orders (limit and trigger), cancels, leverage, isolated margin and a
   scheduled cancel; read-only exchange data, account queries answered for this account only. Kokoah's builder code
-  is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`); prices more than 5%
-  from the mid are refused. Not offered: modify, TWAP, trailing stops, withdrawals, transfers, approvals.
+  is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`). An order that executes
+  now (a limit order, or a trigger order already past its trigger price) is refused when priced more than 5% from
+  the mid; a trigger order that has not fired yet rests at any trigger price, and its limit price must be within 5%
+  of its trigger price. Not offered: modify, TWAP, trailing stops, withdrawals, transfers, approvals.
 - **Withdraws only to the miner's own address**, and only on a request signed by it.
 
 **Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
@@ -423,8 +437,8 @@ agent field (`A1`: the code fingerprint and the machine's address) as the hotkey
 **Verification, by every validator, every scored day** (`src/kokoah_subnet/validator/agents.py`):
 
 ```
-challenge  = 32 random bytes (hex)
-answer     = GET <machine>/attestation?challenge=...      {token, address, netuid, hotkey, code_sha256}
+challenge  = 32 random bytes, as 64 hex characters (the machine accepts exactly that)
+answer     = GET <machine>/attestation?challenge=<64 hex>  {token, address, netuid, hotkey, code_sha256}
 binding    = sha256("kokoah-agent-1 netuid=<n> hotkey=<ss58> address=<0x..> code=<sha256>")
 agent_i    = answer names this subnet, hotkey, account and the committed fingerprint
              ∧ Google's signature on the token verifies, iss/aud/exp, Confidential Space, production

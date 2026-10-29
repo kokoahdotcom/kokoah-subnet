@@ -30,7 +30,7 @@ def day_fees(fills: Iterable[Fill], params: Params, fallback_rates_bps: tuple[fl
     """Sum one address's fills for one day.
 
     `fallback_rates_bps` = (taker, maker) exchange rates for fills whose total fee is unknown; without it an
-    unknown total fee counts the builder fee only, which can only lower the second cap.
+    unknown total fee counts the builder fee only, which can only lower the recorded total fees (they bound nothing).
     """
     credit = builder = total = notional = taker_notional = pnl = 0.0
     n = 0

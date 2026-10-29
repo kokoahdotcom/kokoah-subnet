@@ -1,5 +1,6 @@
-"""Close a day whose builder file the exchange never published: scored as a day with no fills, so the smoothing
-advances once with zero credit and the next days can follow. Used only by announcement, so that every validator
+"""Close a day whose builder file the exchange never published: the smoothing advances once with zero credit and
+zero skill (so the smoothed skill decays too, unlike a real day without fills, whose skill comes from the returns),
+and the next days can follow. Used only by announcement, so that every validator
 closes the same day the same way; the day's artifact says so."""
 
 from __future__ import annotations
@@ -13,8 +14,13 @@ from .store import Store
 
 
 def skip_day(store: Store, day: str, day_index: int, burn_hotkey: str, reason: str, params: Params) -> str:
+    """Close `day`; refused (ValueError) unless it is the day after the latest scored day, so the states always
+    advance in order."""
     if store.day(day) is not None:
         return f"{day} is already scored"
+    days = store.days_list()
+    if days and day != Store.day_after(days[-1]):
+        raise ValueError(f"{day} is out of order: the next day to score or close is {Store.day_after(days[-1])}")
     states = store.states_before(day)
     advanced = {hk: advance(s, DayFees.zero(), 0.0, 0.0, params, day_index=day_index) for hk, s in states.items()}
     store.put_states(advanced, day=day)

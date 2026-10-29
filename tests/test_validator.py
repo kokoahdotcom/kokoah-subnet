@@ -94,7 +94,7 @@ async def test_info_client_parses_fills_flows_and_fees() -> None:
             return httpx.Response(200, json=[{"universe": [{"name": "BTC"}]}, [{"markPx": "100500"}]])
         return httpx.Response(400)
 
-    client = HyperliquidInfo(rate_limit_s=0.0)
+    client = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     start, end = day_bounds_ms("2026-10-20")
     fills = await client.fills_by_time("0xAAAA", start, end)
@@ -107,18 +107,92 @@ async def test_info_client_parses_fills_flows_and_fees() -> None:
     await client.close()
 
 
-async def test_info_client_retries_then_fails() -> None:
+async def test_fill_history_paging_keeps_fills_at_the_page_boundary() -> None:
+    """Pages of four: the first ends inside three fills at one millisecond, so the next starts there again; every
+    fill is read once. A page made of one millisecond only moves on to the next one."""
+    times = [1, 2, 3, 5, 5, 5, 7, 9, 9, 9, 9, 9, 10]
+    records = [
+        {"coin": "BTC", "px": "100", "sz": "1", "side": "B", "time": t, "crossed": True, "fee": "1", "tid": i}
+        for i, t in enumerate(times)
+    ]
+    starts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        starts.append(body["startTime"])
+        page = [r for r in records if body["startTime"] <= r["time"] < body["endTime"]][:4]
+        return httpx.Response(200, json=page)
+
+    client = HyperliquidInfo(rate_limit_s=0.0, page_size=4, backoff_s=0.0)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    gaps: list[int] = []
+    fills = await client.fills_by_time("0xaaaa", 0, 11, gaps)
+    got = sorted(f.tid for f in fills if f.tid is not None)
+    # the five fills at t=9 do not fit in one page of four: the fifth is the one a page cannot reach, and is reported
+    assert got == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12] and len(fills) == len(got)
+    assert starts == [0, 5, 7, 9, 10] and gaps == [9]
+    await client.close()
+
+
+def test_linked_reads_put_sub_accounts_first_then_the_largest_transfers() -> None:
+    from kokoah_subnet.validator.hyperliquid import linked_reads
+
+    partners = {"0x01": 0.01, "0x02": 0.01, "0xbig": 5000.0, "0xsub": 3.0}
+    assert linked_reads({"0xsub"}, partners, 3) == (["0xsub", "0xbig", "0x01"], 1)
+    assert linked_reads(set(), {}, 25) == ([], 0)
+
+
+async def test_transfer_partners_are_ranked_by_usd_never_by_a_token_count() -> None:
+    """A billion units of a worthless token sent (`usdcValue` 0) moved no USD, so it cannot outrank a real transfer
+    partner in the linked reads."""
+    from kokoah_subnet.validator.hyperliquid import linked_reads, transfer_partners
+
+    me = "0x" + "aa" * 20
+
+    def send(to: str, token: str, amount: str, usd: str | None) -> dict[str, object]:
+        delta = {"type": "send", "user": me, "destination": to, "token": token, "amount": amount}
+        return {"time": 1, "delta": delta | ({"usdcValue": usd} if usd is not None else {})}
+
+    updates = [
+        send("0xdust", "DUST:0x01", "1000000000", "0"),
+        send("0xreal", "USDC", "5000", "5000"),
+        send("0xold", "USDC", "300", None),  # no USD value given: the USDC amount is one
+        send("0xhype", "HYPE:0x02", "10", "400"),
+        send("0xother", "PURR:0x03", "70000", None),  # no USD value, not USDC: nothing known to have moved
+        {"time": 2, "delta": {"type": "internalTransfer", "user": me, "destination": "0xint", "usdc": "50"}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=updates)
+
+    client = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    partners = await transfer_partners(client, me, 0, 10)
+    assert partners == {"0xdust": 0.0, "0xreal": 5000.0, "0xold": 300.0, "0xhype": 400.0, "0xother": 0.0, "0xint": 50.0}
+    assert linked_reads(set(), partners, 2) == (["0xreal", "0xhype"], 4)
+    await client.close()
+
+
+async def test_info_client_retries_then_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import hyperliquid
+
     calls = {"n": 0}
+    waits: list[float] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         return httpx.Response(500)
 
+    async def wait(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", wait)
     client = HyperliquidInfo(rate_limit_s=0.0)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(RuntimeError):
-        await client.post({"type": "meta"}, attempts=2)
-    assert calls["n"] == 2
+        await client.post({"type": "meta"}, attempts=3)
+    assert calls["n"] == 3
+    assert waits == [0.5, 1.0]  # doubling waits between attempts, none after the last
     await client.close()
 
 
@@ -199,6 +273,13 @@ def test_cli_parses_new_commands() -> None:
     assert args.command == "verify"
 
 
+def test_verify_runs_the_checks_shipped_in_the_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.mechanism import verify
+
+    monkeypatch.setattr(verify, "main", lambda: 1)  # a failed check: the command's exit code says so
+    assert main(["verify"]) == 1
+
+
 async def test_rate_limiter_enforces_the_budget() -> None:
     import time
 
@@ -227,6 +308,25 @@ def test_migrations_record_their_version(tmp_path: Path) -> None:
         assert current_version(c) == STEPS[-1][0]
     again = Store(tmp_path / "m.sqlite")
     assert again.migrations_applied == []
+
+
+def test_a_sqlite_record_from_before_the_note_level_gets_the_column(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    from kokoah_subnet.validator.store import Store
+
+    path = tmp_path / "trial.sqlite"
+    old = Store(path)
+    with old._engine.begin() as c:  # a trial record from before step 11: no errors.level
+        c.execute(text("ALTER TABLE errors DROP COLUMN level"))
+        c.execute(text("UPDATE meta SET value = '10' WHERE key = 'schema_version'"))
+    old.close()
+    s = Store(path)
+    assert s.migrations_applied[0] == "11: errors.level"
+    s.put_error("2026-10-21", None, None, "loop", "x")
+    s.put_note("2026-10-21", None, None, "builder", "y")
+    assert s.execute_sql("select level from errors order by id") == [{"level": "error"}, {"level": "note"}]
+    assert Store(path).migrations_applied == []
 
 
 def test_daily_equity_from_portfolio() -> None:

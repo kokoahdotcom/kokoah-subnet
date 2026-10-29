@@ -1,4 +1,4 @@
-"""Checking agent accounts (specification v6, section 16): is this bound account really a sealed-machine agent?
+"""Checking agent accounts (specification section 16): is this bound account really a sealed-machine agent?
 
 For every bound hotkey whose commitment carries an agent field, the validator:
 1. challenges the machine with a fresh random value (`GET <endpoint>/attestation?challenge=...`);
@@ -9,7 +9,7 @@ For every bound hotkey whose commitment carries an agent field, the validator:
    but the machine can sign for it;
 5. checks that the account's key was never released to the miner (the owner's public released list): a released
    account is traded by a person from then on and never counts as an agent again, whatever its machine says.
-Only an account that passes all four that day gets the agent bonus. Nothing here trusts the operator or the miner.
+Only an account that passes all five that day gets the agent bonus. Nothing here trusts the operator or the miner.
 
 The miner chooses the endpoint, so every check is bounded: only public addresses are contacted (a host name must
 resolve to public addresses only, and the connection goes to the address checked), redirects are not followed, the

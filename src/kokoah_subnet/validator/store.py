@@ -14,13 +14,13 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import case, create_engine, delete, func, insert, select, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from kokoah_subnet.binding import AcceptedBinding, Unlink
 from kokoah_subnet.mechanism import MinerState
 
 from . import schema as S
-from .migrations import apply_migrations
+from .migrations import apply_migrations, current_version, latest_version
 
 
 def _now() -> datetime:
@@ -41,19 +41,36 @@ def _growth(returns: Sequence[float]) -> tuple[float | None, float | None]:
 
 
 class Store:
-    """`Store(url)` for any SQLAlchemy URL, or `Store(Path)` for a SQLite file."""
+    """`Store(url)` for any SQLAlchemy URL, or `Store(Path)` for a SQLite file. The validator creates and migrates
+    the schema; readers (the interface, the health check) open it with `create=False`, which needs no rights to
+    change it and refuses a record that is not set up and migrated yet."""
 
-    def __init__(self, target: str | Path) -> None:
+    def __init__(self, target: str | Path, create: bool = True) -> None:
         if isinstance(target, Path):
+            if not create and not target.exists():
+                raise RuntimeError(f"no record at {target}: the validator creates it when it first runs")
             target.parent.mkdir(parents=True, exist_ok=True)
             url = f"sqlite:///{target}"
         else:
             url = target
         self.url = url
         self._engine: Engine = create_engine(url, future=True)
-        S.metadata.create_all(self._engine)
-        with self._engine.begin() as c:
-            self.migrations_applied = apply_migrations(c, self.is_postgres)
+        self.migrations_applied: list[str] = []
+        if create:
+            S.metadata.create_all(self._engine)
+            with self._engine.begin() as c:
+                self.migrations_applied = apply_migrations(c, self.is_postgres)
+            return
+        try:
+            with self._engine.connect() as c:
+                version = current_version(c)
+        except Exception as exc:
+            raise RuntimeError(f"the record is not set up yet (the validator creates it): {exc}") from exc
+        if version < latest_version():
+            raise RuntimeError(
+                f"the record is at schema version {version}, this release reads {latest_version()}: "
+                "start the validator of this release first, it migrates the record"
+            )
 
     def close(self) -> None:
         self._engine.dispose()
@@ -79,13 +96,25 @@ class Store:
             c.execute(delete(S.meta).where(S.meta.c.key == key))
             c.execute(insert(S.meta).values(key=key, value=value))
 
-    def put_error(self, day: str | None, hotkey: str | None, address: str | None, stage: str, message: str) -> None:
+    def put_error(
+        self,
+        day: str | None,
+        hotkey: str | None,
+        address: str | None,
+        stage: str,
+        message: str,
+        level: str = "error",
+    ) -> None:
+        """Record a failure (`error`, which the health check raises) or a routine fact (`note`, recorded only)."""
         with self._engine.begin() as c:
             c.execute(
                 insert(S.errors).values(
-                    at=_now(), day=day, hotkey=hotkey, address=address, stage=stage, message=message[:2000]
+                    at=_now(), day=day, hotkey=hotkey, address=address, stage=stage, message=message[:2000], level=level
                 )
             )
+
+    def put_note(self, day: str | None, hotkey: str | None, address: str | None, stage: str, message: str) -> None:
+        self.put_error(day, hotkey, address, stage, message, level="note")
 
     # ----- equity, ledger, returns ------------------------------------------------------------------------
 
@@ -239,29 +268,30 @@ class Store:
             ).scalar()
         return float(total or 0.0)
 
-    def dated_returns(self, address: str, days: int) -> dict[str, float]:
-        """Daily returns by day over consecutive stored days whose return is known (the same series as `returns`)."""
-        series = self._equity_rows(address, days + 1)
+    def dated_returns(self, address: str, days: int, through: str | None = None) -> dict[str, float]:
+        """The last `days` known daily returns by day up to `through` (default: all stored days), oldest first (the
+        same series as `returns`). A return needs two consecutive stored days whose values are known; a day without
+        one is skipped and the series reaches further back, over at most the last 2 x `days` + 1 stored days, so one
+        missing day never shortens the window."""
+        series = self._equity_rows(address, 2 * days + 1, through)
         out: dict[str, float] = {}
         for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
             if k0 and k1 and e0 > 0 and _next_day(d0) == d1:
                 out[d1] = (e1 - e0 - f1) / e0
-        return out
+        return dict(list(out.items())[-days:]) if days > 0 else {}
 
-    def _equity_rows(self, address: str, days: int) -> list[tuple[str, float, float, bool]]:
+    def _equity_rows(self, address: str, days: int, through: str | None = None) -> list[tuple[str, float, float, bool]]:
+        query = select(
+            S.equity.c.day,
+            S.equity.c.value,
+            S.equity.c.flows,
+            S.equity.c.offmarket_pnl,
+            S.equity.c.return_known,
+        ).where(S.equity.c.address == address.lower())
+        if through is not None:
+            query = query.where(S.equity.c.day <= through)
         with self._engine.connect() as c:
-            rows = c.execute(
-                select(
-                    S.equity.c.day,
-                    S.equity.c.value,
-                    S.equity.c.flows,
-                    S.equity.c.offmarket_pnl,
-                    S.equity.c.return_known,
-                )
-                .where(S.equity.c.address == address.lower())
-                .order_by(S.equity.c.day.desc())
-                .limit(days)
-            ).all()
+            rows = c.execute(query.order_by(S.equity.c.day.desc()).limit(days)).all()
         return [(str(d), float(v), float(f) + float(o or 0.0), k is not False) for d, v, f, o, k in reversed(rows)]
 
     def equity_value(self, address: str, day: str) -> float | None:
@@ -274,8 +304,11 @@ class Store:
 
     @staticmethod
     def day_before(day: str) -> str:
-        d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) - timedelta(days=1)
-        return d.strftime("%Y-%m-%d")
+        return _days_before(day, 1)
+
+    @staticmethod
+    def day_after(day: str) -> str:
+        return _next_day(day)
 
     def equity_series(self, address: str, days: int) -> list[tuple[str, float, float]]:
         """Up to `days` most recent (day, value, flows + off-market transfers), oldest first."""
@@ -288,15 +321,16 @@ class Store:
             ).all()
         return [(str(d), float(v), float(f) + float(o or 0.0)) for d, v, f, o in reversed(rows)]
 
-    def returns(self, address: str, days: int) -> list[float]:
-        """Daily returns over consecutive stored days, oldest first, with deposits, withdrawals and money moved in
-        through off-market fills removed."""
-        return list(self.dated_returns(address, days).values())
+    def returns(self, address: str, days: int, through: str | None = None) -> list[float]:
+        """The last `days` known daily returns up to `through`, oldest first, with deposits, withdrawals and money
+        moved in through off-market fills removed."""
+        return list(self.dated_returns(address, days, through).values())
 
     def account_record(self, address: str, with_days: bool = True) -> dict[str, Any] | None:
         """An address's record as this validator scored it (None if never scored): its daily returns (the series the
         skill test reads, with money moved in or out and off-market profit removed), the growth of 1 over them
-        (carried over days the exchange did not record), and each scored day's figures."""
+        (carried over days the exchange did not record), and each scored day's figures. The "90d" figures are over
+        the last 90 known returns, the window of the entry test."""
         a = address.lower()
         with self._engine.connect() as c:
             scored = (
@@ -373,9 +407,20 @@ class Store:
             out["days"] = rows
         return out
 
-    def mean_equity(self, address: str, days: int) -> float:
-        series = self.equity_series(address, days)
-        return sum(v for _, v, _ in series) / len(series) if series else 0.0
+    def mean_equity(self, address: str, days: int, through: str) -> float:
+        """The mean account value over the `days` calendar days ending with `through`, from the days whose end value
+        is the exchange's recorded one (0 without any)."""
+        e = S.equity
+        with self._engine.connect() as c:
+            mean = c.execute(
+                select(func.avg(e.c.value)).where(
+                    e.c.address == address.lower(),
+                    e.c.day >= _days_before(through, days - 1),
+                    e.c.day <= through,
+                    e.c.return_known.is_not(False),
+                )
+            ).scalar()
+        return float(mean) if mean is not None else 0.0
 
     # ----- positions (mirror rule and record) -------------------------------------------------------------
 
@@ -432,14 +477,15 @@ class Store:
                 )
             )
 
-    def activity_window(self, address: str, days: int) -> tuple[int, int, float]:
-        """(round trips, active days, notional) over the most recent `days` stored days."""
+    def activity_window(self, address: str, days: int, through: str) -> tuple[int, int, float]:
+        """(round trips, active days, notional) over the `days` calendar days ending with `through`."""
         with self._engine.connect() as c:
             rows = c.execute(
-                select(S.activity.c.round_trips, S.activity.c.fills, S.activity.c.notional)
-                .where(S.activity.c.address == address.lower())
-                .order_by(S.activity.c.day.desc())
-                .limit(days)
+                select(S.activity.c.round_trips, S.activity.c.fills, S.activity.c.notional).where(
+                    S.activity.c.address == address.lower(),
+                    S.activity.c.day >= _days_before(through, days - 1),
+                    S.activity.c.day <= through,
+                )
             ).all()
         return (
             sum(int(r) for r, _, _ in rows),
@@ -580,34 +626,49 @@ class Store:
     # ----- penalties, hotkey swaps -----------------------------------------------------------------------------
 
     def put_penalty(self, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
-        a = address.lower()
+        """One mirror report made on `day`. Every report is kept by its day (a longer one the same day replaces a
+        shorter one), so a renewal never hides the report that was in force before it."""
         with self._engine.begin() as c:
-            row = c.execute(select(S.penalties.c.until_day).where(S.penalties.c.address == a)).first()
-            if row is not None and int(row[0]) >= until_day:
-                return
-            c.execute(delete(S.penalties).where(S.penalties.c.address == a))
-            c.execute(
-                insert(S.penalties).values(address=a, until_day=int(until_day), day=day, hotkey=hotkey, reason=reason)
-            )
+            _put_penalty(c, address, until_day, day, hotkey, reason)
 
-    def penalties(self, day_index: int) -> dict[str, int]:
-        """Addresses still penalized at `day_index` -> the day index the penalty ends."""
+    def put_penalties(self, day: str, reports: Iterable[tuple[str, int, str, str]]) -> None:
+        """The mirror reports made on `day` as (address, until day index, hotkey, reason), replacing the ones an
+        earlier scoring of the day made."""
+        with self._engine.begin() as c:
+            c.execute(delete(S.penalties).where(S.penalties.c.day == day))
+            for address, until_day, hotkey, reason in reports:
+                _put_penalty(c, address, until_day, day, hotkey, reason)
+
+    def penalties(self, day_index: int, before_day: str | None = None) -> dict[str, int]:
+        """Addresses still penalized at `day_index` -> the day index the longest of their reports ends; with
+        `before_day`, only the reports made on an earlier day (a re-score of a day applies the reports made before it,
+        never its own or later ones)."""
+        until = func.max(S.penalties.c.until_day)
+        query = select(S.penalties.c.address, until).group_by(S.penalties.c.address).having(until > day_index)
+        if before_day is not None:
+            query = query.where(S.penalties.c.day < before_day)
         with self._engine.connect() as c:
-            rows = c.execute(
-                select(S.penalties.c.address, S.penalties.c.until_day).where(S.penalties.c.until_day > day_index)
-            ).all()
+            rows = c.execute(query).all()
         return {str(a): int(u) for a, u in rows}
 
-    def latest_neurons(self) -> list[dict[str, Any]]:
-        """The most recent metagraph snapshot recorded by a scoring run (uid, hotkey, coldkey)."""
+    def latest_neurons(self, before_day: str | None = None) -> list[dict[str, Any]]:
+        """The most recent metagraph snapshot recorded by a scoring run, or the latest one of a day before
+        `before_day` (uid, hotkey, coldkey, registration block)."""
+        n = S.neurons
         with self._engine.connect() as c:
-            day = c.execute(select(func.max(S.neurons.c.day))).scalar()
+            latest = select(func.max(n.c.day))
+            if before_day is not None:
+                latest = latest.where(n.c.day < before_day)
+            day = c.execute(latest).scalar()
             if day is None:
                 return []
             rows = c.execute(
-                select(S.neurons.c.uid, S.neurons.c.hotkey, S.neurons.c.coldkey).where(S.neurons.c.day == day)
+                select(n.c.uid, n.c.hotkey, n.c.coldkey, n.c.block_at_registration).where(n.c.day == day)
             ).all()
-        return [{"uid": int(u), "hotkey": str(h), "coldkey": str(k)} for u, h, k in rows]
+        return [
+            {"uid": int(u), "hotkey": str(h), "coldkey": str(k), "block_at_registration": int(b) if b else None}
+            for u, h, k, b in rows
+        ]
 
     # ----- chain samples ----------------------------------------------------------------------------------
 
@@ -914,6 +975,16 @@ class Store:
             return [dict(r) for r in c.execute(text(sql)).mappings().all()]
 
 
+def _put_penalty(c: Connection, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
+    a = address.lower()
+    key = (S.penalties.c.address == a, S.penalties.c.day == day)
+    row = c.execute(select(S.penalties.c.until_day).where(*key)).first()
+    if row is not None and int(row[0]) >= until_day:
+        return
+    c.execute(delete(S.penalties).where(*key))
+    c.execute(insert(S.penalties).values(address=a, until_day=int(until_day), day=day, hotkey=hotkey, reason=reason))
+
+
 def _state_from_json(s: str) -> MinerState:
     raw = json.loads(s)
     raw["paid"] = tuple(raw.get("paid", ()))
@@ -924,6 +995,11 @@ def _state_from_json(s: str) -> MinerState:
 
 def _next_day(day: str) -> str:
     d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)
+    return d.strftime("%Y-%m-%d")
+
+
+def _days_before(day: str, days: int) -> str:
+    d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) - timedelta(days=days)
     return d.strftime("%Y-%m-%d")
 
 

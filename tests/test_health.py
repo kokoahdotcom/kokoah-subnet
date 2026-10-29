@@ -2,8 +2,12 @@
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from kokoah_subnet.validator.health import check
+import httpx
+import pytest
+
+from kokoah_subnet.validator.health import check, main_report
 from kokoah_subnet.validator.store import Store
 
 
@@ -18,6 +22,9 @@ def test_check_reports_missing_and_stale_things(tmp_path: Path) -> None:
     s.put_epoch(100, 1, 360, 1.0, [])
     r = check(s, now=now)
     assert r["ok"], r["problems"]
+    s.put_note(yesterday, "hk", "0xa", "builder", "3 history fills not confirmed as Kokoah orders")
+    r = check(s, now=now)
+    assert r["ok"] and r["notes_24h"] == 1 and r["errors_24h"] == 0  # a routine note is no problem
     s.put_weights_submission(yesterday, 200, [1], [65535], False, "rate limited")
     r = check(s, now=now)
     assert any("failed" in p for p in r["problems"])
@@ -38,3 +45,14 @@ def test_check_reports_missing_and_stale_things(tmp_path: Path) -> None:
         dry_run=False,
     )
     assert any("burn failed" in p for p in check(s, now=now)["problems"])
+
+
+def test_a_refused_alert_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def refused(url: str, **_: Any) -> httpx.Response:
+        return httpx.Response(500)
+
+    monkeypatch.setattr(httpx, "post", refused)
+    assert main_report(Store(tmp_path / "h.sqlite"), "https://hooks.example/x", only_problems=True) == 1
+    assert "did not accept the report" in capsys.readouterr().err

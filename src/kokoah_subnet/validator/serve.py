@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
+from kokoah_subnet.mechanism import DEFAULT
+
 from .store import Store
 
 PAGE = Path(__file__).with_name("leaderboard.html")
@@ -102,7 +104,7 @@ def create_app(store: Store) -> FastAPI:
                     "fills": m["fees"]["fills"],
                     "volume_usd": m["fees"]["notional"],
                     "builder_fee_usd": m["fees"]["builder_fee"],
-                    "mean_equity_usd": store.mean_equity(m["address"], 30),
+                    "mean_equity_usd": store.mean_equity(m["address"], DEFAULT.gate_days, latest[0]),
                     "volume_pay_alpha": m.get("volume_pay_alpha", 0.0),
                     "skill_pay_alpha": m.get("skill_pay_alpha", 0.0),
                     "pay_alpha": m["pay_alpha"],

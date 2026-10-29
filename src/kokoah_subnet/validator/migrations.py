@@ -1,9 +1,11 @@
 """Schema migrations: `create_all` adds new tables but never changes existing columns, so every change to a column
 is a numbered step here, applied once per database (the step number is kept in `meta` under `schema_version`).
-Steps must be idempotent on both PostgreSQL and SQLite (SQLite ignores what it cannot do; it is only for tests)."""
+Steps must be idempotent on both PostgreSQL and SQLite (for tests and trials): a new column is added on both
+(`_add_column`); type changes only on PostgreSQL."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from sqlalchemy import text
@@ -18,6 +20,64 @@ def _pg(sql: str) -> Step:
             c.execute(text(sql))
 
     return run
+
+
+def _add_column(table: str, column: str, sql_type: str) -> Step:
+    """Add a column when the table does not have it yet, on PostgreSQL and on SQLite (which has no `IF NOT EXISTS`
+    for columns)."""
+
+    def run(c: Connection, is_postgres: bool) -> None:
+        if is_postgres:
+            c.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}"))
+        elif column not in {str(row[1]) for row in c.execute(text(f"PRAGMA table_info({table})")).all()}:
+            c.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+
+    return run
+
+
+def _hide_run_passwords(c: Connection, is_postgres: bool) -> None:
+    """Runs recorded before the password was hidden: hide it in their stored settings too."""
+    from sqlalchemy.engine import make_url
+
+    for run_id, config in c.execute(text("SELECT id, config FROM runs")).all():
+        settings = json.loads(config) if isinstance(config, str) else config
+        if not isinstance(settings, dict) or not settings.get("db_url"):
+            continue
+        try:
+            hidden = make_url(str(settings["db_url"])).render_as_string(hide_password=True)
+        except Exception:  # noqa: BLE001 - not a URL SQLAlchemy reads: keep none of it
+            hidden = "(hidden)"
+        if hidden != settings["db_url"]:
+            settings["db_url"] = hidden
+            c.execute(text("UPDATE runs SET config = :c WHERE id = :i"), {"c": json.dumps(settings), "i": run_id})
+
+
+def _penalty_per_report(c: Connection, is_postgres: bool) -> None:
+    """penalties: one row per report (the address and the day it was made) instead of one per address, so a renewal
+    never hides the report that was in force before it."""
+    if is_postgres:
+        c.execute(text("UPDATE penalties SET day = '' WHERE day IS NULL"))
+        c.execute(text("ALTER TABLE penalties DROP CONSTRAINT IF EXISTS penalties_pkey"))
+        c.execute(text("ALTER TABLE penalties ALTER COLUMN day SET NOT NULL"))
+        c.execute(text("ALTER TABLE penalties ADD PRIMARY KEY (address, day)"))
+        return
+    columns = c.execute(text("PRAGMA table_info(penalties)")).all()
+    if [str(r[1]) for r in sorted((r for r in columns if r[5]), key=lambda r: r[5])] == ["address", "day"]:
+        return
+    c.execute(text("ALTER TABLE penalties RENAME TO penalties_before_12"))
+    c.execute(
+        text(
+            "CREATE TABLE penalties (address VARCHAR(42) NOT NULL, until_day INTEGER NOT NULL, "
+            "day VARCHAR(10) NOT NULL, hotkey VARCHAR(64), reason TEXT, PRIMARY KEY (address, day))"
+        )
+    )
+    c.execute(
+        text(
+            "INSERT INTO penalties (address, until_day, day, hotkey, reason) "
+            "SELECT address, until_day, COALESCE(day, ''), hotkey, reason FROM penalties_before_12"
+        )
+    )
+    c.execute(text("DROP TABLE penalties_before_12"))
 
 
 STEPS: list[tuple[int, str, Step]] = [
@@ -91,7 +151,15 @@ STEPS: list[tuple[int, str, Step]] = [
         ),
     ),
     (9, "equity.return_known", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS return_known boolean")),
+    (10, "runs.config: the database password hidden", _hide_run_passwords),
+    (11, "errors.level", _add_column("errors", "level", "varchar(8)")),
+    (12, "penalties: one row per report", _penalty_per_report),
 ]
+
+
+def latest_version() -> int:
+    """The schema version this release writes and reads."""
+    return STEPS[-1][0]
 
 
 def current_version(c: Connection) -> int:

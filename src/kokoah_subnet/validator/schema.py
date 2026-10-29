@@ -69,7 +69,7 @@ days = Table(
     Column("result_json", Text),
 )
 
-agent_checks = Table(  # each day's check of every agent account (spec v6, section 16)
+agent_checks = Table(  # each day's check of every agent account (specification section 16)
     "agent_checks",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -132,7 +132,7 @@ fills = Table(
     Column("closed_pnl", Float),
     Column("twap_id", BigInteger),
     Column("mark_px", Float),
-    Column("excluded", String(32)),  # spot | unbound | cluster | bound_counterparty | mark_clip, NULL when counted
+    Column("excluded", String(32)),  # spot|unbound|cluster|bound_counterparty|mark_clip|unchecked_counterparty|no_mark
     Column("source", String(8)),  # file | history | both (spec section 3: the file is incomplete)
     Column("tid", BigInteger),  # the exchange's trade id (history fills)
     Column("cloid", String(34)),  # the client order id (history fills)
@@ -496,12 +496,12 @@ binding_events = Table(  # accepted, migrated, refused (with the reason), per da
     Column("reason", Text),
 )
 
-penalties = Table(  # a mirror report follows the address (and its cluster), whatever hotkey it binds to
+penalties = Table(  # every mirror report; it follows the address (and its cluster), whatever hotkey it binds to
     "penalties",
     metadata,
     Column("address", String(42), primary_key=True),
     Column("until_day", Integer, nullable=False),
-    Column("day", String(10)),
+    Column("day", String(10), primary_key=True),  # the day the report was made
     Column("hotkey", String(64)),
     Column("reason", Text),
 )
@@ -563,6 +563,7 @@ errors = Table(
     Column("address", String(42)),
     Column("stage", String(32)),
     Column("message", Text),
+    Column("level", String(8)),  # error (the health check raises it) | note (a routine fact, recorded only)
 )
 
 meta = Table(

@@ -1,4 +1,4 @@
-"""The skill pool (specification v6, section 7a): who takes part, and with what weight.
+"""The skill pool (specification section 7a): who takes part, and with what weight.
 
     s_i = max(0, (g'_i - floor) / (1 - floor))                      the skill above the luck floor
     v_i = min(1, V_i,30d / cap)                                     participation: eligible Kokoah notional, capped
@@ -7,7 +7,8 @@
 A miner takes part only when it is eligible that day, passes the activity gates, has no mirror penalty, and passes
 the entry test: the probabilistic Sharpe ratio of its capped daily returns over the last `entry_days` days is at
 least `entry_psr` (with fewer days recorded, it does not pass). Accounts whose daily returns move almost together
-(the copy rule) share one weight: their weights are scaled so the group's total is its largest member's weight.
+(the copy rule) share one weight: only the group's leader (the member that trades first, else the longest record)
+keeps its weight.
 """
 
 from __future__ import annotations
@@ -93,7 +94,7 @@ def copy_leader(
     """The member a copy group follows. Whoever trades first leads: every fill of one member is matched with the
     nearest fill of another member on the same coin and side within `window_s`, and the member whose fills come
     first most often leads (a copier always trades after what it copies). Without `min_pairs` matched fills the
-    longest record leads (its first scored day), then the hotkey order."""
+    longest record leads (the day its account history on the exchange begins), then the hotkey order."""
     index: dict[str, dict[tuple[str, str], list[int]]] = {}
     for k in group:
         by_key: dict[tuple[str, str], list[int]] = {}

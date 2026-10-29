@@ -6,6 +6,7 @@ Never signs, never trades, never touches `/exchange`. Every call is a POST of a 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -66,8 +67,12 @@ class HyperliquidInfo:
         budget_per_minute: int = 1000,
         concurrency: int = 6,
         explorer_url: str = MAINNET_EXPLORER,
+        page_size: int = PAGE,
+        backoff_s: float = 0.5,
     ) -> None:
         self._url = url
+        self._page = page_size
+        self._backoff = backoff_s  # the first retry's wait, doubled on every later one
         self._explorer = explorer_url
         self._client = httpx.AsyncClient(timeout=timeout_s)
         self._gap = rate_limit_s
@@ -97,13 +102,18 @@ class HyperliquidInfo:
                     return r.json()
                 except (httpx.HTTPError, ValueError) as exc:
                     last = exc
-            await asyncio.sleep(max(self._gap, 0.5) * (2**attempt))
+            if attempt + 1 < attempts:
+                await asyncio.sleep(max(self._gap, self._backoff) * (2**attempt))
         raise RuntimeError(f"info request failed after {attempts} attempts: {last}")
 
-    async def fills_by_time(self, user: str, start_ms: int, end_ms: int) -> list[Fill]:
-        """All fills of `user` in [start_ms, end_ms), paging forward (2,000 per page)."""
+    async def fills_by_time(self, user: str, start_ms: int, end_ms: int, gaps: list[int] | None = None) -> list[Fill]:
+        """All fills of `user` in [start_ms, end_ms), paging forward (2,000 per page). A full page can end inside a
+        group of fills at one millisecond (one order filling many resting orders), so the next page starts at that
+        millisecond again and the fills already read there are skipped. A whole page at one millisecond leaves the
+        rest of that millisecond unread: its time is added to `gaps` when given."""
         out: list[Fill] = []
         cursor = start_ms
+        seen: set[str] = set()  # the fills already read at the cursor's millisecond
         while True:
             page = await self.post(
                 {
@@ -114,11 +124,19 @@ class HyperliquidInfo:
                     "aggregateByTime": False,
                 }
             )
-            records = [r for r in page if int(r["time"]) < end_ms]
-            out.extend(parse_user_fills(user, records))
-            if len(page) < PAGE:
+            fresh = [r for r in page if int(r["time"]) < end_ms and _fill_key(r) not in seen]
+            out.extend(parse_user_fills(user, fresh))
+            if len(page) < self._page:
                 break
-            cursor = int(page[-1]["time"]) + 1
+            last = int(page[-1]["time"])
+            if last == cursor:
+                # a whole page at one millisecond: nothing more can be read there
+                if gaps is not None:
+                    gaps.append(last)
+                cursor, seen = last + 1, set()
+                continue
+            cursor = last
+            seen = {_fill_key(r) for r in page if int(r["time"]) == last}
         return out
 
     async def account_value(self, user: str) -> float:
@@ -167,6 +185,11 @@ class HyperliquidInfo:
         return {asset["name"]: float(ctx["markPx"]) for asset, ctx in zip(meta["universe"], ctxs, strict=True)}
 
 
+def _fill_key(record: Mapping[str, Any]) -> str:
+    """One fill record as it was read (two fills always differ in their trade or order ids)."""
+    return json.dumps(record, sort_keys=True, default=str)
+
+
 def day_bounds_ms(day: str) -> tuple[int, int]:
     """[start, end) of a UTC day given as YYYY-MM-DD."""
     start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
@@ -182,21 +205,48 @@ async def sub_accounts(client: HyperliquidInfo, user: str) -> list[str]:
     return [str(s["subAccountUser"]).lower() for s in result if "subAccountUser" in s]
 
 
-async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> set[str]:
-    """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase."""
+def transfer_usd(delta: Mapping[str, Any]) -> float:
+    """The USD value a ledger transfer moved: `usdc` for account transfers, `usdcValue` for a token send, and a
+    send's token amount only when the token is USDC (a count of some other token is no USD figure)."""
+
+    def num(key: str) -> float:
+        try:
+            return abs(float(delta.get(key) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    if delta.get("type") in ("internalTransfer", "subAccountTransfer"):
+        return num("usdc")
+    if delta.get("usdcValue") not in (None, ""):
+        return num("usdcValue")
+    return num("amount") if str(delta.get("token", "")).upper().startswith("USDC") else 0.0
+
+
+async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> dict[str, float]:
+    """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase,
+    with the USD moved between them both ways (`transfer_usd`)."""
     updates = await client.post(
         {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
     )
     me = user.lower()
-    partners: set[str] = set()
+    partners: dict[str, float] = {}
     for u in updates:
         delta = u.get("delta", {})
         if delta.get("type") in ("internalTransfer", "subAccountTransfer", "send", "receive"):
+            moved = transfer_usd(delta)
             for key in ("destination", "user", "fromUser", "toUser"):
                 other = str(delta.get(key, "")).lower()
                 if other.startswith("0x") and other != me:
-                    partners.add(other)
+                    partners[other] = partners.get(other, 0.0) + moved
     return partners
+
+
+def linked_reads(subs: set[str], partners: Mapping[str, float], cap: int) -> tuple[list[str], int]:
+    """The linked accounts whose trades are read, at most `cap`: the sub-accounts first, then the transfer partners
+    by the amount moved, largest first (anyone can send a small transfer, so small ones come last). Also returns how
+    many were left out."""
+    ordered = sorted(subs) + sorted((a for a in partners if a not in subs), key=lambda a: (-partners[a], a))
+    return ordered[:cap], max(0, len(ordered) - cap)
 
 
 async def positions_notional(client: HyperliquidInfo, user: str) -> dict[str, float]:

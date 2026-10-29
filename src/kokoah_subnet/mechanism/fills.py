@@ -1,8 +1,8 @@
 """Fills: the unit of everything the mechanism counts.
 
-Two public sources feed it. Hyperliquid's per-builder daily file (`builder_fills/{builder}/{YYYYMMDD}.csv.lz4`) is
-the canonical list of fills that carry the builder code; the address's own public fill history (`userFillsByTime`)
-supplies the fill's total fee field. `match_total_fees` joins the two.
+Two public sources feed it (specification section 3): the address's own fill history (`userFillsByTime`), the
+primary source, and Hyperliquid's per-builder daily file (`builder_fills/{builder}/{YYYYMMDD}.csv.lz4`), which names
+the builder and each fill's counterparty but may not cover the whole day. `merge_sources` joins the two.
 """
 
 from __future__ import annotations
@@ -159,7 +159,7 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
 def match_total_fees(builder_fills: Sequence[Fill], user_fills: Sequence[Fill]) -> list[Fill]:
     """Copy the total fee of each matching public fill onto the builder fill (same user, coin, second, price, size,
     side; identical rows are matched one to one). Builder fills without a match keep `total_fee = None`; the credit
-    code then counts the builder fee only, which can only lower the cap."""
+    code then counts the builder fee only, which can only lower the recorded total fees."""
     pool: dict[tuple[str, str, int, float, float, str], list[float]] = {}
     for f in user_fills:
         if f.total_fee is not None:
@@ -230,8 +230,8 @@ def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> t
 def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: float) -> list[Fill]:
     """One address's builder fills for a day from both sources (specification section 3).
 
-    The exchange's per-builder daily file is incomplete (it has held about the first twelve hours of each UTC day),
-    so the address's own fill history is the primary source. A fill in both is taken from the history (exact time,
+    The exchange's per-builder daily file may not cover the whole day, so the address's own fill history is the
+    primary source. A fill in both is taken from the history (exact time,
     total fee, trade id) with the file's counterparty and builder fee; a fill only in the file is kept as it is
     (beyond the history's 10,000-fill reach); a fill only in the history is kept as a candidate when it paid a
     builder fee within the rate (`history_candidate`), to be confirmed by `confirm_builder`."""

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,7 +33,13 @@ from kokoah_subnet.mechanism import (
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
 from kokoah_subnet.mechanism.eligibility import daily_average_equity, day_change, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
-from kokoah_subnet.mechanism.fills import assign_counterparties, builder_orders, confirm_builder, merge_sources
+from kokoah_subnet.mechanism.fills import (
+    BUILDER_CSV_HEADER,
+    assign_counterparties,
+    builder_orders,
+    confirm_builder,
+    merge_sources,
+)
 
 from .agents import check_agents, fetch_unlinks
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
@@ -44,6 +51,7 @@ from .hyperliquid import (
     daily_equity_from_portfolio,
     day_bounds_ms,
     ledger_amount,
+    linked_reads,
     mark_by_minute,
     mean_close,
     off_market_transfer,
@@ -79,7 +87,7 @@ class ValidatorConfig:
     poll_s: int = 60
     weights_every_blocks: int = 360  # one tempo
     retry_missing_s: int = 3600
-    fills_cache: Path | None = None  # where downloaded builder files are kept (default: data_dir/fills)
+    fills_cache: Path | None = None  # where downloaded builder files are kept, per builder (default: data_dir/fills)
     db_url: str = ""  # the record; empty = SQLite file in data_dir
     agent_images: tuple[str, ...] = APPROVED_HARNESS_IMAGES  # approved sealed-machine harness images
     agent_service: str = ""  # the owner's agent service (its released list); empty: no account counts as an agent
@@ -127,15 +135,32 @@ async def tao_usd_mark(
     raise RuntimeError(f"no TAO/USD mark: {coin} is not listed and no fallback is configured")
 
 
+def _readable(data: bytes) -> bool:
+    """Whether bytes are a whole builder file: they decompress and start with the published header."""
+    try:
+        first = decompress(data).split("\n", 1)[0]
+    except Exception:  # noqa: BLE001 - a truncated or corrupt frame
+        return False
+    return ",".join(h.strip() for h in first.split(",")) == BUILDER_CSV_HEADER
+
+
 async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, bool]:
-    """The day's builder file, from the local cache or downloaded (and cached); the flag says it was downloaded."""
-    cache = cfg.fills_cache or (cfg.data_dir / "fills")
+    """The day's builder file, from the local cache or downloaded (and cached); the flag says it was downloaded.
+    The cache is kept per builder and written whole (a temporary file renamed into place); a cached file that does
+    not read as a builder file is downloaded again."""
+    cache = (cfg.fills_cache or (cfg.data_dir / "fills")) / cfg.builder.lower()
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{day.replace('-', '')}.csv.lz4"
     if path.exists():
-        return path.read_bytes(), False
+        data = path.read_bytes()
+        if _readable(data):
+            return data, False
+        log.warning("cached builder file %s is unreadable: downloading it again", path)
+        path.unlink()
     data = await download(cfg.builder, day, cfg.builder_base_url)
-    path.write_bytes(data)
+    partial = path.with_name(f".{path.name}.{os.getpid()}.part")
+    partial.write_bytes(data)
+    os.replace(partial, path)
     return data, True
 
 
@@ -206,6 +231,7 @@ async def collect_and_score(
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
+    past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
     except NotPublished:
@@ -236,6 +262,7 @@ async def collect_and_score(
     fallback_hotkey = cfg.burn_hotkey if cfg.burn_hotkey and cfg.burn_hotkey in uid_of else snap.owner_hotkey
     if fallback_hotkey != cfg.burn_hotkey:
         log.warning("burn hotkey not registered: a day with no miner weight goes to the owner hotkey")
+    previous = {n["uid"]: n for n in store.latest_neurons(before_day=day)}
     store.put_neurons(day, snap.block, [n.as_row() for n in snap.neurons])
     committed = await read_file_commitment(client, cfg.netuid, snap.owner_hotkey)
     hash_matches: bool | None = None if committed is None or committed[0] != day else committed[1] == digest
@@ -262,13 +289,20 @@ async def collect_and_score(
             for hk, c in all_commitments.items()
         ],
     )
-    # hotkey swaps: the same UID on the same coldkey with a new hotkey keeps its pay history, skill and penalties,
-    # never its fee credit or qualification (re-binding required; the swap is recorded and applied when scoring)
+    # hotkey swaps: the same UID on the same coldkey and the same registration with a new hotkey keeps its pay
+    # history, skill and penalties, never its fee credit or qualification (re-binding required; the swap is recorded
+    # and applied when scoring). Compared with the metagraph of the previous scored day; a UID registered again
+    # (a new registration block) is a new registration, not a swap
     swaps: list[tuple[str, str]] = []
-    previous = {n["uid"]: n for n in store.latest_neurons()}
     for n in snap.neurons:
         prev_n = previous.get(n.uid)
-        if prev_n and prev_n["hotkey"] != n.hotkey and prev_n["coldkey"] == n.coldkey:
+        same_registration = (
+            not prev_n
+            or not prev_n["block_at_registration"]
+            or not n.block_at_registration
+            or prev_n["block_at_registration"] == n.block_at_registration
+        )
+        if prev_n and prev_n["hotkey"] != n.hotkey and prev_n["coldkey"] == n.coldkey and same_registration:
             store.put_swap(day, n.uid, prev_n["hotkey"], n.hotkey, n.coldkey)
             swaps.append((prev_n["hotkey"], n.hotkey))
             log.info("hotkey swap on uid %d: %s -> %s", n.uid, prev_n["hotkey"], n.hotkey)
@@ -286,11 +320,12 @@ async def collect_and_score(
         finally:
             if own_unlink_http:
                 await unlink_http.aclose()
+    # the accepted bindings and their events are written once the day is scored, so a retried day resolves them
+    # from the same bindings again
     before = store.bindings()
     resolution = resolve_bindings(
         before, published, snap.block, registered=uid_of.keys(), unlinks=store.unlinks(), day=day
     )
-    store.put_bindings(resolution.accepted, day=day)
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
         old = before.get(hk)
@@ -318,7 +353,6 @@ async def collect_and_score(
                 "reason": reason,
             }
         )
-    store.put_binding_events(day, events)
 
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
@@ -376,28 +410,45 @@ async def collect_and_score(
     edge_lists: dict[str, list[tuple[str, str, str]]] = {}
     avg_equity: dict[str, tuple[float | None, int]] = {}
     tid_owners: dict[int, set[str]] = {}  # trade id -> addresses with a fill in that trade (bound and linked)
+    # addresses whose linked-account reads failed after the deadline: "clusters" (its sub-accounts or transfer
+    # partners are unknown) or "linked fills" (a linked account's trades are unknown)
+    unchecked: dict[str, str] = {}
+    uncounted: list[tuple[Fill, str]] = []  # builder fills that needed a failed read, with the reason recorded
     builder = cfg.builder.lower()
 
-    marks_cache: dict[str, dict[int, float]] = {}
-    marks_lock = asyncio.Lock()
+    def record_activity(address: str, fills: list[Fill]) -> tuple[int, int]:
+        """Store the day's round trips, fills and notional of the address's perpetual fills; the gate window's
+        round trips and active days through the day."""
+        perps = [f for f in fills if is_perp(f.coin)]
+        store.put_activity(address, day, round_trips(perps), len(perps), sum(f.notional for f in perps))
+        rt_window, active_window, _ = store.activity_window(address, params.gate_days, day)
+        return rt_window, active_window
 
-    async def marks_for(coin: str) -> dict[int, float]:
-        """Minute marks for a perp coin over the day (one candle request per coin, shared by every address)."""
-        async with marks_lock:
-            if coin in marks_cache:
-                return marks_cache[coin]
-        try:
-            marks = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
-        except Exception as exc:  # noqa: BLE001 - without marks the clip and the transfer check skip this coin
-            log.warning("no minute candles for %s: %s", coin, exc)
-            marks = {}
-        async with marks_lock:
-            marks_cache[coin] = marks
-        return marks
+    marks_cache: dict[str, dict[int, float] | None] = {}
+    marks_locks: dict[str, asyncio.Lock] = {}
+
+    async def marks_for(coin: str) -> dict[int, float] | None:
+        """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
+        first address to ask reads them, the others wait for that answer), so every address is clipped against the
+        same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
+        after it, None: the coin's builder fills go uncounted and the day's return of an address that traded the
+        coin is unknown."""
+        async with marks_locks.setdefault(coin, asyncio.Lock()):
+            if coin not in marks_cache:
+                try:
+                    marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
+                except Exception as exc:  # noqa: BLE001
+                    store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
+                    if not past_deadline:
+                        raise RuntimeError(f"minute candles of {coin} unavailable: {exc}") from exc
+                    marks_cache[coin] = None
+        return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
-        """Everything for one bound address. Every exchange read has a fallback: an API failure never costs the
-        trader the day's fee credit, it only delays the figures that depend on the failed read."""
+        """Everything for one bound address. A failed read of the account's recorded history fails the day (it is
+        retried within the hour). A failed read of the fill history, the explorer, the minute candles or a linked
+        account fails the day until the deadline; after it, only what needed the failed read goes uncounted. The
+        other reads (account state, ledger, fee rates, stake) fall back. Every failure is recorded."""
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
         # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
@@ -426,21 +477,29 @@ async def collect_and_score(
         if not store.equity_series(address, 1):
             # first time this address is scored: the exchange's own history gives the returns from day one
             history = daily_equity_from_portfolio(windows)
-            for h_day, value, flows in history:
-                if h_day < day:
-                    store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
-            log.info("backfilled %d days of account value for %s", len(history), address)
+            earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
+            for h_day, value, flows in earlier:
+                store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
+            log.info("backfilled %d days of account value for %s", len(earlier), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
         # fills beyond the file go unconfirmed, and every other address is scored as usual
-        past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
+        gaps: list[int] = []
         try:
-            public = await hl.fills_by_time(address, start_ms, end_ms)
+            public = await hl.fills_by_time(address, start_ms, end_ms, gaps)
         except Exception as exc:
             store.put_error(day, hk, address, "fill history", str(exc))
             if not past_deadline:
                 raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
             public = []
+        if gaps:
+            store.put_note(
+                day,
+                hk,
+                address,
+                "fill history",
+                f"{len(gaps)} milliseconds with more fills than a page: the rest unread",
+            )
         merged = merge_sources(own, public, params.builder_fee_rate)
         candidates = [f for f in merged if f.source == "history"]
         if candidates:
@@ -456,15 +515,15 @@ async def collect_and_score(
                 cloids, hashes, skipped = set(), set(), 0
             merged, refused = confirm_builder(merged, cloids, hashes)
             if refused:
-                store.put_error(
+                store.put_note(
                     day, hk, address, "builder", f"{len(refused)} history fills not confirmed as Kokoah orders"
                 )
             if skipped:
-                store.put_error(day, hk, address, "builder", f"{skipped} taker fills beyond the daily lookup cap")
+                store.put_note(day, hk, address, "builder", f"{skipped} taker fills beyond the daily lookup cap")
         history_only = [f for f in merged if f.source == "history"]
         file_only = [f for f in merged if f.source == "file"]
         if file_only:
-            store.put_error(
+            store.put_note(
                 day, hk, address, "fill history", f"{len(file_only)} file fills not in the history (beyond its reach)"
             )
         log.info(
@@ -483,15 +542,31 @@ async def collect_and_score(
         marked: list[Fill] = []
         coins = {f.coin for f in own if is_perp(f.coin)} | {f.coin for f in public if is_perp(f.coin)}
         marks_by_coin = {coin: await marks_for(coin) for coin in coins}
+        unmarked = {coin for coin, marks in marks_by_coin.items() if marks is None}
         for f in own:
-            mark = marks_by_coin.get(f.coin, {}).get(f.time_ms // 60_000 * 60_000)
+            if f.coin in unmarked:
+                uncounted.append((f, "no_mark"))
+                continue
+            mark = (marks_by_coin.get(f.coin) or {}).get(f.time_ms // 60_000 * 60_000)
             marked.append(replace(f, mark_px=mark) if mark else f)
         for f in public:
-            if not is_perp(f.coin):
+            if not is_perp(f.coin) or f.coin in unmarked:
                 continue
-            mark = marks_by_coin.get(f.coin, {}).get(f.time_ms // 60_000 * 60_000)
+            mark = (marks_by_coin.get(f.coin) or {}).get(f.time_ms // 60_000 * 60_000)
             if mark:
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
+        # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
+        return_known = not any(f.coin in unmarked for f in public)
+        if unmarked:
+            store.put_note(
+                day,
+                hk,
+                address,
+                "marks",
+                f"{len(own) - len(marked)} fills uncounted"
+                + ("" if return_known else " and the day's return unknown")
+                + f": no minute candles for {', '.join(sorted(unmarked))}",
+            )
         fills_by_address[address] = marked
         rates: tuple[float, float] | None = None
         # the day's return from the exchange's own record, the same for every validator whenever it scores; the end
@@ -520,7 +595,13 @@ async def collect_and_score(
                 base = previous if previous is not None else change.value_start or 0.0
                 flows = (change.value_end - base) - change.profit
                 store.put_equity(
-                    address, day, change.value_end, flows, raw=state.get("marginSummary"), offmarket_pnl=offmarket
+                    address,
+                    day,
+                    change.value_end,
+                    flows,
+                    raw=state.get("marginSummary"),
+                    offmarket_pnl=offmarket,
+                    known=return_known,
                 )
             else:
                 store.put_equity(
@@ -551,37 +632,59 @@ async def collect_and_score(
             store.put_fee_rates(address, day, rates[0], rates[1], raw=fee_raw)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "fee rates", str(exc))
-        perps_own = [f for f in marked if is_perp(f.coin)]
-        store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
-        rt_window, active_window, _ = store.activity_window(address, params.gate_days)
+        rt_window, active_window = record_activity(address, marked)
+        # linked accounts (clusters, and the counterparties of history fills): like the history itself, a failed read
+        # fails the day until the deadline; after it, the failure is recorded, the other reads go on and the fills
+        # that needed the failed read go uncounted (below, once every address is read)
+        subs: set[str] = set()
+        partners: dict[str, float] = {}
         try:
-            window_start = start_ms - params.gate_days * 86_400_000
             subs = set(await sub_accounts(hl, address))
-            partners = await transfer_partners(hl, address, window_start, end_ms)
-            edge_lists[address] = [(address, o, "subaccount") for o in subs] + [
-                (address, o, "transfer") for o in partners - subs
-            ]
-            # the linked accounts' trades of the day name the counterparty of history fills by trade id
-            for other in sorted(subs | partners)[: params.max_linked_accounts]:
-                for f in await hl.fills_by_time(other, start_ms, end_ms):
-                    if f.tid is not None:
-                        tid_owners.setdefault(f.tid, set()).add(other)
         except Exception as exc:  # noqa: BLE001
-            store.put_error(day, hk, address, "clusters", str(exc))
+            store.put_error(day, hk, address, "clusters", f"sub-accounts: {exc}")
+            if not past_deadline:
+                raise RuntimeError(f"sub-accounts of {address} unavailable: {exc}") from exc
+            unchecked[address] = "clusters"
+        try:
+            partners = await transfer_partners(hl, address, start_ms - params.gate_days * 86_400_000, end_ms)
+        except Exception as exc:  # noqa: BLE001
+            store.put_error(day, hk, address, "clusters", f"transfer partners: {exc}")
+            if not past_deadline:
+                raise RuntimeError(f"transfer partners of {address} unavailable: {exc}") from exc
+            unchecked[address] = "clusters"
+        edge_lists[address] = [(address, o, "subaccount") for o in sorted(subs)] + [
+            (address, o, "transfer") for o in sorted(set(partners) - subs)
+        ]
+        # the linked accounts' trades of the day name the counterparty of history fills by trade id
+        linked, left_out = linked_reads(subs, partners, params.max_linked_accounts)
+        if left_out:
+            store.put_note(day, hk, address, "clusters", f"{left_out} linked accounts beyond the cap not read")
+        for other in linked:
+            try:
+                other_fills = await hl.fills_by_time(other, start_ms, end_ms)
+            except Exception as exc:  # noqa: BLE001
+                store.put_error(day, hk, address, "clusters", f"fills of {other}: {exc}")
+                if not past_deadline:
+                    raise RuntimeError(f"fills of {other}, linked to {address}, unavailable: {exc}") from exc
+                unchecked.setdefault(address, "linked fills")
+                continue
+            for f in other_fills:
+                if f.tid is not None:
+                    tid_owners.setdefault(f.tid, set()).add(other)
         staked = 0.0
         try:
             stakes = await stake_samples(client, cfg.netuid, coldkey_of[hk], hk, blocks)
             store.put_stake_samples(day, hk, stakes)
             staked = min((v for _, v in stakes), default=0.0)
-        except Exception as exc:  # noqa: BLE001 - no stake read: holding is 0 today
+        except Exception as exc:  # noqa: BLE001 - no stake read: recorded as 0 (stake does not affect pay)
             errors[hk] = f"stake: {str(exc)[:160]}"
             store.put_error(day, hk, address, "stake", str(exc))
         miners.append(
             MinerInputs(
                 hotkey=hk,
                 address=address,
-                returns=store.returns(address, max(params.confidence_days, params.entry_days)),
-                mean_equity_usd=store.mean_equity(address, params.gate_days),
+                returns=store.returns(address, max(params.confidence_days, params.entry_days), day),
+                mean_equity_usd=store.mean_equity(address, params.gate_days, day),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),
                 collateral_locked_alpha=collateral_locked.get(hk, 0.0),
@@ -591,15 +694,58 @@ async def collect_and_score(
                 avg_equity_usd=avg.value,
                 registered_block=registered_block.get(hk),
                 credited_notional_prior_usd=store.credited_notional(hk, day, params.skill_volume_days - 1),
-                dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days)),
+                dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days), day),
                 agent_verified=bool(agent_status.get(hk, False)),
+                # the copy rule's longest record: where the account's history on the exchange begins, which every
+                # validator reads the same (not the days this validator happens to have scored)
+                record_start=(
+                    datetime.fromtimestamp(origin / 1000, tz=UTC).strftime("%Y-%m-%d") if origin is not None else day
+                ),
             )
         )
 
-    await asyncio.gather(*(one(hk, a) for hk, a in address_of_hotkey.items()))
+    # one address that cannot be read fails the day: the other reads are cancelled with it, so nothing more is
+    # fetched or written for a day that is retried anyway
+    try:
+        async with asyncio.TaskGroup() as group:
+            for hk, a in address_of_hotkey.items():
+                group.create_task(one(hk, a))
+    except ExceptionGroup as failed:
+        raise failed.exceptions[0] from None
     miners.sort(key=lambda m: m.hotkey)
     for a in address_of_hotkey.values():
         fills_by_address[a] = assign_counterparties(fills_by_address.get(a, []), tid_owners)
+    addresses = list(address_of_hotkey.values())
+    bound = set(addresses)
+    # a linked read that failed after the deadline: the fills that needed it go uncounted (recorded as such). Without
+    # the sub-accounts or transfer partners, no counterparty outside the bound addresses can be told apart from the
+    # address's own cluster; without a linked account's trades, a history fill whose counterparty is still unnamed
+    # may have traded with that account
+    for i, m in enumerate(miners):
+        unread = unchecked.get(m.address)
+        if unread is None:
+            continue
+        keep: list[Fill] = []
+        for f in fills_by_address.get(m.address, []):
+            needs = (
+                f.counterparty not in bound if unread == "clusters" else f.source == "history" and not f.counterparty
+            )
+            if needs and is_perp(f.coin):
+                uncounted.append((f, "unchecked_counterparty"))
+            else:
+                keep.append(f)
+        dropped = len(fills_by_address.get(m.address, [])) - len(keep)
+        if dropped:
+            fills_by_address[m.address] = keep
+            store.put_note(
+                day,
+                m.hotkey,
+                m.address,
+                "clusters",
+                f"{dropped} fills uncounted: their counterparty could not be checked",
+            )
+            rt_window, active_window = record_activity(m.address, keep)
+            miners[i] = replace(m, round_trips_window=rt_window, active_days_window=active_window)
     # what the day's builder fills actually charged (recorded)
     taker_notional = sum(f.notional for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
     taker_fees = sum(f.builder_fee for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
@@ -613,7 +759,6 @@ async def collect_and_score(
         store.put_error(day, None, None, "builder rewards", str(exc))
     for lst in edge_lists.values():
         edges.extend(lst)
-    addresses = list(address_of_hotkey.values())
     cluster_of = clusters(addresses, [(a, b) for a, b, _ in edges])
     store.put_clusters(day, cluster_of, edges)
     all_fills = [f for lst in fills_by_address.values() for f in lst]
@@ -629,24 +774,28 @@ async def collect_and_score(
         states=states,
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
-        penalized_until=store.penalties(day_index(cfg, day, params)),
+        penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)
+    reports: list[tuple[str, int, str, str]] = []
     for r in result.records:
         if r.reported:
             until = inputs.day_index + params.mirror_zero_days
-            store.put_penalty(r.address, until, day, r.hotkey, f"mirrored {r.mirrored_share:.0%}")
+            reports.append((r.address, until, r.hotkey, f"mirrored {r.mirrored_share:.0%}"))
             for other in sorted(penalty_reach(r.address, edges) - {r.address.lower()}):
-                store.put_penalty(other, until, day, r.hotkey, f"tied to {r.address}")
+                reports.append((other, until, r.hotkey, f"tied to {r.address}"))
+    store.put_penalties(day, reports)
 
     # every fill, with why it did or did not count
-    bound = set(addresses)
     against = bound_counterparty_notional({a: f for a, f in fills_by_address.items() if a in bound})
     rows = []
-    for f in sorted(all_fills, key=lambda x: (x.time_ms, x.user, x.coin, x.side, x.px, x.sz)):
+    tagged = [(f, "") for f in all_fills] + uncounted  # "" = scored, else the reason it went uncounted
+    for f, why in sorted(tagged, key=lambda x: (x[0].time_ms, x[0].user, x[0].coin, x[0].side, x[0].px, x[0].sz)):
         fill_hk = hotkey_of_address.get(f.user)
         excluded: str | None
-        if not is_perp(f.coin):
+        if why:
+            excluded = why
+        elif not is_perp(f.coin):
             excluded = "spot"
         elif fill_hk is None:
             excluded = "unbound"
@@ -730,6 +879,8 @@ async def collect_and_score(
         ],
     )
     store.put_states(result.states, day=day)
+    store.put_bindings(resolution.accepted, day=day)
+    store.put_binding_events(day, events)
 
     # the miners dimension: who is who, when registered, bound, paid
     emission = store.emission_totals()

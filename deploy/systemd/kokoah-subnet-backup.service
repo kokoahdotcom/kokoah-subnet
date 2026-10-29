@@ -1,8 +1,14 @@
 [Unit]
 Description=Kokoah subnet backup: the validator's record (daily, 14 kept)
+Requires=docker.service
+After=docker.service
 
 [Service]
-Environment=HOME=%h
 Type=oneshot
-WorkingDirectory=/kokoah/kokoah-subnet
-ExecStart=/kokoah/kokoah-subnet/scripts/backup.sh
+# root: the dump is taken with `docker exec` in the database container
+Environment=HOME=%h
+Environment=KOKOAH_SUBNET_BACKUP_DIR=/var/backups/kokoah-subnet
+ExecStart=/opt/kokoah-subnet/scripts/backup.sh
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=idle

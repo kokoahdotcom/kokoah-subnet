@@ -108,7 +108,7 @@ Requires Python 3.12, [uv](https://docs.astral.sh/uv/) and Docker (for the local
 
 ```bash
 uv sync                                    # install from the lock file
-scripts/check.sh                           # lint, types and the full offline test suite (as CI runs it)
+scripts/check.sh                           # lock, lint, types, the offline tests and the checks below (as CI runs it)
 uv run kokoah-subnet verify                # the specification's numerical checks
 uv run kokoah-subnet --help                # miner, agent, validator and operator commands
 ```

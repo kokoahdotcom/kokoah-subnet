@@ -16,7 +16,7 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     s.put_equity("0xA", "2026-10-04", 1200.0, 0.0)  # 10-03 missing: no return across the gap
     s.put_equity("0xA", "2026-10-05", 1140.0, 0.0)
     assert s.returns("0xa", 60) == pytest.approx([0.05, -0.05])
-    assert s.mean_equity("0xA", 30) == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
+    assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
 
 
@@ -32,11 +32,34 @@ def test_positions_aligned_over_days(tmp_path: Path) -> None:
 
 
 def test_activity_window(tmp_path: Path) -> None:
+    from datetime import date, timedelta
+
     s = Store(tmp_path / "v.sqlite")
     for d in range(40):
-        s.put_activity("0xA", f"2026-{(d // 28) + 8:02d}-{(d % 28) + 1:02d}", 1, 2 if d % 2 == 0 else 0, 100.0)
-    rt, active, notional = s.activity_window("0xA", 30)
+        day = (date(2026, 9, 1) + timedelta(days=d)).isoformat()
+        s.put_activity("0xA", day, 1, 2 if d % 2 == 0 else 0, 100.0)
+    rt, active, notional = s.activity_window("0xA", 30, "2026-10-10")  # 2026-09-11 to 2026-10-10
     assert rt == 30 and active == 15 and notional == 3000.0
+
+
+def test_gates_count_only_the_last_30_calendar_days(tmp_path: Path) -> None:
+    """Bound for 40 days, away for 60, back today: the gates see today's activity only, not 30 stored days from two
+    months ago; the mean account value leaves out days whose value is not the exchange's recorded one."""
+    from datetime import date, timedelta
+
+    s = Store(tmp_path / "c.sqlite")
+    start = date(2026, 6, 1)
+    for d in range(40):
+        day = (start + timedelta(days=d)).isoformat()
+        s.put_activity("0xA", day, 2, 5, 1000.0)
+        s.put_equity("0xA", day, 50_000.0, 0.0)
+    today = (start + timedelta(days=100)).isoformat()
+    s.put_activity("0xA", today, 1, 3, 500.0)
+    s.put_equity("0xA", today, 800.0, 0.0)
+    s.put_equity("0xA", (start + timedelta(days=99)).isoformat(), 90_000.0, 0.0, known=False)  # a live value
+    assert s.activity_window("0xA", 30, today) == (1, 1, 500.0)
+    assert s.mean_equity("0xA", 30, today) == pytest.approx(800.0)
+    assert s.mean_equity("0xA", 30, (start + timedelta(days=200)).isoformat()) == 0.0
 
 
 def test_states_bindings_days_meta(tmp_path: Path) -> None:
@@ -78,8 +101,12 @@ def test_penalties_swaps_and_latest_neurons(tmp_path: Path) -> None:
     s.put_penalty("0xA", 40, "2026-10-21", "hk", "mirrored")
     s.put_penalty("0xA", 30, "2026-10-21", "hk", "shorter one is ignored")
     assert s.penalties(10) == {"0xa": 40} and s.penalties(40) == {}
-    s.put_neurons("2026-10-21", 100, [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}])
-    assert s.latest_neurons() == [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}]
+    s.put_neurons("2026-10-21", 100, [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck", "block_at_registration": 7}])
+    s.put_neurons("2026-10-22", 200, [{"uid": 1, "hotkey": "hkNew", "coldkey": "ck", "block_at_registration": 7}])
+    assert s.latest_neurons() == [{"uid": 1, "hotkey": "hkNew", "coldkey": "ck", "block_at_registration": 7}]
+    # the snapshot before a day, whatever was recorded for that day itself (a retried day)
+    assert s.latest_neurons(before_day="2026-10-22")[0]["hotkey"] == "hkOld"
+    assert s.latest_neurons(before_day="2026-10-21") == []
     s.put_swap("2026-10-21", 1, "hkOld", "hkNew", "ck")
     s.put_swap("2026-10-23", 2, "hkA", "hkB", "ck2")
     assert s.swaps_through("2026-10-22") == [("2026-10-21", "hkOld", "hkNew")]
@@ -132,3 +159,98 @@ def test_a_record_without_known_returns_says_so_with_nulls(tmp_path: Path) -> No
     r = (s.account_record(a) or {})["record"]
     assert r["record_days"] == 0 and r["return_90d"] is None and r["worst_drop_90d"] is None
     assert r["losing_days_90d"] is None and r["return_days_90d"] is None and r["return_all"] is None
+
+
+def test_one_missing_day_does_not_shorten_the_return_series(tmp_path: Path) -> None:
+    """199 stored days, one of them (ten days ago) missing and one unknown: the last 90 known returns are still 90,
+    reaching back over the gaps, and each is the return of two consecutive known days."""
+    from datetime import date, timedelta
+
+    s = Store(tmp_path / "g.sqlite")
+    start = date(2026, 4, 1)
+    days = [(start + timedelta(days=i)).isoformat() for i in range(200)]
+    for i, d in enumerate(days):
+        if i == 189:
+            continue  # no account value that day
+        s.put_equity("0xA", d, 1000.0 + i, 0.0, known=i != 150)
+    dated = s.dated_returns("0xA", 90)
+    assert len(dated) == 90 and len(s.returns("0xA", 90)) == 90
+    assert days[189] not in dated and days[190] not in dated and days[-1] in dated
+    assert list(dated) == sorted(dated)
+    assert dated[days[-1]] == pytest.approx(1.0 / 1198.0)
+    assert len(s.dated_returns("0xA", 500)) == 195  # every known return: 199 pairs of days, four broken
+
+
+def test_window_reads_stop_at_the_scored_day(tmp_path: Path) -> None:
+    """Scoring 2026-10-03 again, with later days already stored: their returns, activity and reports are not read."""
+    s = Store(tmp_path / "w.sqlite")
+    for i, value in enumerate((1000.0, 1100.0, 1210.0, 600.0, 300.0)):
+        day = f"2026-10-{i + 1:02d}"
+        s.put_equity("0xA", day, value, 0.0)
+        s.put_activity("0xA", day, 1, 1, 10.0)
+    assert s.returns("0xA", 90, "2026-10-03") == pytest.approx([0.1, 0.1])
+    assert list(s.dated_returns("0xA", 90, "2026-10-03")) == ["2026-10-02", "2026-10-03"]
+    assert len(s.returns("0xA", 90)) == 4
+    assert s.activity_window("0xA", 30, "2026-10-03") == (3, 3, 30.0)
+    assert s.mean_equity("0xA", 30, "2026-10-03") == pytest.approx(1103.33, abs=0.01)
+    s.put_penalty("0xB", 40, "2026-10-02", "hk", "mirrored")
+    s.put_penalty("0xC", 40, "2026-10-03", "hk", "mirrored")
+    assert s.penalties(14, before_day="2026-10-03") == {"0xb": 40} and set(s.penalties(14)) == {"0xb", "0xc"}
+
+
+def test_a_renewed_penalty_keeps_the_report_that_was_in_force_for_a_re_score(tmp_path: Path) -> None:
+    """Reported on 10-16 until day 30, renewed on 10-21 until day 35: a re-score of 10-21 still sees the first
+    report, and a re-score that no longer reports the address on 10-21 drops only that day's renewal."""
+    s = Store(tmp_path / "p.sqlite")
+    s.put_penalty("0xAA", 30, "2026-10-16", "hk", "mirrored 60%")
+    s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
+    assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30}
+    assert s.penalties(5) == {"0xaa": 35} and s.penalties(32) == {"0xaa": 35}
+    s.put_penalties("2026-10-21", [("0xaa", 35, "hk", "mirrored 60%"), ("0xbb", 35, "hk", "tied to 0xaa")])
+    assert s.penalties(5) == {"0xaa": 35, "0xbb": 35}
+    s.put_penalties("2026-10-21", [])  # the day scored again without a report
+    assert s.penalties(5) == {"0xaa": 30} and s.penalties(5, before_day="2026-10-21") == {"0xaa": 30}
+
+
+def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    path = tmp_path / "old.sqlite"
+    old = Store(path)
+    with old._engine.begin() as c:  # the table as it was: one row per address
+        c.execute(text("DROP TABLE penalties"))
+        c.execute(
+            text(
+                "CREATE TABLE penalties (address VARCHAR(42) NOT NULL, until_day INTEGER NOT NULL, day VARCHAR(10), "
+                "hotkey VARCHAR(64), reason TEXT, PRIMARY KEY (address))"
+            )
+        )
+        c.execute(text("INSERT INTO penalties VALUES ('0xaa', 30, '2026-10-16', 'hk', 'mirrored 60%')"))
+        c.execute(text("UPDATE meta SET value = '11' WHERE key = 'schema_version'"))
+    old.close()
+    s = Store(path)
+    assert s.migrations_applied == ["12: penalties: one row per report"]
+    s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
+    assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
+    assert Store(path).migrations_applied == []
+
+
+def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
+    """The interface and the health check open an existing, migrated record read-only (no schema changes); a missing
+    or unmigrated one is refused with a clear message."""
+    from sqlalchemy import text
+
+    from kokoah_subnet.validator.health import check
+
+    path = tmp_path / "r.sqlite"
+    with pytest.raises(RuntimeError, match="the validator creates it"):
+        Store(path, create=False)
+    writer = Store(path)
+    writer.put_day("2026-10-21", 2, '{"x": 1}')
+    reader = Store(path, create=False)
+    assert reader.migrations_applied == [] and reader.day("2026-10-21") == '{"x": 1}'
+    assert "no weights submitted yet" in check(reader)["problems"]
+    with writer._engine.begin() as c:
+        c.execute(text("UPDATE meta SET value = '1' WHERE key = 'schema_version'"))
+    with pytest.raises(RuntimeError, match="start the validator of this release first"):
+        Store(path, create=False)

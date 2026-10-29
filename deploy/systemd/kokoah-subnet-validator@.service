@@ -17,6 +17,8 @@ RestartSec=30
 MemoryMax=2G
 TasksMax=256
 ReadWritePaths=/var/lib/kokoah-subnet
+# the validator reads its hotkey and never changes it
+ReadOnlyPaths=/var/lib/kokoah-subnet/wallets
 StandardOutput=append:/var/log/kokoah-subnet/validator-%i.log
 StandardError=append:/var/log/kokoah-subnet/validator-%i.log
 NoNewPrivileges=yes
@@ -38,6 +40,7 @@ LockPersonality=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+RemoveIPC=yes
 UMask=0077
 
 [Install]

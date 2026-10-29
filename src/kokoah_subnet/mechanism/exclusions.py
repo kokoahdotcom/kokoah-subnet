@@ -96,12 +96,12 @@ def mirror_position_share(positions: Mapping[str, Mapping[str, Sequence[float]]]
 @dataclass(frozen=True)
 class MirrorAction:
     credit_factor: float  # multiply the day's credit by this
-    zero_multiplier: bool  # g' = h' = 0 for `mirror_zero_days`, and report
+    zero_multiplier: bool  # reported: out of the skill pool for `mirror_zero_days`
 
 
 def mirror_action(mirrored_share: float, params: Params) -> MirrorAction:
-    """Above 25% of notional mirrored: the mirrored part is removed from credit; above 50%: also the quality
-    multiplier is zeroed and the address reported."""
+    """Above 25% of notional mirrored: the mirrored part is removed from credit; above 50%: also the address is
+    reported and leaves the skill pool for `mirror_zero_days`."""
     share = max(0.0, min(1.0, mirrored_share))
     if share > params.mirror_zero_share:
         return MirrorAction(1.0 - share, True)

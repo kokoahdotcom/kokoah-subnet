@@ -186,5 +186,5 @@ def identity_change(state: MinerState, address: str, registered_block: int | Non
 
 def fresh_identity(state: MinerState) -> MinerState:
     """Drop what a fresh identity must not inherit: the smoothed fee credit and fees, and the qualification. What a
-    fresh identity must not escape stays: the pay history (holding target), the skill record and any penalty."""
+    fresh identity must not escape stays: the pay history, the skill record and any penalty."""
     return replace(state, phi_hat=0.0, fee_hat=0.0, qualified=False, qual_trades=0, qual_notional=0.0)

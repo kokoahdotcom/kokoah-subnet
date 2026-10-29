@@ -189,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--tao-usd-fallback", type=float, default=0.0, help="TAO/USD when no TAO perp is listed")
     vrun.add_argument("--poll-seconds", type=int, default=60)
     vrun.add_argument("--once", action="store_true", help="one pass, then exit")
-    vrun.add_argument("--day", default=None, help="score this day instead of yesterday")
+    vrun.add_argument("--day", default=None, help="score this day (YYYY-MM-DD; only the oldest pending day)")
     vrun.add_argument(
         "--agent-service",
         default=os.environ.get("KOKOAH_AGENT_SERVICE", ""),
@@ -221,7 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
     oburn.add_argument("--db-url", default=None, help="record the burn in the database (default $KOKOAH_SUBNET_DB_URL)")
     vcheck = vsub.add_parser("check", help="health check over the record (exit 1 on a problem)")
     vcheck.add_argument("--data-dir", type=Path, default=None)
-    vcheck.add_argument("--db-url", default=None)
+    vcheck.add_argument(
+        "--db-url", default=None, help="the record; default $KOKOAH_SUBNET_DB_READER_URL, else $KOKOAH_SUBNET_DB_URL"
+    )
     vcheck.add_argument(
         "--webhook", default=None, help="post the report to this JSON webhook (default $KOKOAH_SUBNET_ALERT_WEBHOOK)"
     )
@@ -239,7 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     vserve.add_argument(
         "--db-url",
         default=None,
-        help="the record (SQLAlchemy URL); default $KOKOAH_SUBNET_DB_URL, else SQLite in --data-dir",
+        help="the record (SQLAlchemy URL); default $KOKOAH_SUBNET_DB_READER_URL, else $KOKOAH_SUBNET_DB_URL, "
+        "else SQLite in --data-dir",
     )
     vserve.add_argument("--host", default="127.0.0.1")
     vserve.add_argument("--port", type=int, default=48100)
@@ -319,12 +322,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "owner":
         return _owner(args)
     if args.command == "verify":
-        import runpy
+        from kokoah_subnet.mechanism import verify
 
-        runpy.run_path(
-            str(Path(__file__).resolve().parents[2] / "scripts" / "verify_mechanism.py"), run_name="__main__"
-        )
-        return 0
+        return verify.main()
     return 2
 
 
@@ -369,17 +369,21 @@ def _validator(args: argparse.Namespace) -> int:
         cfg = ValidatorConfig(
             network="", netuid=0, builder="", data_dir=args.data_dir or Path("."), burn_hotkey=args.burn_hotkey
         )
-        print(skip_day(store, args.day, day_index(cfg, args.day, DEFAULT), args.burn_hotkey, args.reason, DEFAULT))
+        try:
+            print(skip_day(store, args.day, day_index(cfg, args.day, DEFAULT), args.burn_hotkey, args.reason, DEFAULT))
+        except ValueError as exc:
+            print(exc)
+            return 1
         return 0
     if args.validator_command == "check":
         from kokoah_subnet.validator.health import main_report
         from kokoah_subnet.validator.store import Store
 
-        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
+        url = args.db_url or _reader_url()
         if not url and args.data_dir is None:
             print("give --db-url or --data-dir")
             return 2
-        store = Store(url or (args.data_dir / "validator.sqlite"))
+        store = Store(url or (args.data_dir / "validator.sqlite"), create=False)
         return main_report(store, args.webhook or os.environ.get("KOKOAH_SUBNET_ALERT_WEBHOOK"), args.only_problems)
     if args.validator_command == "serve":
         import uvicorn
@@ -387,11 +391,16 @@ def _validator(args: argparse.Namespace) -> int:
         from kokoah_subnet.validator.serve import create_app
         from kokoah_subnet.validator.store import Store
 
-        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
-        app = create_app(Store(url or (args.data_dir / "validator.sqlite")))
+        url = args.db_url or _reader_url()
+        app = create_app(Store(url or (args.data_dir / "validator.sqlite"), create=False))
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
     return 2
+
+
+def _reader_url() -> str:
+    """The record's read-only connection (`scripts/db.sh` makes the role), else the validator's own."""
+    return os.environ.get("KOKOAH_SUBNET_DB_READER_URL") or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
 
 
 def _owner(args: argparse.Namespace) -> int:

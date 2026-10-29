@@ -43,7 +43,8 @@ Nothing is capped and nothing is burned (only a day with nobody to pay would go 
 ## Fair play
 
 Trades with yourself or your linked accounts never count, and neither do trades between two of the subnet's own
-miners. Linked addresses that keep opposite positions for weeks lose their credit and leave the skill reward. The
+miners. Linked accounts of two miners that keep opposite positions for weeks lose their credit and leave the skill
+reward. The
 skill reward needs a real edge, proven over 90 days.
 
 ## Agents
