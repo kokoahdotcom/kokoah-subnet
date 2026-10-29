@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,7 +33,13 @@ from kokoah_subnet.mechanism import (
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
 from kokoah_subnet.mechanism.eligibility import daily_average_equity, day_change, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
-from kokoah_subnet.mechanism.fills import assign_counterparties, builder_orders, confirm_builder, merge_sources
+from kokoah_subnet.mechanism.fills import (
+    BUILDER_CSV_HEADER,
+    assign_counterparties,
+    builder_orders,
+    confirm_builder,
+    merge_sources,
+)
 
 from .agents import check_agents, fetch_unlinks
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
@@ -80,7 +87,7 @@ class ValidatorConfig:
     poll_s: int = 60
     weights_every_blocks: int = 360  # one tempo
     retry_missing_s: int = 3600
-    fills_cache: Path | None = None  # where downloaded builder files are kept (default: data_dir/fills)
+    fills_cache: Path | None = None  # where downloaded builder files are kept, per builder (default: data_dir/fills)
     db_url: str = ""  # the record; empty = SQLite file in data_dir
     agent_images: tuple[str, ...] = APPROVED_HARNESS_IMAGES  # approved sealed-machine harness images
     agent_service: str = ""  # the owner's agent service (its released list); empty: no account counts as an agent
@@ -128,15 +135,32 @@ async def tao_usd_mark(
     raise RuntimeError(f"no TAO/USD mark: {coin} is not listed and no fallback is configured")
 
 
+def _readable(data: bytes) -> bool:
+    """Whether bytes are a whole builder file: they decompress and start with the published header."""
+    try:
+        first = decompress(data).split("\n", 1)[0]
+    except Exception:  # noqa: BLE001 - a truncated or corrupt frame
+        return False
+    return ",".join(h.strip() for h in first.split(",")) == BUILDER_CSV_HEADER
+
+
 async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, bool]:
-    """The day's builder file, from the local cache or downloaded (and cached); the flag says it was downloaded."""
-    cache = cfg.fills_cache or (cfg.data_dir / "fills")
+    """The day's builder file, from the local cache or downloaded (and cached); the flag says it was downloaded.
+    The cache is kept per builder and written whole (a temporary file renamed into place); a cached file that does
+    not read as a builder file is downloaded again."""
+    cache = (cfg.fills_cache or (cfg.data_dir / "fills")) / cfg.builder.lower()
     cache.mkdir(parents=True, exist_ok=True)
     path = cache / f"{day.replace('-', '')}.csv.lz4"
     if path.exists():
-        return path.read_bytes(), False
+        data = path.read_bytes()
+        if _readable(data):
+            return data, False
+        log.warning("cached builder file %s is unreadable: downloading it again", path)
+        path.unlink()
     data = await download(cfg.builder, day, cfg.builder_base_url)
-    path.write_bytes(data)
+    partial = path.with_name(f".{path.name}.{os.getpid()}.part")
+    partial.write_bytes(data)
+    os.replace(partial, path)
     return data, True
 
 

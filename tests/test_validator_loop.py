@@ -259,8 +259,8 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         weights_every_blocks=360,
         retry_missing_s=3600,
     )
-    cache = tmp_path / "fills"
-    cache.mkdir()
+    cache = tmp_path / "fills" / "0xbuilder"
+    cache.mkdir(parents=True)
     (cache / "20261021.csv.lz4").write_bytes(lz4.frame.compress(_csv(a.address.lower(), b.address.lower()).encode()))
     commitments = {
         HK_A: _Commitment(encode_binding(Binding(a.address, sign_binding(a.key, 2, HK_A, a.address))), 9000),
@@ -319,7 +319,7 @@ async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> N
 
 async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
-    (tmp_path / "fills" / "20261021.csv.lz4").unlink()
+    (tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4").unlink()
     cfg = ValidatorConfig(**{**cfg.__dict__, "builder_base_url": "http://127.0.0.1:9/none"})
     now = DAY_MS / 1000 + 86_400 + 600
     report = await step(cfg, store, hl, chain, wallet=None, now=now)
@@ -565,6 +565,27 @@ async def test_minute_candles_are_read_once_per_coin(tmp_path: Path) -> None:
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(counting))
     await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert sorted(asked) == ["BTC", "ETH"]  # both addresses traded BTC; one read serves both
+    await hl.close()
+
+
+async def test_a_truncated_cached_file_is_downloaded_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import collect
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cached = tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4"
+    whole = cached.read_bytes()
+    cached.write_bytes(whole[: len(whole) // 2])  # a write cut short
+    asked: list[tuple[str, str]] = []
+
+    async def download(builder: str, day: str, base_url: str) -> bytes:
+        asked.append((builder, day))
+        return whole
+
+    monkeypatch.setattr(collect, "download", download)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert asked == [("0xbuilder", DAY)] and cached.read_bytes() == whole
+    assert sum(r.fees.fills for r in result.records) == 30
+    assert [p.name for p in cached.parent.iterdir()] == [cached.name]  # no partial file left behind
     await hl.close()
 
 
