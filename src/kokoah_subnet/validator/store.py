@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import case, create_engine, delete, func, insert, select, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from kokoah_subnet.binding import AcceptedBinding, Unlink
 from kokoah_subnet.mechanism import MinerState
@@ -626,20 +626,25 @@ class Store:
     # ----- penalties, hotkey swaps -----------------------------------------------------------------------------
 
     def put_penalty(self, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
-        a = address.lower()
+        """One mirror report made on `day`. Every report is kept by its day (a longer one the same day replaces a
+        shorter one), so a renewal never hides the report that was in force before it."""
         with self._engine.begin() as c:
-            row = c.execute(select(S.penalties.c.until_day).where(S.penalties.c.address == a)).first()
-            if row is not None and int(row[0]) >= until_day:
-                return
-            c.execute(delete(S.penalties).where(S.penalties.c.address == a))
-            c.execute(
-                insert(S.penalties).values(address=a, until_day=int(until_day), day=day, hotkey=hotkey, reason=reason)
-            )
+            _put_penalty(c, address, until_day, day, hotkey, reason)
+
+    def put_penalties(self, day: str, reports: Iterable[tuple[str, int, str, str]]) -> None:
+        """The mirror reports made on `day` as (address, until day index, hotkey, reason), replacing the ones an
+        earlier scoring of the day made."""
+        with self._engine.begin() as c:
+            c.execute(delete(S.penalties).where(S.penalties.c.day == day))
+            for address, until_day, hotkey, reason in reports:
+                _put_penalty(c, address, until_day, day, hotkey, reason)
 
     def penalties(self, day_index: int, before_day: str | None = None) -> dict[str, int]:
-        """Addresses still penalized at `day_index` -> the day index the penalty ends; with `before_day`, only the
-        penalties reported on an earlier day (a re-score of a day never applies its own or later reports)."""
-        query = select(S.penalties.c.address, S.penalties.c.until_day).where(S.penalties.c.until_day > day_index)
+        """Addresses still penalized at `day_index` -> the day index the longest of their reports ends; with
+        `before_day`, only the reports made on an earlier day (a re-score of a day applies the reports made before it,
+        never its own or later ones)."""
+        until = func.max(S.penalties.c.until_day)
+        query = select(S.penalties.c.address, until).group_by(S.penalties.c.address).having(until > day_index)
         if before_day is not None:
             query = query.where(S.penalties.c.day < before_day)
         with self._engine.connect() as c:
@@ -968,6 +973,16 @@ class Store:
             raise ValueError("SELECT only")
         with self._engine.connect() as c:
             return [dict(r) for r in c.execute(text(sql)).mappings().all()]
+
+
+def _put_penalty(c: Connection, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
+    a = address.lower()
+    key = (S.penalties.c.address == a, S.penalties.c.day == day)
+    row = c.execute(select(S.penalties.c.until_day).where(*key)).first()
+    if row is not None and int(row[0]) >= until_day:
+        return
+    c.execute(delete(S.penalties).where(*key))
+    c.execute(insert(S.penalties).values(address=a, until_day=int(until_day), day=day, hotkey=hotkey, reason=reason))
 
 
 def _state_from_json(s: str) -> MinerState:

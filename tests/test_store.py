@@ -198,6 +198,43 @@ def test_window_reads_stop_at_the_scored_day(tmp_path: Path) -> None:
     assert s.penalties(14, before_day="2026-10-03") == {"0xb": 40} and set(s.penalties(14)) == {"0xb", "0xc"}
 
 
+def test_a_renewed_penalty_keeps_the_report_that_was_in_force_for_a_re_score(tmp_path: Path) -> None:
+    """Reported on 10-16 until day 30, renewed on 10-21 until day 35: a re-score of 10-21 still sees the first
+    report, and a re-score that no longer reports the address on 10-21 drops only that day's renewal."""
+    s = Store(tmp_path / "p.sqlite")
+    s.put_penalty("0xAA", 30, "2026-10-16", "hk", "mirrored 60%")
+    s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
+    assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30}
+    assert s.penalties(5) == {"0xaa": 35} and s.penalties(32) == {"0xaa": 35}
+    s.put_penalties("2026-10-21", [("0xaa", 35, "hk", "mirrored 60%"), ("0xbb", 35, "hk", "tied to 0xaa")])
+    assert s.penalties(5) == {"0xaa": 35, "0xbb": 35}
+    s.put_penalties("2026-10-21", [])  # the day scored again without a report
+    assert s.penalties(5) == {"0xaa": 30} and s.penalties(5, before_day="2026-10-21") == {"0xaa": 30}
+
+
+def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    path = tmp_path / "old.sqlite"
+    old = Store(path)
+    with old._engine.begin() as c:  # the table as it was: one row per address
+        c.execute(text("DROP TABLE penalties"))
+        c.execute(
+            text(
+                "CREATE TABLE penalties (address VARCHAR(42) NOT NULL, until_day INTEGER NOT NULL, day VARCHAR(10), "
+                "hotkey VARCHAR(64), reason TEXT, PRIMARY KEY (address))"
+            )
+        )
+        c.execute(text("INSERT INTO penalties VALUES ('0xaa', 30, '2026-10-16', 'hk', 'mirrored 60%')"))
+        c.execute(text("UPDATE meta SET value = '11' WHERE key = 'schema_version'"))
+    old.close()
+    s = Store(path)
+    assert s.migrations_applied == ["12: penalties: one row per report"]
+    s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
+    assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
+    assert Store(path).migrations_applied == []
+
+
 def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
     """The interface and the health check open an existing, migrated record read-only (no schema changes); a missing
     or unmigrated one is refused with a clear message."""

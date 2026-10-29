@@ -52,6 +52,34 @@ def _hide_run_passwords(c: Connection, is_postgres: bool) -> None:
             c.execute(text("UPDATE runs SET config = :c WHERE id = :i"), {"c": json.dumps(settings), "i": run_id})
 
 
+def _penalty_per_report(c: Connection, is_postgres: bool) -> None:
+    """penalties: one row per report (the address and the day it was made) instead of one per address, so a renewal
+    never hides the report that was in force before it."""
+    if is_postgres:
+        c.execute(text("UPDATE penalties SET day = '' WHERE day IS NULL"))
+        c.execute(text("ALTER TABLE penalties DROP CONSTRAINT IF EXISTS penalties_pkey"))
+        c.execute(text("ALTER TABLE penalties ALTER COLUMN day SET NOT NULL"))
+        c.execute(text("ALTER TABLE penalties ADD PRIMARY KEY (address, day)"))
+        return
+    columns = c.execute(text("PRAGMA table_info(penalties)")).all()
+    if [str(r[1]) for r in sorted((r for r in columns if r[5]), key=lambda r: r[5])] == ["address", "day"]:
+        return
+    c.execute(text("ALTER TABLE penalties RENAME TO penalties_before_12"))
+    c.execute(
+        text(
+            "CREATE TABLE penalties (address VARCHAR(42) NOT NULL, until_day INTEGER NOT NULL, "
+            "day VARCHAR(10) NOT NULL, hotkey VARCHAR(64), reason TEXT, PRIMARY KEY (address, day))"
+        )
+    )
+    c.execute(
+        text(
+            "INSERT INTO penalties (address, until_day, day, hotkey, reason) "
+            "SELECT address, until_day, COALESCE(day, ''), hotkey, reason FROM penalties_before_12"
+        )
+    )
+    c.execute(text("DROP TABLE penalties_before_12"))
+
+
 STEPS: list[tuple[int, str, Step]] = [
     (
         1,
@@ -125,6 +153,7 @@ STEPS: list[tuple[int, str, Step]] = [
     (9, "equity.return_known", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS return_known boolean")),
     (10, "runs.config: the database password hidden", _hide_run_passwords),
     (11, "errors.level", _add_column("errors", "level", "varchar(8)")),
+    (12, "penalties: one row per report", _penalty_per_report),
 ]
 
 

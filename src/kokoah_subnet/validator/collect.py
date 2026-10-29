@@ -777,12 +777,14 @@ async def collect_and_score(
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)
+    reports: list[tuple[str, int, str, str]] = []
     for r in result.records:
         if r.reported:
             until = inputs.day_index + params.mirror_zero_days
-            store.put_penalty(r.address, until, day, r.hotkey, f"mirrored {r.mirrored_share:.0%}")
+            reports.append((r.address, until, r.hotkey, f"mirrored {r.mirrored_share:.0%}"))
             for other in sorted(penalty_reach(r.address, edges) - {r.address.lower()}):
-                store.put_penalty(other, until, day, r.hotkey, f"tied to {r.address}")
+                reports.append((other, until, r.hotkey, f"tied to {r.address}"))
+    store.put_penalties(day, reports)
 
     # every fill, with why it did or did not count
     against = bound_counterparty_notional({a: f for a, f in fills_by_address.items() if a in bound})
