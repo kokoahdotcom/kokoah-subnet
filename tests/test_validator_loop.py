@@ -1162,3 +1162,46 @@ def test_runs_recorded_with_a_password_have_it_hidden_by_the_migration(tmp_path:
     (row,) = again.execute_sql("select config from runs")
     config = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
     assert config == {"db_url": "postgresql+psycopg://kokoah:***@127.0.0.1:48110/kokoah_subnet", "netuid": "385"}
+
+
+async def test_the_file_recheck_waits_an_hour_between_tries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import loop
+    from kokoah_subnet.validator.builder_feed import NotPublished
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    tries: list[float] = []
+
+    async def unpublished(builder: str, day: str, base_url: str) -> bytes:
+        tries.append(1.0)
+        raise NotPublished(day)
+
+    monkeypatch.setattr(loop, "download", unpublished)
+    late = DAY_MS / 1000 + 86_400 + 7 * 3600  # 07:00 UTC the next day
+    await step(cfg, store, hl, chain, wallet=WALLET, now=late)  # scores the day, then the first re-check
+    for minutes in (1, 2, 30):
+        await step(cfg, store, hl, chain, wallet=WALLET, now=late + minutes * 60)
+    assert len(tries) == 1  # not once a pass
+    await step(cfg, store, hl, chain, wallet=WALLET, now=late + 3700)
+    assert len(tries) == 2
+    await hl.close()
+
+
+async def test_a_file_published_after_scoring_is_recorded_as_such(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import loop
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    late = DAY_MS / 1000 + 86_400 + 600  # scored before 06:00 UTC: no re-check yet
+    await step(cfg, store, hl, chain, wallet=WALLET, now=late)
+    store.put_file(DAY, "", 0)  # as if the day had been scored past the deadline without a file
+
+    async def published(builder: str, day: str, base_url: str) -> bytes:
+        return b"the late file"
+
+    monkeypatch.setattr(loop, "download", published)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=late + 7 * 3600)
+    assert report["file_recheck"] == {"day": DAY, "changed": False}
+    rows = store.execute_sql("select level, message from errors where stage = 'file recheck'")
+    assert len(rows) == 1 and rows[0]["level"] == "note" and rows[0]["message"].startswith("published after scoring")
+    await hl.close()

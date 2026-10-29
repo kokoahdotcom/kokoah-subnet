@@ -122,17 +122,27 @@ async def step(
                     for n in snap.neurons
                 ]
             )
-    # later in the day, fetch the builder file again: a file the exchange replaced would be visible as a changed hash
+    # later in the day, fetch the builder file again: a file the exchange replaced would be visible as a changed hash,
+    # and a file published after a day scored without one gets its hash recorded. Tried at most hourly.
     hour = datetime.fromtimestamp(clock, tz=UTC).hour
-    if hour >= 6 and store.day(target) is not None and store.file_recheck(target) is None:
+    last_recheck = float(store.get_meta(f"recheck:{target}", "0") or 0)
+    if (
+        hour >= 6
+        and store.day(target) is not None
+        and store.file_recheck(target) is None
+        and clock - last_recheck >= cfg.retry_missing_s
+    ):
+        store.set_meta(f"recheck:{target}", str(clock))
         try:
             digest = sha256(await download(cfg.builder, target, cfg.builder_base_url))
             store.put_file_recheck(target, digest)
-            first = store.file(target)
-            if first and first[0] != digest:
-                log.warning("builder file for %s changed after scoring (%s -> %s)", target, first[0][:12], digest[:12])
-                store.put_error(target, None, None, "file recheck", f"hash changed {first[0]} -> {digest}")
-            report["file_recheck"] = {"day": target, "changed": bool(first and first[0] != digest)}
+            scored = (store.file(target) or ("", 0))[0]
+            if not scored:
+                store.put_note(target, None, None, "file recheck", f"published after scoring: {digest}")
+            elif scored != digest:
+                log.warning("builder file for %s changed after scoring (%s -> %s)", target, scored[:12], digest[:12])
+                store.put_error(target, None, None, "file recheck", f"hash changed {scored} -> {digest}")
+            report["file_recheck"] = {"day": target, "changed": bool(scored and scored != digest)}
         except Exception as exc:  # noqa: BLE001 - the recheck is a record, not an input
             log.info("file recheck for %s: %s", target, exc)
     # while older days are still pending, a newly scored day does not trigger a submission of its own: the chain
