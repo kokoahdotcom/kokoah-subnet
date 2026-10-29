@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 
 from . import schema as S
 from .store import Store
@@ -36,9 +36,11 @@ def check(
             .limit(1)
         ).first()
         last_epoch = c.execute(select(func.max(S.epochs.c.at))).scalar()
-        errors_24h = c.execute(
+        recent = (
             select(func.count()).select_from(S.errors).where(S.errors.c.at >= now - timedelta(hours=24))
-        ).scalar()
+        )  # notes are routine facts (another front end's fills, caps reached): counted, never a problem
+        errors_24h = c.execute(recent.where(or_(S.errors.c.level.is_(None), S.errors.c.level != "note"))).scalar()
+        notes_24h = c.execute(recent.where(S.errors.c.level == "note")).scalar()
         last_burn = c.execute(
             select(S.burns.c.submitted_at, S.burns.c.ok, S.burns.c.burn_alpha, S.burns.c.message, S.burns.c.dry_run)
             .order_by(desc(S.burns.c.id))
@@ -87,6 +89,7 @@ def check(
         "last_weights_ok": bool(last_weights[1]) if last_weights else None,
         "last_epoch_at": last_epoch.isoformat() if last_epoch else None,
         "errors_24h": int(errors_24h or 0),
+        "notes_24h": int(notes_24h or 0),
         "last_burn": {"at": last_burn[0].isoformat(), "ok": last_burn[1], "alpha": last_burn[2]} if last_burn else None,
         "problems": problems,
     }

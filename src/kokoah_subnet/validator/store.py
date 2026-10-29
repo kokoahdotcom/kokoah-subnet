@@ -96,13 +96,25 @@ class Store:
             c.execute(delete(S.meta).where(S.meta.c.key == key))
             c.execute(insert(S.meta).values(key=key, value=value))
 
-    def put_error(self, day: str | None, hotkey: str | None, address: str | None, stage: str, message: str) -> None:
+    def put_error(
+        self,
+        day: str | None,
+        hotkey: str | None,
+        address: str | None,
+        stage: str,
+        message: str,
+        level: str = "error",
+    ) -> None:
+        """Record a failure (`error`, which the health check raises) or a routine fact (`note`, recorded only)."""
         with self._engine.begin() as c:
             c.execute(
                 insert(S.errors).values(
-                    at=_now(), day=day, hotkey=hotkey, address=address, stage=stage, message=message[:2000]
+                    at=_now(), day=day, hotkey=hotkey, address=address, stage=stage, message=message[:2000], level=level
                 )
             )
+
+    def put_note(self, day: str | None, hotkey: str | None, address: str | None, stage: str, message: str) -> None:
+        self.put_error(day, hotkey, address, stage, message, level="note")
 
     # ----- equity, ledger, returns ------------------------------------------------------------------------
 

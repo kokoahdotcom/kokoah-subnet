@@ -744,8 +744,8 @@ async def test_an_order_that_paid_another_builder_is_not_counted(tmp_path: Path)
     with store._engine.connect() as c:
         from kokoah_subnet.validator import schema as S
 
-        stages = [r.stage for r in c.execute(S.errors.select()).all()]
-    assert "builder" in stages
+        rows = c.execute(S.errors.select()).all()
+    assert ("builder", "note") in [(r.stage, r.level) for r in rows]  # another builder's orders: routine
     await hl.close()
 
 
@@ -1158,7 +1158,7 @@ def test_runs_recorded_with_a_password_have_it_hidden_by_the_migration(tmp_path:
         c.execute(text("UPDATE meta SET value = '9' WHERE key = 'schema_version'"))
     store.close()
     again = Store(path)
-    assert again.migrations_applied == [f"10: {STEPS[9][1]}"]
+    assert again.migrations_applied[0] == f"10: {STEPS[9][1]}"
     (row,) = again.execute_sql("select config from runs")
     config = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
     assert config == {"db_url": "postgresql+psycopg://kokoah:***@127.0.0.1:48110/kokoah_subnet", "netuid": "385"}

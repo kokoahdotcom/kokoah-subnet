@@ -22,6 +22,9 @@ def test_check_reports_missing_and_stale_things(tmp_path: Path) -> None:
     s.put_epoch(100, 1, 360, 1.0, [])
     r = check(s, now=now)
     assert r["ok"], r["problems"]
+    s.put_note(yesterday, "hk", "0xa", "builder", "3 history fills not confirmed as Kokoah orders")
+    r = check(s, now=now)
+    assert r["ok"] and r["notes_24h"] == 1 and r["errors_24h"] == 0  # a routine note is no problem
     s.put_weights_submission(yesterday, 200, [1], [65535], False, "rate limited")
     r = check(s, now=now)
     assert any("failed" in p for p in r["problems"])

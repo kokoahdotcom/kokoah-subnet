@@ -563,6 +563,7 @@ errors = Table(
     Column("address", String(42)),
     Column("stage", String(32)),
     Column("message", Text),
+    Column("level", String(8)),  # error (the health check raises it) | note (a routine fact, recorded only)
 )
 
 meta = Table(

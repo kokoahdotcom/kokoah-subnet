@@ -23,7 +23,7 @@ validator/schema.py`; the tables, by what they answer:
 | What the operator burned | `burns` (per run of `owner burn`: staked, locked, burned, result) |
 | Agent accounts | `agent_checks` (each day's check of every agent account: endpoint, code fingerprint, result and reason, image digest, hardware, instance) |
 | The operator's agent service (its own database, not a validator's) | `agent_submissions` (every submitted bundle: hotkey, encrypted or not, code fingerprint, size, time), `agent_keys` (each agent account's key copy, encrypted with the miner's secret and wrapped with the service's key; hotkey, master, when stored and released), `agent_permits` (every start permission used, once each), `agent_key_events` (every store, restore and release), `subnet_unlinks` (every unlink accepted: hotkey, address, time, the address's signature, when received) |
-| What went wrong | `errors` (day, hotkey, address, stage, message) |
+| What went wrong | `errors` (day, hotkey, address, stage, message, and the level: `error` for a failure the health check raises, `note` for a routine fact it only records, such as history fills that are not Kokoah orders or a lookup cap reached) |
 
 Conventions: `day` is the scored UTC day (YYYY-MM-DD); money is USD; alpha is in alpha, not rao; addresses are
 lowercase; `raw` columns keep the source record as JSON. Registration and binding times are estimated from block

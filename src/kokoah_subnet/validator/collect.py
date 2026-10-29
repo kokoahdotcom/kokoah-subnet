@@ -488,15 +488,15 @@ async def collect_and_score(
                 cloids, hashes, skipped = set(), set(), 0
             merged, refused = confirm_builder(merged, cloids, hashes)
             if refused:
-                store.put_error(
+                store.put_note(
                     day, hk, address, "builder", f"{len(refused)} history fills not confirmed as Kokoah orders"
                 )
             if skipped:
-                store.put_error(day, hk, address, "builder", f"{skipped} taker fills beyond the daily lookup cap")
+                store.put_note(day, hk, address, "builder", f"{skipped} taker fills beyond the daily lookup cap")
         history_only = [f for f in merged if f.source == "history"]
         file_only = [f for f in merged if f.source == "file"]
         if file_only:
-            store.put_error(
+            store.put_note(
                 day, hk, address, "fill history", f"{len(file_only)} file fills not in the history (beyond its reach)"
             )
         log.info(
@@ -603,7 +603,7 @@ async def collect_and_score(
         # the linked accounts' trades of the day name the counterparty of history fills by trade id
         linked, left_out = linked_reads(subs, partners, params.max_linked_accounts)
         if left_out:
-            store.put_error(day, hk, address, "clusters", f"{left_out} linked accounts beyond the cap not read")
+            store.put_note(day, hk, address, "clusters", f"{left_out} linked accounts beyond the cap not read")
         for other in linked:
             try:
                 other_fills = await hl.fills_by_time(other, start_ms, end_ms)

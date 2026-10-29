@@ -110,6 +110,7 @@ STEPS: list[tuple[int, str, Step]] = [
     ),
     (9, "equity.return_known", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS return_known boolean")),
     (10, "runs.config: the database password hidden", _hide_run_passwords),
+    (11, "errors.level", _pg("ALTER TABLE errors ADD COLUMN IF NOT EXISTS level varchar(8)")),
 ]
 
 
