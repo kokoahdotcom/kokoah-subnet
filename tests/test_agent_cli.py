@@ -3,11 +3,16 @@ the service checks it; one file per permission; the service key is created once,
 
 import stat
 from pathlib import Path
+from typing import Any
 
 import bittensor as bt
+import httpx
+import pytest
 from bittensor.wallets import verify_message
+from eth_account import Account
 
-from kokoah_subnet.agent.keystore import parse_permit, start_message
+from kokoah_subnet.agent import keystore
+from kokoah_subnet.agent.keystore import encrypt_key, parse_permit, start_message
 from kokoah_subnet.cli import main
 
 MASTER = "0x1c8970117AD600590a21a4d0651865790f7a7253"
@@ -52,3 +57,42 @@ def test_packaging_encrypts_by_default(tmp_path: Path) -> None:
     public = tmp_path / "p.bundle"
     assert main(["agent", "package", str(tmp_path / "agent"), "--out", str(public), "--public"]) == 0
     assert not is_encrypted(public.read_bytes()) and not (tmp_path / "p.bundle.key").exists()
+
+
+def test_release_checks_everything_it_can_before_taking_the_key_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    account = Account.create()
+    secret = bytes(range(32))
+    calls: list[str] = []
+    answer: list[Any] = [encrypt_key(bytes(account.key), account.address, secret)]
+
+    def release(self: Any, address: str, time_ms: int, signature: str) -> bytes:
+        calls.append(address)
+        if isinstance(answer[0], Exception):
+            raise answer[0]
+        return bytes(answer[0])
+
+    monkeypatch.setattr(keystore.KeyService, "release", release)
+    secret_file = tmp_path / "secret.hex"
+    secret_file.write_text(secret.hex())
+    out = tmp_path / "key.txt"
+
+    def run(secret_path: Path = secret_file) -> int:
+        args = ["agent", "release", "--service", "http://svc", "--account", account.address, "--time-ms", "1"]
+        return main([*args, "--signature", "0x00", "--secret-file", str(secret_path), "--out", str(out)])
+
+    out.write_text("keep me")
+    assert run() == 1 and "already exists" in capsys.readouterr().out
+    assert out.read_text() == "keep me" and not calls  # nothing was released
+    out.unlink()
+    (tmp_path / "typo.hex").write_text("not hex")
+    assert run(tmp_path / "typo.hex") == 1 and not calls and not out.exists()
+    refused = httpx.Response(403, json={"detail": "not signed by the account's master address"})
+    answer[0] = httpx.HTTPStatusError("403", request=httpx.Request("POST", "http://svc"), response=refused)
+    assert run() == 1 and "master address" in capsys.readouterr().out and not out.exists()
+    answer[0] = encrypt_key(bytes(account.key), account.address, bytes(range(1, 33)))  # made with another secret
+    assert run() == 1 and "does not open it" in capsys.readouterr().out and not out.exists()
+    answer[0] = encrypt_key(bytes(account.key), account.address, secret)
+    assert run() == 0 and Account.from_key(out.read_text().strip()).address == account.address
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600

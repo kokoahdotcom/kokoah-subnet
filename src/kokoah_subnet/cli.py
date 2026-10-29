@@ -525,6 +525,14 @@ def _miner(args: argparse.Namespace) -> int:
     return 2
 
 
+def _detail(response: Any) -> str:
+    """The reason in a service's error answer (FastAPI's `detail`), else the answer's text."""
+    try:
+        return str(response.json()["detail"])
+    except (ValueError, KeyError, TypeError):
+        return str(response.text)[:300]
+
+
 def _wallet(args: argparse.Namespace) -> Any:
     import bittensor as bt
 
@@ -665,19 +673,49 @@ def _agent(args: argparse.Namespace) -> int:
         print("without it no stored key copy can be restored or released, and with the backups it opens one layer.")
         return 0
     if args.agent_command == "release":
-        from kokoah_subnet.agent.keystore import KeyService, decrypt_key
+        from cryptography.exceptions import InvalidTag
 
+        from kokoah_subnet.agent.keystore import MIN_SECRET_BYTES, KeyService, decrypt_key
+
+        # everything that can be checked here is checked before the release, which cannot be undone
         if args.secret_file is not None:
-            secret = bytes.fromhex(args.secret_file.read_text().strip())
+            try:
+                secret = bytes.fromhex(args.secret_file.read_text().strip())
+            except (OSError, ValueError) as exc:
+                print(f"cannot read a hex secret from {args.secret_file}: {exc}")
+                return 1
+            if len(secret) < MIN_SECRET_BYTES:
+                print(f"{args.secret_file} is not a secret from `agent secret` (it holds {len(secret)} bytes)")
+                return 1
         else:
             from kokoah_subnet.miner_secret import derive_secret
 
             secret = derive_secret(getpass.getpass("password the secret was made from: "), args.master)
-        blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
-        key = decrypt_key(blob, args.account, secret)
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            print(f"{args.out} already exists: choose another --out (nothing was released)")
+            return 1
+        private: bytes | None = None
+        try:
+            blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
+        except httpx.HTTPStatusError as exc:
+            print(f"the service refused the release ({exc.response.status_code}): {_detail(exc.response)}")
+        except (httpx.HTTPError, ValueError, KeyError) as exc:
+            print(f"no usable answer from the service at {args.service}: {exc!r}")
+        else:
+            try:
+                private = decrypt_key(blob, args.account, secret)
+            except (InvalidTag, ValueError):
+                print("the key was released, but this secret does not open it: run the command again with the")
+                print("password or secret file the machine was started with (once 5 minutes have passed, sign a")
+                print("new release message first)")
         with os.fdopen(fd, "w") as f:
-            f.write("0x" + key.hex() + "\n")
+            if private is not None:
+                f.write("0x" + private.hex() + "\n")
+        if private is None:
+            args.out.unlink()
+            return 1
         print(f"the private key of {args.account.lower()} is in {args.out} (mode 600); the agent bonus has ended")
         return 0
     if args.agent_command == "service":
