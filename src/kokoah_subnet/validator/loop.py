@@ -198,23 +198,36 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
         if cfg.wallet_path
         else bt.Wallet(name=cfg.wallet_name, hotkey=cfg.wallet_hotkey)
     )
+    started = False
     try:
-        async with bt.Subtensor(cfg.network) as client:
-            store.start_run(
-                network=cfg.network,
-                netuid=cfg.netuid,
-                validator_hotkey=wallet.hotkey.ss58_address,
-                builder=cfg.builder,
-                burn_hotkey=cfg.burn_hotkey,
-                spec_version=SPEC_VERSION,
-                code_version=__version__,
-                config={k: str(v) for k, v in cfg.__dict__.items() if k not in ("extra",)},
-            )
-            while True:
-                report = await step(cfg, store, hl, client, wallet, params, day=day)
-                log.info("step: %s", json.dumps(report, default=str))
+        while True:
+            try:
+                async with bt.Subtensor(cfg.network) as client:
+                    if not started:
+                        store.start_run(
+                            network=cfg.network,
+                            netuid=cfg.netuid,
+                            validator_hotkey=wallet.hotkey.ss58_address,
+                            builder=cfg.builder,
+                            burn_hotkey=cfg.burn_hotkey,
+                            spec_version=SPEC_VERSION,
+                            code_version=__version__,
+                            config={k: str(v) for k, v in cfg.__dict__.items() if k not in ("extra",)},
+                        )
+                        started = True
+                    while True:
+                        report = await step(cfg, store, hl, client, wallet, params, day=day)
+                        log.info("step: %s", json.dumps(report, default=str))
+                        if once:
+                            return
+                        await asyncio.sleep(cfg.poll_s)
+            except Exception as exc:
+                # a chain error (a dropped connection, a failed read) ends the pass, not the validator: it is
+                # recorded, the connection is opened again and the loop goes on
                 if once:
-                    return
+                    raise
+                log.exception("validator pass failed; reconnecting")
+                store.put_error(None, None, None, "loop", str(exc))
                 await asyncio.sleep(cfg.poll_s)
     finally:
         await hl.close()

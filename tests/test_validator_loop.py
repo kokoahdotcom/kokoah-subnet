@@ -1090,3 +1090,44 @@ async def test_one_linked_account_read_failure_does_not_skip_the_others(tmp_path
     traded = store.execute_sql(f"select counterparty, excluded from fills where tid = 1003 and address = '{addr_a}'")
     assert traded == [{"counterparty": partner, "excluded": "cluster"}]  # a transfer partner: the same cluster
     await hl.close()
+
+
+async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chain connection drops during a pass: the failure is recorded, the connection is opened again and the
+    next pass runs."""
+    import asyncio
+
+    import bittensor as bt
+
+    from kokoah_subnet.validator import loop
+
+    opened: list[str] = []
+
+    class Subtensor:
+        def __init__(self, network: str) -> None:
+            opened.append(network)
+
+        async def __aenter__(self) -> str:
+            return f"client {len(opened)}"
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    passes: list[str] = []
+
+    async def one_pass(cfg: Any, store: Any, hl: Any, client: str, wallet: Any, params: Any, day: Any = None) -> Any:
+        passes.append(client)
+        if len(passes) == 1:
+            raise RuntimeError("websocket closed")
+        raise asyncio.CancelledError  # ends the test's loop
+
+    monkeypatch.setattr(bt, "Subtensor", Subtensor)
+    monkeypatch.setattr(bt, "Wallet", lambda **_: WALLET)
+    monkeypatch.setattr(loop, "step", one_pass)
+    cfg = ValidatorConfig(network="fake", netuid=2, builder="0xbuilder", data_dir=tmp_path, poll_s=0)
+    with pytest.raises(asyncio.CancelledError):
+        await loop.run(cfg)
+    assert passes == ["client 1", "client 2"] and opened == ["fake", "fake"]
+    store = Store(tmp_path / "validator.sqlite")
+    assert store.execute_sql("select message from errors where stage = 'loop'") == [{"message": "websocket closed"}]
+    assert store.execute_sql("select count(*) as n from runs") == [{"n": 1}]
