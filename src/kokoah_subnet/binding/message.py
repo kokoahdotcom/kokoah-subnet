@@ -73,6 +73,8 @@ class Binding:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "address", self.address.lower())
+        if (self.previous_address is None) != (self.previous_signature is None):
+            raise ValueError("a migration needs both the previous address and its signature")
         if self.previous_address is not None:
             object.__setattr__(self, "previous_address", self.previous_address.lower())
 

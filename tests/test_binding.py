@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+import pytest
 from eth_account import Account
 
 from kokoah_subnet.binding import (
@@ -51,6 +52,15 @@ def test_commitment_fields_fit_the_chain_and_round_trip() -> None:
     assert decoded == migration and verify_binding(2, HK, decoded)
     assert decode_binding("not a binding") is None
     assert decode_binding("A" * 116) is None
+
+
+def test_a_migration_carries_both_the_previous_address_and_its_signature() -> None:
+    acct, old = Account.create(), Account.create()
+    sig = sign_binding(acct.key, 2, HK, acct.address)
+    with pytest.raises(ValueError, match="both"):
+        Binding(acct.address, sig, previous_signature=sign_binding(old.key, 2, HK, acct.address))
+    with pytest.raises(ValueError, match="both"):
+        Binding(acct.address, sig, previous_address=old.address)
 
 
 def _pub(hotkey: str, block: int, b: Binding, valid: bool = True) -> PublishedBinding:

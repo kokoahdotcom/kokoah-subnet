@@ -477,7 +477,11 @@ def _miner(args: argparse.Namespace) -> int:
             else bt.Wallet(name=args.wallet, hotkey=args.wallet_hotkey)
         )
         hotkey = wallet.hotkey.ss58_address
-        binding = Binding(args.address, args.signature, args.previous_address, args.previous_signature)
+        try:
+            binding = Binding(args.address, args.signature, args.previous_address, args.previous_signature)
+        except ValueError as exc:
+            print(f"{exc}: give --previous-address and --previous-signature together")
+            return 1
         if not verify_binding(args.netuid, hotkey, binding):
             print(f"the signature does not match the message for hotkey {hotkey}; sign exactly:")
             print(binding_message(args.netuid, hotkey, args.address))
