@@ -119,6 +119,8 @@ def test_the_withdraw_message_needs_a_real_amount(capsys: pytest.CaptureFixture[
         ["--amount", "0"],
         ["--amount", "-5"],
         ["--amount", "1e3"],
+        ["--amount", "\u0662\u0665"],  # digits, but not ones the exchange reads
+        ["--amount", "\uff11\uff10"],
     ):
         assert main(["agent", "message", "withdraw", "--account", account, *amount]) == 1
         assert "--amount" in capsys.readouterr().out

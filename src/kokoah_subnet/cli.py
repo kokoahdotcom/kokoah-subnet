@@ -707,7 +707,7 @@ def _agent(args: argparse.Namespace) -> int:
             import re
             from decimal import Decimal
 
-            if not re.fullmatch(r"\d+(\.\d+)?", args.amount) or Decimal(args.amount) <= 0:
+            if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", args.amount) or Decimal(args.amount) <= 0:
                 print("withdraw needs --amount: a USDC amount such as 100 or 25.5 (it is part of the signed message)")
                 return 1
             text = withdraw_message(args.account, args.amount, t)
