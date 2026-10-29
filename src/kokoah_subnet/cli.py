@@ -781,24 +781,29 @@ def _agent(args: argparse.Namespace) -> int:
         if fd is None:
             return 1
         private: bytes | None = None
-        try:
-            blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
-        except httpx.HTTPStatusError as exc:
-            print(f"the service refused the release ({exc.response.status_code}): {_detail(exc.response)}")
-        except (httpx.HTTPError, ValueError, KeyError) as exc:
-            print(f"no usable answer from the service at {args.service}: {exc!r}")
-        else:
-            try:
-                private = decrypt_key(blob, args.account, secret)
-            except (InvalidTag, ValueError):
-                print("the key was released, but this secret does not open it: run the command again with the")
-                print("password or secret file the machine was started with (once 5 minutes have passed, sign a")
-                print("new release message first)")
-        with os.fdopen(fd, "w") as f:
-            if private is not None:
-                f.write("0x" + private.hex() + "\n")
-        if private is None:
-            args.out.unlink()
+        written = False
+        try:  # whatever happens, the file is closed, and removed unless the key is in it
+            with os.fdopen(fd, "w") as f:
+                try:
+                    blob = KeyService(args.service).release(args.account, args.time_ms, args.signature)
+                except httpx.HTTPStatusError as exc:
+                    print(f"the service refused the release ({exc.response.status_code}): {_detail(exc.response)}")
+                except (httpx.HTTPError, httpx.InvalidURL, ValueError, KeyError) as exc:
+                    print(f"no usable answer from the service at {args.service}: {exc!r}")
+                else:
+                    try:
+                        private = decrypt_key(blob, args.account, secret)
+                    except (InvalidTag, ValueError):
+                        print("the key was released, but this secret does not open it: run the command again with")
+                        print("the password or secret file the machine was started with (once 5 minutes have")
+                        print("passed, sign a new release message first)")
+                if private is not None:
+                    f.write("0x" + private.hex() + "\n")
+            written = private is not None
+        finally:
+            if not written:
+                args.out.unlink(missing_ok=True)
+        if not written:
             return 1
         print(f"the private key of {args.account.lower()} is in {args.out} (mode 600); the agent bonus has ended")
         return 0

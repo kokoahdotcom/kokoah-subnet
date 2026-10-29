@@ -97,6 +97,12 @@ def test_release_checks_everything_it_can_before_taking_the_key_out(
     assert run() == 1 and "master address" in capsys.readouterr().out and not out.exists()
     answer[0] = encrypt_key(bytes(account.key), account.address, bytes(range(1, 33)))  # made with another secret
     assert run() == 1 and "does not open it" in capsys.readouterr().out and not out.exists()
+    answer[0] = httpx.InvalidURL("Invalid port: '[::1'")  # a --service that is not a URL
+    assert run() == 1 and "no usable answer" in capsys.readouterr().out and not out.exists()
+    answer[0] = RuntimeError("unexpected")
+    with pytest.raises(RuntimeError):
+        run()
+    assert not out.exists()  # no empty file left to block the next run
     answer[0] = encrypt_key(bytes(account.key), account.address, secret)
     assert run() == 0 and Account.from_key(out.read_text().strip()).address == account.address
     assert stat.S_IMODE(out.stat().st_mode) == 0o600
