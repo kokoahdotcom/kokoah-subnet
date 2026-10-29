@@ -1,6 +1,7 @@
 """Schema migrations: `create_all` adds new tables but never changes existing columns, so every change to a column
 is a numbered step here, applied once per database (the step number is kept in `meta` under `schema_version`).
-Steps must be idempotent on both PostgreSQL and SQLite (SQLite ignores what it cannot do; it is only for tests)."""
+Steps must be idempotent on both PostgreSQL and SQLite (for tests and trials): a new column is added on both
+(`_add_column`); type changes only on PostgreSQL."""
 
 from __future__ import annotations
 
@@ -17,6 +18,19 @@ def _pg(sql: str) -> Step:
     def run(c: Connection, is_postgres: bool) -> None:
         if is_postgres:
             c.execute(text(sql))
+
+    return run
+
+
+def _add_column(table: str, column: str, sql_type: str) -> Step:
+    """Add a column when the table does not have it yet, on PostgreSQL and on SQLite (which has no `IF NOT EXISTS`
+    for columns)."""
+
+    def run(c: Connection, is_postgres: bool) -> None:
+        if is_postgres:
+            c.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}"))
+        elif column not in {str(row[1]) for row in c.execute(text(f"PRAGMA table_info({table})")).all()}:
+            c.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
 
     return run
 
@@ -110,7 +124,7 @@ STEPS: list[tuple[int, str, Step]] = [
     ),
     (9, "equity.return_known", _pg("ALTER TABLE equity ADD COLUMN IF NOT EXISTS return_known boolean")),
     (10, "runs.config: the database password hidden", _hide_run_passwords),
-    (11, "errors.level", _pg("ALTER TABLE errors ADD COLUMN IF NOT EXISTS level varchar(8)")),
+    (11, "errors.level", _add_column("errors", "level", "varchar(8)")),
 ]
 
 

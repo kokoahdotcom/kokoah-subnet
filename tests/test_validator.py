@@ -310,6 +310,25 @@ def test_migrations_record_their_version(tmp_path: Path) -> None:
     assert again.migrations_applied == []
 
 
+def test_a_sqlite_record_from_before_the_note_level_gets_the_column(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    from kokoah_subnet.validator.store import Store
+
+    path = tmp_path / "trial.sqlite"
+    old = Store(path)
+    with old._engine.begin() as c:  # a trial record from before step 11: no errors.level
+        c.execute(text("ALTER TABLE errors DROP COLUMN level"))
+        c.execute(text("UPDATE meta SET value = '10' WHERE key = 'schema_version'"))
+    old.close()
+    s = Store(path)
+    assert s.migrations_applied[0] == "11: errors.level"
+    s.put_error("2026-10-21", None, None, "loop", "x")
+    s.put_note("2026-10-21", None, None, "builder", "y")
+    assert s.execute_sql("select level from errors order by id") == [{"level": "error"}, {"level": "note"}]
+    assert Store(path).migrations_applied == []
+
+
 def test_daily_equity_from_portfolio() -> None:
     from kokoah_subnet.validator.hyperliquid import daily_equity_from_portfolio
 
