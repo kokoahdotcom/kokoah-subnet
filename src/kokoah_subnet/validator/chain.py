@@ -186,6 +186,14 @@ async def set_weights(client: Any, wallet: Any, netuid: int, uids: Sequence[int]
     return await client.execute(intent, wallet)
 
 
+async def weights_rate_limit(client: Any, netuid: int) -> int | None:
+    """The subnet's `weights_rate_limit` hyperparameter (blocks between weight sets), None when it cannot be read."""
+    try:
+        return int(await client.hyperparameters.weights_rate_limit(netuid))
+    except Exception:  # noqa: BLE001 - the stored value is used instead
+        return None
+
+
 async def subnet_counters(client: Any, netuid: int) -> dict[str, Any]:
     """The subnet's emission counters and pool reserves (raw storage reads; whole units)."""
     from bittensor import storage as st

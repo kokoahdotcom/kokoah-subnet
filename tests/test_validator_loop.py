@@ -19,7 +19,7 @@ from kokoah_subnet.validator.loop import step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
 
-HK_A, HK_B, OWNER, BURN = "hkA", "hkB", "hkOwner", "hkBurn"
+HK_A, HK_B, OWNER, BURN, VAL = "hkA", "hkB", "hkOwner", "hkBurn", "hkValidator"
 EQUITY: dict[str, float] = {}  # address -> recorded account value in the fake history (default $25,000)
 PORTFOLIO_FAILS: set[str] = set()  # addresses whose history read fails
 HISTORY: dict[str, list[dict[str, Any]]] = {}  # address -> extra fills in its own history (not in the builder file)
@@ -51,6 +51,8 @@ class _Neuron:
     coldkey: str
     collateral_min: _Balance | None = None
     block_at_registration: int = 0
+    validator_permit: bool = False
+    last_update: int = 0
 
 
 @dataclass
@@ -78,12 +80,18 @@ class _FakeChain:
         self.executed: list[Any] = []
         self.subnets = self
         self.staking = self
+        self.hyperparameters = self
+        self.rate_limit = 100
         self.neurons = [
             _Neuron(0, OWNER, "ckOwner"),
             _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
             _Neuron(2, HK_B, "ckB", _Balance(10 * 10**9)),
             _Neuron(3, BURN, "ckBurn"),
+            _Neuron(4, VAL, "ckVal", validator_permit=True),
         ]
+
+    async def weights_rate_limit(self, netuid: int, block: int | None = None) -> int:
+        return self.rate_limit
 
     async def block(self) -> int:
         return self._block
@@ -106,6 +114,19 @@ class _FakeChain:
             message: str = "Success"
 
         return R()
+
+
+@dataclass
+class _Hotkey:
+    ss58_address: str
+
+
+@dataclass
+class _Wallet:
+    hotkey: _Hotkey
+
+
+WALLET = _Wallet(_Hotkey(VAL))  # the validator's own hotkey, registered as uid 4
 
 
 def _csv(addr_a: str, addr_b: str) -> str:
@@ -303,16 +324,16 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
 async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     now = DAY_MS / 1000 + 86_400 + 600  # ten minutes into the next UTC day
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == DAY and report["weights"]["ok"]
     assert sorted(report["weights"]["uids"]) == [1, 2]
     assert len(chain.executed) == 1
     # a second pass in the same tempo: nothing scored again, no second submission
-    report = await step(cfg, store, hl, chain, wallet=None, now=now + 60)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
     assert report["scored"] is None and report["weights"] is None
     # a tempo later the same weights are submitted again
     chain._block += 360
-    report = await step(cfg, store, hl, chain, wallet=None, now=now + 120)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 120)
     assert report["weights"]["ok"] and len(chain.executed) == 2
     await hl.close()
 
@@ -322,9 +343,9 @@ async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:
     (tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4").unlink()
     cfg = ValidatorConfig(**{**cfg.__dict__, "builder_base_url": "http://127.0.0.1:9/none"})
     now = DAY_MS / 1000 + 86_400 + 600
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == DAY and ("missing" in report["scored"] or "error" in report["scored"])
-    report = await step(cfg, store, hl, chain, wallet=None, now=now + 60)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
     assert report["scored"] is None  # not retried within the hour
     await hl.close()
 
@@ -392,15 +413,46 @@ async def test_step_survives_a_refused_submission(tmp_path: Path) -> None:
 
     chain.execute = refuse  # type: ignore[method-assign]
     now = DAY_MS / 1000 + 86_400 + 600
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["weights"]["ok"] is False and "rate limit" in report["weights"]["message"]
-    assert store.get_meta("weights:rate_limit") == "100"
+    assert store.get_meta("weights:rate_limit") == "100"  # the subnet's hyperparameter
+    # the next passes do not try again until a tempo has passed since the failure
+    chain._block += 50
+    assert (await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60))["weights"] is None
+    chain.execute = _FakeChain.execute.__get__(chain)  # type: ignore[method-assign]
+    chain._block += 310
+    assert (await step(cfg, store, hl, chain, wallet=WALLET, now=now + 120))["weights"]["ok"] is True
     # the failure is on the record and the loop goes on
     with store._engine.connect() as c:
         from kokoah_subnet.validator import schema as S
 
         rows = c.execute(S.weights_submitted.select()).all()
-    assert len(rows) == 1 and rows[0].ok is False
+    assert [r.ok for r in rows] == [False, True]
+    await hl.close()
+
+
+async def test_an_unregistered_validator_does_not_submit(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    now = DAY_MS / 1000 + 86_400 + 600
+    report = await step(cfg, store, hl, chain, wallet=_Wallet(_Hotkey("hkNotHere")), now=now)
+    assert report["scored"]["day"] == DAY and "is not registered" in report["weights"]["skipped"]
+    assert chain.executed == [] and store.execute_sql("select count(*) as n from weights_submitted") == [{"n": 0}]
+    await hl.close()
+
+
+async def test_catching_up_does_not_submit_each_old_day(tmp_path: Path) -> None:
+    """Two days to catch up: the first scored day is submitted (the first submission), the second one scored in the
+    same tempo is not, until no older day is pending."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    store.put_day("2026-10-20", 1, json.dumps({"weights": {HK_A: 1.0}}))
+    store.set_meta("weights:block", str(chain._block))  # weights were set this tempo
+    store.set_meta("weights:day", "2026-10-20")
+    now = DAY_MS / 1000 + 2 * 86_400 + 600  # 2026-10-21 and 2026-10-22 are pending
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
+    assert report["scored"]["day"] == DAY and report["weights"] is None and chain.executed == []
+    store.put_day("2026-10-22", 3, json.dumps({"weights": {HK_B: 1.0}}))  # caught up
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
+    assert report["weights"]["day"] == "2026-10-22" and report["weights"]["ok"]
     await hl.close()
 
 
@@ -412,7 +464,7 @@ async def test_pending_days_are_scored_in_order_and_a_missing_file_blocks(tmp_pa
     # two days are due (10-20 and 10-21); 10-20 has no file, so the loop waits on it and never jumps to 10-21
     now = DAY_MS / 1000 + 86_400 + 600
     assert pending_days(store, "2026-10-20", "2026-10-21") == ["2026-10-20", "2026-10-21"]
-    report = await step(cfg, store, hl, chain, wallet=None, now=now)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == "2026-10-20" and report["pending_days"] == ["2026-10-20", "2026-10-21"]
     assert store.day("2026-10-21") is None
     await hl.close()
@@ -425,7 +477,7 @@ async def test_days_are_scored_only_in_order(tmp_path: Path) -> None:
     cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-20"})
     now = DAY_MS / 1000 + 86_400 + 600
     # 2026-10-20 is pending: asking for 2026-10-21 first is refused, nothing is scored
-    report = await step(cfg, store, hl, chain, wallet=None, now=now, day=DAY)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now, day=DAY)
     assert report["scored"] == {"day": DAY, "error": f"{DAY} is out of order: the oldest pending day is 2026-10-20"}
     assert store.days_list() == []
     # an unscored day before the latest scored one is never pending again
@@ -437,7 +489,7 @@ async def test_days_are_scored_only_in_order(tmp_path: Path) -> None:
 async def test_nothing_is_scored_before_the_start_day(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-25"})  # after yesterday
-    report = await step(cfg, store, hl, chain, wallet=None, now=DAY_MS / 1000 + 86_400 + 600)
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=DAY_MS / 1000 + 86_400 + 600)
     assert report["scored"] is None and store.days_list() == []
     await hl.close()
 

@@ -16,7 +16,7 @@ from kokoah_subnet import __version__
 from kokoah_subnet.mechanism import DEFAULT, SPEC_VERSION, Params
 
 from .builder_feed import NotPublished, download, sha256
-from .chain import set_weights, snapshot, subnet_counters, weights_by_uid
+from .chain import set_weights, snapshot, subnet_counters, weights_by_uid, weights_rate_limit
 from .collect import ValidatorConfig, collect_and_score
 from .hyperliquid import HyperliquidInfo
 from .store import Store
@@ -58,8 +58,8 @@ async def step(
     now: float | None = None,
     day: str | None = None,
 ) -> dict[str, Any]:
-    """One pass: score the previous day if it is not scored yet (retrying missing files hourly), then submit the
-    latest weights when a tempo has passed since the last submission. Returns what happened, for logs and tests."""
+    """One pass: score the oldest pending day if there is one (retrying missing files hourly), then submit the
+    latest weights when they are due (`submit_weights`). Returns what happened, for logs and tests."""
     report: dict[str, Any] = {"scored": None, "weights": None}
     clock = now if now is not None else time.time()
     pending = pending_days(store, cfg.start_day, previous_utc_day(now))
@@ -133,47 +133,57 @@ async def step(
             report["file_recheck"] = {"day": target, "changed": bool(first and first[0] != digest)}
         except Exception as exc:  # noqa: BLE001 - the recheck is a record, not an input
             log.info("file recheck for %s: %s", target, exc)
-    latest = store.latest_day()
-    if latest is not None:
-        last_block = int(store.get_meta("weights:block", "0") or 0)
-        last_day = store.get_meta("weights:day", "")
-        if snap.block - last_block >= cfg.weights_every_blocks or last_day != latest[0]:
-            fractions = json.loads(latest[2])["weights"]
-            uids, values = weights_by_uid(fractions, snap.uid_of())
-            own_hotkey = getattr(getattr(wallet, "hotkey", None), "ss58_address", None)
-            last_update = next((n.last_update for n in snap.neurons if n.hotkey == own_hotkey), 0)
-            rate_limit = int(store.get_meta("weights:rate_limit", "100") or 100)
-            if uids and snap.block - last_update < rate_limit:
-                report["weights"] = {
-                    "day": latest[0],
-                    "skipped": f"rate limit: set {snap.block - last_update} blocks ago",
-                }
-            elif uids:
-                try:
-                    result = await set_weights(client, wallet, cfg.netuid, uids, values)
-                    ok = bool(getattr(result, "success", True))
-                    message = str(getattr(result, "message", ""))
-                except Exception as exc:  # noqa: BLE001 - a refused submission is recorded and retried next pass
-                    ok, message = False, str(exc)[:500]
-                    if "rate limit is" in message:
-                        try:
-                            rate_limit = int(message.split("rate limit is")[1].split("blocks")[0])
-                            store.set_meta("weights:rate_limit", str(rate_limit))
-                        except (IndexError, ValueError):
-                            pass
-                store.put_weights_submission(latest[0], snap.block, uids, values, ok, message)
-                report["weights"] = {"day": latest[0], "uids": uids, "ok": ok, "message": message}
-                if ok:
-                    store.set_meta("weights:block", str(snap.block))
-                    store.set_meta("weights:day", latest[0])
-            else:
-                report["weights"] = {
-                    "day": latest[0],
-                    "uids": [],
-                    "ok": False,
-                    "message": "no registered hotkeys to weight",
-                }
+    # while older days are still pending, a newly scored day does not trigger a submission of its own: the chain
+    # gets the weights of the latest day once a tempo, not one submission per day caught up
+    caught_up = not pending_days(store, cfg.start_day, previous_utc_day(now))
+    report["weights"] = await submit_weights(cfg, store, client, wallet, snap, caught_up)
     return report
+
+
+async def submit_weights(
+    cfg: ValidatorConfig, store: Store, client: Any, wallet: Any, snap: Any, caught_up: bool = True
+) -> dict[str, Any] | None:
+    """Submit the latest scored day's weights when a tempo has passed since the last accepted submission (or a newer
+    day was scored, once no older day is pending). A failed submission is retried a tempo later, not every pass;
+    nothing is submitted while the chain's rate limit or the validator's own registration would refuse it."""
+    latest = store.latest_day()
+    if latest is None:
+        return None
+    last_block = int(store.get_meta("weights:block", "0") or 0)
+    last_day = store.get_meta("weights:day", "")
+    due = snap.block - last_block >= cfg.weights_every_blocks or (last_day != latest[0] and caught_up)
+    failed_block = int(store.get_meta("weights:failed_block", "0") or 0)
+    if not due or (failed_block and snap.block - failed_block < cfg.weights_every_blocks):
+        return None
+    fractions = json.loads(latest[2])["weights"]
+    uids, values = weights_by_uid(fractions, snap.uid_of())
+    if not uids:
+        return {"day": latest[0], "uids": [], "ok": False, "message": "no registered hotkeys to weight"}
+    own_hotkey = getattr(getattr(wallet, "hotkey", None), "ss58_address", None)
+    me = next((n for n in snap.neurons if n.hotkey == own_hotkey), None)
+    if me is None:
+        return {"day": latest[0], "skipped": f"the validator hotkey {own_hotkey} is not registered on the subnet"}
+    rate_limit = await weights_rate_limit(client, cfg.netuid)
+    if rate_limit is not None:
+        store.set_meta("weights:rate_limit", str(rate_limit))
+    else:
+        rate_limit = int(store.get_meta("weights:rate_limit", "100") or 100)
+    if snap.block - me.last_update < rate_limit:
+        return {"day": latest[0], "skipped": f"rate limit: set {snap.block - me.last_update} blocks ago"}
+    try:
+        result = await set_weights(client, wallet, cfg.netuid, uids, values)
+        ok = bool(getattr(result, "success", False))
+        message = str(getattr(result, "message", ""))
+    except Exception as exc:  # noqa: BLE001 - a refused submission is recorded and retried a tempo later
+        ok, message = False, str(exc)[:500]
+    store.put_weights_submission(latest[0], snap.block, uids, values, ok, message)
+    if ok:
+        store.set_meta("weights:block", str(snap.block))
+        store.set_meta("weights:day", latest[0])
+        store.set_meta("weights:failed_block", "0")
+    else:
+        store.set_meta("weights:failed_block", str(snap.block))
+    return {"day": latest[0], "uids": uids, "ok": ok, "message": message}
 
 
 async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False, day: str | None = None) -> None:
