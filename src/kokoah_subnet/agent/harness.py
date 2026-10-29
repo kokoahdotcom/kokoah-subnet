@@ -230,7 +230,9 @@ class Harness:
                 trigger_px = float(trig["triggerPx"])
                 if not trigger_px > 0:
                     raise ValueError(f"bad trigger price {trig['triggerPx']}")
-                tpsl = "tp" if trig.get("tpsl") == "tp" else "sl"
+                tpsl = trig.get("tpsl")
+                if tpsl not in ("tp", "sl"):  # it picks the trigger's direction: never guessed
+                    raise ValueError(f"tpsl must be tp or sl, not {tpsl!r}")
                 if trigger_fired(is_buy, tpsl, trigger_px, mid):  # it executes now: banded like a limit order
                     self._check_price(px, mid, "the mid")
                 else:  # it rests until the market reaches its trigger, then executes at its limit price

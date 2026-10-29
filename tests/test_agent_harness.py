@@ -234,6 +234,9 @@ def test_triggers_are_banded_where_they_execute(setup: Any) -> None:
         order(True, "sl", 85000, 85000)  # a stop-buy below the market fires at once too
     with pytest.raises(ValueError, match="trigger price"):
         order(False, "sl", 0, 0)
+    for unknown in ("TP", "take_profit", "", None):  # the direction is never guessed
+        with pytest.raises(ValueError, match="tpsl must be tp or sl"):
+            order(False, unknown, 125000, 124000)  # type: ignore[arg-type]
     assert len(fake.posted) == 4
     fired = harness_module.trigger_fired
     assert fired(True, "sl", 100000, 100000) and fired(False, "tp", 100000, 100000)  # at the trigger: it fires

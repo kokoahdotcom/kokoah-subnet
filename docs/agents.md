@@ -20,7 +20,7 @@ The agent talks to the harness over a Unix socket whose path is in `KOKOAH_AGENT
 | Request | What it does |
 |---|---|
 | `POST /info {"request": {...}}` | read-only exchange data: `meta`, `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot`, `fundingHistory`, `predictedFundings`; account queries, answered for the agent's own account: `clearinghouseState`, `openOrders`, `frontendOpenOrders`, `userFills`, `userFillsByTime`, `userFunding`, `orderStatus`, `historicalOrders`, `userFees`, `userRateLimit`, `portfolio`. Nothing else is answered |
-| `POST /call {"method": "order", "params": {"orders": [...], "grouping": "na"}}` | limit or trigger orders: `{"coin", "is_buy", "sz", "limit_px", "order_type": {"limit": {"tif": "Gtc"/"Ioc"/"Alo"}} or {"trigger": {"triggerPx", "isMarket", "tpsl"}}, "reduce_only"}` |
+| `POST /call {"method": "order", "params": {"orders": [...], "grouping": "na"}}` | limit or trigger orders: `{"coin", "is_buy", "sz", "limit_px", "order_type": {"limit": {"tif": "Gtc"/"Ioc"/"Alo"}} or {"trigger": {"triggerPx", "isMarket", "tpsl": "tp"/"sl"}}, "reduce_only"}` |
 | `cancel {"coin", "oid"}`, `cancel_by_cloid {"coin", "cloid"}` | cancels |
 | `update_leverage {"coin", "leverage", "is_cross"}`, `update_isolated_margin {"coin", "amount_usd", "is_buy"}` | margin |
 | `schedule_cancel {"time_ms"}` | a dead man's switch |
