@@ -39,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -107,11 +108,34 @@ def mainnet_setting(value: str) -> bool:
     return value == "mainnet"
 
 
+START_TRIES = 4  # each call to the owner's service at start: a passing network or service fault is tried again
+START_PAUSE_S = 5.0  # doubled after every failed try
+TRANSIENT_STATUS = frozenset({502, 503, 504})
+
+
+def retried[T](what: str, step: Callable[[], T]) -> T:
+    """`step`, tried again after a connection fault or a gateway or unavailable answer; any other refusal is final."""
+    for attempt in range(1, START_TRIES + 1):
+        try:
+            return step()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in TRANSIENT_STATUS or attempt == START_TRIES:
+                raise
+            reason = f"status {exc.response.status_code}"
+        except httpx.TransportError as exc:
+            if attempt == START_TRIES:
+                raise
+            reason = repr(exc)
+        pause = START_PAUSE_S * 2 ** (attempt - 1)
+        log.warning("%s failed (%s); trying again in %.0f s", what, reason, pause)
+        time.sleep(pause)
+    raise AssertionError("unreachable")
+
+
 def fetch_code(service: str, submission: str, bundle_key: str | None, http: httpx.Client) -> tuple[bytes, str]:
     """The submitted bundle, checked against its id and decrypted; returns (plain zip, code fingerprint)."""
-    r = http.get(f"{service.rstrip('/')}/agents/{submission}/bundle")
-    r.raise_for_status()
-    blob = r.content
+    url = f"{service.rstrip('/')}/agents/{submission}/bundle"
+    blob = retried("fetching the submission", lambda: http.get(url).raise_for_status()).content
     if sha256_hex(blob) != submission:
         raise SystemExit("the fetched bundle does not match the submission id")
     if is_encrypted(blob):
@@ -253,8 +277,12 @@ def account_key(
     the miner's start permission)."""
     if restore:
         address = restore.lower()
-        challenge = keys.challenge(address)
-        blob = keys.restore(address, attestor.token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE))
+
+        def restored() -> bytes:  # a fresh token for every try: a token is accepted once
+            challenge = keys.challenge(address)
+            return keys.restore(address, attestor.token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE))
+
+        blob = retried("restoring the key copy", restored)
         key = decrypt_key(blob, address, secret)
         log.info("restored account %s", address)
         return key
@@ -267,7 +295,21 @@ def account_key(
     key = bytes(account.key)
     blob = encrypt_key(key, address, secret)
     token = attestor.token([store_digest(address, master, blob, hotkey, submission, permit)], KEYSTORE_AUDIENCE)
-    keys.store(address, master, hotkey, blob, token, netuid, submission, permit)
+    tried = False
+
+    def stored() -> None:
+        nonlocal tried
+        try:
+            keys.store(address, master, hotkey, blob, token, netuid, submission, permit)
+        except httpx.HTTPStatusError as exc:
+            # an earlier try can have been filed with its answer lost; then the copy is kept under this new address,
+            # which only this machine can file under
+            if not (tried and exc.response.status_code == 409 and keys.kept(address)):
+                raise
+        finally:
+            tried = True
+
+    retried("storing the key copy", stored)
     log.info("created account %s; its encrypted copy is stored", address)
     return key
 

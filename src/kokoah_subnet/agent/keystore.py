@@ -156,6 +156,14 @@ class KeyService:
         }
         self.http.put(self._url(address), json=body).raise_for_status()
 
+    def kept(self, address: str) -> bool:
+        """Whether the service keeps a copy for this account."""
+        r = self.http.get(self._url(address, "/challenge"))
+        if r.status_code == 404:
+            return False
+        r.raise_for_status()
+        return True
+
     def challenge(self, address: str) -> str:
         r = self.http.get(self._url(address, "/challenge"))
         r.raise_for_status()

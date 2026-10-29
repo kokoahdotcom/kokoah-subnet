@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from uploads import upload
 
 from kokoah_subnet.agent import service as service_module
+from kokoah_subnet.agent import supervisor as supervisor_module
 from kokoah_subnet.agent.attest import KEYSTORE_AUDIENCE, DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import package, sha256_hex
 from kokoah_subnet.agent.harness import Harness, HarnessConfig
@@ -401,3 +402,68 @@ def test_the_machine_takes_only_real_addresses_and_a_known_network(world: dict[s
     body: dict[str, Any] = {"blob": base64.b64encode(b"KAK1" + bytes(60)).decode(), "master": "nope", "token": "x"}
     body |= {"hotkey": ALICE.ss58_address, "netuid": NETUID, "submission": world["submission"], "permit": p}
     assert world["svc"].put(f"/key-store/{plain}", json=body).status_code == 400
+
+
+class Flaky:
+    """The service as a machine reaches it, with the faults listed per method: "down" (no connection), "lost" (the
+    service acts but its answer never arrives) or a status code answered by a gateway in between."""
+
+    def __init__(self, client: TestClient, faults: dict[str, list[Any]]) -> None:
+        self.client, self.faults = client, faults
+        self.calls: list[str] = []
+
+    def request(self, method: str, url: str, **kw: Any) -> httpx.Response:
+        self.calls.append(method)
+        waiting = self.faults.get(method)
+        fault = waiting.pop(0) if waiting else None
+        if fault == "down":
+            raise httpx.ConnectError("no route")
+        if fault == "lost":
+            self.client.request(method, url, **kw)
+            raise httpx.ReadError("connection reset")
+        if isinstance(fault, int):
+            return httpx.Response(fault, request=httpx.Request(method, url))
+        answer: httpx.Response = self.client.request(method, url, **kw)
+        return answer
+
+    def get(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("GET", url, **kw)
+
+    def put(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("PUT", url, **kw)
+
+    def post(self, url: str, **kw: Any) -> httpx.Response:
+        return self.request("POST", url, **kw)
+
+
+def test_a_starting_machine_gets_past_a_passing_fault(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import cast
+
+    from kokoah_subnet.agent.supervisor import fetch_code
+
+    monkeypatch.setattr(supervisor_module, "START_PAUSE_S", 0.0)
+
+    def keys(**faults: list[Any]) -> tuple[KeyService, Flaky]:
+        flaky = Flaky(world["svc"], faults)
+        return KeyService("http://svc", cast(httpx.Client, flaky)), flaky
+
+    master = Account.create()
+    down_once, _ = keys(PUT=["down"])
+    key = start(world, master, keys=down_once)
+    address = Account.from_key(key).address.lower()
+    lost, flaky = keys(PUT=["lost"])  # filed, but the answer was lost: the next try finds the copy kept
+    other = Account.from_key(start(world, master, keys=lost)).address.lower()
+    assert flaky.calls == ["PUT", "PUT", "GET"] and world["keys"].kept(other)
+    busy, flaky = keys(GET=[503], POST=[502])
+    assert start(world, master, address, keys=busy) == key
+    refused, flaky = keys(PUT=[403])
+    with pytest.raises(httpx.HTTPStatusError):
+        start(world, master, keys=refused)
+    assert flaky.calls == ["PUT"]  # a refusal is final
+    always_down, flaky = keys(GET=["down"] * 9)
+    with pytest.raises(httpx.ConnectError):
+        start(world, master, address, keys=always_down)
+    assert flaky.calls == ["GET"] * supervisor_module.START_TRIES
+    bundle = Flaky(world["svc"], {"GET": [504]})
+    plain, _ = fetch_code("http://svc", world["submission"], None, cast(httpx.Client, bundle))
+    assert plain[:2] == b"PK" and bundle.calls == ["GET", "GET"]
