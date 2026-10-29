@@ -130,8 +130,9 @@ def test_attestation_and_binding_speak_for_this_account(setup: Any) -> None:
     b = h.binding()
     assert b["message"] == binding_message(2, "5Hk", h.address)
     assert recover_signer(2, "5Hk", h.address, b["signature"]) == h.address
-    with pytest.raises(ValueError):
-        h.attestation("not hex!")
+    for wrong in ("not hex!", "cd" * 31, "cd" * 33, "cd" * 8):  # a validator's challenge is 32 random bytes
+        with pytest.raises(ValueError, match="64 hex"):
+            h.attestation(wrong)
 
 
 def test_the_two_interfaces(setup: Any) -> None:

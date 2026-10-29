@@ -14,9 +14,9 @@ To the agent (Unix socket, `agent_app`):
   GET /address.
 
 To the world (TCP, `public_app`):
-  GET /status, GET /binding (the subnet binding line signed by the account), GET /attestation?challenge=<hex>
-  (a fresh token with the challenge and the binding digest as nonces), POST /withdraw and POST /stop (both
-  signed by the miner's own address; withdrawals go only to that address).
+  GET /status, GET /binding (the subnet binding line signed by the account), GET /attestation?challenge=<64 hex>
+  (a fresh token with the challenge and the binding digest as nonces, the validators' 32 random bytes), POST
+  /withdraw and POST /stop (both signed by the miner's own address; withdrawals go only to that address).
 """
 
 from __future__ import annotations
@@ -304,8 +304,8 @@ class Harness:
         return {"address": self.address, "message": message, "signature": "0x" + bytes(signed.signature).hex()}
 
     def attestation(self, challenge: str) -> dict[str, Any]:
-        if not (16 <= len(challenge) <= 74) or any(c not in "0123456789abcdef" for c in challenge.lower()):
-            raise ValueError("the challenge must be 16 to 74 hex characters")
+        if len(challenge) != 64 or any(c not in "0123456789abcdef" for c in challenge.lower()):
+            raise ValueError("the challenge must be 64 hex characters")
         bind = binding_digest(self.config.netuid, self.config.hotkey, self.address, self.config.code_sha256)
         return {
             "token": self.attestor.token([challenge.lower(), bind]),
