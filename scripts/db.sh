@@ -51,9 +51,15 @@ case "${1:-status}" in
     echo "the database did not answer within 60 s" >&2; exit 1 ;;
   stop) docker stop "$NAME" >/dev/null 2>&1 && echo "stopped $NAME" >&2 || echo "$NAME was not running" >&2 ;;
   status) docker ps -a --filter "name=^$NAME$" --format '{{.Names}} {{.Status}}' ;;
-  psql) ensure_env; docker exec -it "$NAME" psql -U "$USER" -d "$DB" ;;
+  psql) docker exec -it "$NAME" psql -U "$USER" -d "$DB" ;;
   url) ensure_env; echo "$KOKOAH_SUBNET_DB_URL" ;;
-  backup) ensure_env; docker exec "$NAME" pg_dump -U "$USER" -d "${3:-$DB}" -Fc > "${2:?output file}"; echo "wrote $2" >&2 ;;
+  backup)
+    # written beside the target and renamed once complete, so a failed dump never replaces or poses as a good one
+    out="${2:?output file}"; tmp="$out.tmp.$$"
+    trap 'rm -f "$tmp"' EXIT
+    docker exec "$NAME" pg_dump -U "$USER" -d "${3:-$DB}" -Fc > "$tmp"
+    mv -f "$tmp" "$out"; trap - EXIT
+    echo "wrote $out" >&2 ;;
   create-db)
     ensure_env; new="${2:?database name}"
     [[ "$new" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "bad database name" >&2; exit 1; }
