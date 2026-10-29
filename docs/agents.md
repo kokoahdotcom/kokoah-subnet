@@ -174,13 +174,14 @@ the harness approves Kokoah's builder fee as soon as the account is funded, and 
 
 ```bash
 uv run kokoah-subnet agent message withdraw --account <account> --amount 100
-# sign the printed message with your own (MASTER) address, then:
+# sign the printed message with your own (MASTER) address, then send the printed body before the printed deadline:
 curl -X POST http://<machine>:8080/withdraw -H 'content-type: application/json' \
   -d '{"time_ms": <time_ms>, "signature": "<0x signature>", "amount_usd": "100"}'
 ```
 
 Withdrawals go only to the master address. `agent message stop` and `POST /stop` cancel all open orders and stop the
-agent (positions stay open: close them first with the agent, or let it do so before you stop it).
+agent (positions stay open: close them first with the agent, or let it do so before you stop it). A signed message
+is good for 5 minutes from its time and works once; for another withdrawal or stop, print a new message.
 
 ## What the validators check every day
 
