@@ -595,16 +595,39 @@ def _agent(args: argparse.Namespace) -> int:
 
         from kokoah_subnet.binding import AgentRef, Binding, publish_binding, verify_binding
 
+        url = urlparse(args.endpoint.strip())
+        try:
+            port = url.port or 0
+        except ValueError:
+            port = 0
+        host = url.hostname or ""
+        if url.scheme != "http" or not host or not 0 < port < 65536 or url.path.strip("/") or url.query:
+            print(f"--endpoint {args.endpoint} is not http://<host>:<port>: validators reach the machine over plain")
+            print("http at exactly the host and port you publish (the harness listens on port 8080)")
+            return 1
+        if len(host.encode()) > 51:
+            print(f"--endpoint {args.endpoint}: the host name is longer than the binding holds (51 bytes)")
+            return 1
+        base = f"http://{url.netloc}"
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address
-        status = httpx.get(f"{args.endpoint.rstrip('/')}/status", timeout=20).json()
-        signed = httpx.get(f"{args.endpoint.rstrip('/')}/binding", timeout=20).json()
-        if status["hotkey"] != hotkey or int(status["netuid"]) != args.netuid:
-            print(f"the machine is set up for hotkey {status['hotkey']} on netuid {status['netuid']}")
+        try:
+            status = httpx.get(f"{base}/status", timeout=20).raise_for_status().json()
+            signed = httpx.get(f"{base}/binding", timeout=20).raise_for_status().json()
+            code, machine_hotkey, machine_netuid = str(status["code_sha256"]), status["hotkey"], int(status["netuid"])
+            address, signature = str(signed["address"]), str(signed["signature"])
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            print(f"cannot read the machine's status and binding at {base}: {exc!r}")
             return 1
-        url = urlparse(args.endpoint)
-        ref = AgentRef(status["code_sha256"], url.hostname or "", url.port or 80)
-        binding = Binding(signed["address"], signed["signature"], agent=ref)
+        if machine_hotkey != hotkey or machine_netuid != args.netuid:
+            print(f"the machine is set up for hotkey {machine_hotkey} on netuid {machine_netuid}")
+            return 1
+        try:
+            ref = AgentRef(code, host, port)
+            binding = Binding(address, signature, agent=ref)
+        except ValueError as exc:
+            print(f"the machine's answer cannot be published: {exc}")
+            return 1
         if not verify_binding(args.netuid, hotkey, binding):
             print("the machine's binding signature does not verify")
             return 1

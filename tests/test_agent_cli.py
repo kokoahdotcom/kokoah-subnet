@@ -130,3 +130,31 @@ def test_every_agent_message_shows_its_deadline(capsys: pytest.CaptureFixture[st
         assert first["deadline_ms"] - first["time_ms"] == 300_000  # what the harness and the service accept
         deadline = datetime.fromtimestamp(first["deadline_ms"] / 1000, UTC).strftime("%H:%M:%S UTC")
         assert f"before {deadline}" in printed
+
+
+def test_agent_bind_takes_only_an_http_endpoint_with_its_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wallet = bt.Wallet(name="miner", hotkey="hk", path=str(tmp_path / "wallets"))
+    wallet.create_new_hotkey(use_password=False, overwrite=True, suppress=True)
+    asked: list[str] = []
+
+    def get(url: str, **kw: Any) -> httpx.Response:
+        asked.append(url)
+        if "203.0.113.9" in url:
+            raise httpx.ConnectError("refused")
+        answer = {"hotkey": "5Other", "netuid": 385, "code_sha256": "ab" * 32, "address": "0x" + "12" * 20}
+        return httpx.Response(200, json={**answer, "signature": "0x00"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    def bind(endpoint: str) -> int:
+        args = ["agent", "bind", "--netuid", "385", "--endpoint", endpoint, "--wallet", "miner"]
+        return main([*args, "--wallet-hotkey", "hk", "--wallet-path", str(tmp_path / "wallets")])
+
+    for wrong in ("203.0.113.5:8080", "https://203.0.113.5", "http://203.0.113.5", "http://203.0.113.5:99999"):
+        assert bind(wrong) == 1 and "http://<host>:<port>" in capsys.readouterr().out
+    assert not asked  # nothing was contacted
+    assert bind("http://203.0.113.9:8080") == 1 and "cannot read the machine" in capsys.readouterr().out
+    assert bind("http://203.0.113.5:8080/") == 1 and "set up for hotkey 5Other" in capsys.readouterr().out
+    assert asked[-1] == "http://203.0.113.5:8080/binding"
