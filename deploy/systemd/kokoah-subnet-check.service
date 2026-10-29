@@ -1,6 +1,7 @@
 [Unit]
 Description=Kokoah subnet health check (alerts only on a problem)
 After=network-online.target docker.service
+Wants=network-online.target
 
 [Service]
 Type=oneshot
@@ -10,10 +11,14 @@ Environment=HOME=/var/lib/kokoah-subnet
 EnvironmentFile=/etc/kokoah-subnet/db.env
 EnvironmentFile=-/etc/kokoah-subnet/alert.env
 WorkingDirectory=/var/lib/kokoah-subnet
+# exits 1 on a problem, so a problem also shows as a failed unit (`systemctl --failed`)
 ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet validator check --only-problems
-SuccessExitStatus=1
+TimeoutStartSec=10min
 MemoryMax=512M
+TasksMax=64
 ReadWritePaths=/var/lib/kokoah-subnet
+# the health check never needs the validator's hotkey
+InaccessiblePaths=-/var/lib/kokoah-subnet/wallets
 StandardOutput=append:/var/log/kokoah-subnet/check.log
 StandardError=append:/var/log/kokoah-subnet/check.log
 NoNewPrivileges=yes
@@ -35,4 +40,5 @@ LockPersonality=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
+RemoveIPC=yes
 UMask=0077

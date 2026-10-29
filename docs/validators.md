@@ -184,7 +184,9 @@ request limit. Publishing lets miners and other validators compare figures with 
 - **Health check.** `uv run kokoah-subnet validator check` prints the latest scored day, the last weights, the last
   epoch, errors in the last 24 hours and the builder-earnings check, and exits 1 on a problem. The
   `kokoah-subnet-check.timer` runs it hourly and posts to a webhook only when something is wrong: put
-  `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `/etc/kokoah-subnet/alert.env`.
+  `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `/etc/kokoah-subnet/alert.env`. A run that finds a
+  problem also leaves the unit failed, so `systemctl --failed` and any monitor of systemd units show it; a webhook
+  that refuses the report is noted in `/var/log/kokoah-subnet/check.log`.
 - **The earnings check.** The builder fees credited to miners must never exceed what Hyperliquid reports the builder
   has earned; the health check alarms if they do.
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source

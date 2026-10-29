@@ -7,6 +7,7 @@ report to a webhook (`KOKOAH_SUBNET_ALERT_WEBHOOK`, a Discord- or Slack-style JS
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -107,6 +108,6 @@ def post_webhook(url: str, report: dict[str, Any], name: str = "kokoah-subnet va
 def main_report(store: Store, webhook: str | None, only_problems: bool) -> int:
     report = check(store)
     print(json.dumps(report, indent=1, default=str))
-    if webhook and (report["problems"] or not only_problems):
-        post_webhook(webhook, report)
+    if webhook and (report["problems"] or not only_problems) and not post_webhook(webhook, report):
+        print("warning: the alert webhook did not accept the report", file=sys.stderr)
     return 0 if report["ok"] else 1
