@@ -119,7 +119,8 @@ class Harness:
         self.started_at = int(time.time())
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
-        self._last_signed_request = 0
+        self._signed_lock = threading.Lock()
+        self._signed: dict[str, int] = {}  # every master-signed message accepted within the window, with its time
         self._assets: dict[str, tuple[int, int]] = {}  # coin -> (asset id, size decimals)
         self.builder_approved = False
         self.allow_writes = allow_writes  # False only in development runs: nothing is sent to the exchange
@@ -329,9 +330,11 @@ class Harness:
         }
 
     def _check_master(self, message: str, signature: str, time_ms: int) -> None:
+        """A request signed by the miner's own address within the window, accepted once (each signed message is its
+        own request: a stop and a withdrawal signed in the same millisecond are two)."""
         now = int(time.time() * 1000)
-        if abs(now - time_ms) > SIGNED_REQUEST_WINDOW_MS or time_ms <= self._last_signed_request:
-            raise PermissionError("stale or replayed request")
+        if abs(now - time_ms) > SIGNED_REQUEST_WINDOW_MS:
+            raise PermissionError("stale request: sign a new message")
         try:
             raw = bytes.fromhex(signature.removeprefix("0x"))
             signer = Account.recover_message(encode_defunct(text=message), signature=raw)
@@ -339,7 +342,13 @@ class Harness:
             raise PermissionError("not signed by the miner's address") from exc
         if str(signer).lower() != self.config.master.lower():
             raise PermissionError("not signed by the miner's address")
-        self._last_signed_request = time_ms
+        with self._signed_lock:  # checked and recorded together: the same request sent twice at once acts once
+            for seen, t in list(self._signed.items()):
+                if now - t > SIGNED_REQUEST_WINDOW_MS:
+                    del self._signed[seen]
+            if message in self._signed:
+                raise PermissionError("replayed request")
+            self._signed[message] = time_ms
 
     def withdraw(self, amount_usd: str, time_ms: int, signature: str) -> Any:
         message = withdraw_message(self.address, amount_usd, time_ms)

@@ -248,3 +248,39 @@ def test_signed_requests_read_the_signature_with_or_without_0x(setup: Any) -> No
     for unreadable in ("0x" + "00" * 64, "0x" + "00" * 65, "zz"):
         refused = public.post("/stop", json={"time_ms": t + 1, "signature": unreadable})
         assert refused.status_code == 403 and "miner" in refused.json()["detail"]
+
+
+def test_each_signed_request_acts_once(setup: Any) -> None:
+    import threading
+
+    h, fake, master, _ = setup
+    t = int(time.time() * 1000)
+
+    def signed(text: str) -> str:
+        return "0x" + bytes(master.sign_message(encode_defunct(text=text)).signature).hex()
+
+    stop_sig, withdraw_sig = signed(stop_message(h.address, t)), signed(withdraw_message(h.address, "3", t))
+    h.stop(t, stop_sig)  # a stop and a withdrawal signed in the same millisecond are two requests
+    h.withdraw("3", t, withdraw_sig)
+    h.withdraw("4", t - 1000, signed(withdraw_message(h.address, "4", t - 1000)))  # signed earlier, sent later
+    with pytest.raises(PermissionError, match="replayed"):
+        h.stop(t, stop_sig)
+    with pytest.raises(PermissionError, match="replayed"):
+        h.withdraw("3", t, withdraw_sig)
+    count = len(fake.posted)
+    twice = signed(withdraw_message(h.address, "7", t + 1))
+    results: list[str] = []
+
+    def send() -> None:
+        try:
+            h.withdraw("7", t + 1, twice)
+            results.append("sent")
+        except PermissionError:
+            results.append("refused")
+
+    threads = [threading.Thread(target=send) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert sorted(results) == ["refused"] * 7 + ["sent"] and len(fake.posted) == count + 1
