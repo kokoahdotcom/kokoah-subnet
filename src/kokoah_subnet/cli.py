@@ -189,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--tao-usd-fallback", type=float, default=0.0, help="TAO/USD when no TAO perp is listed")
     vrun.add_argument("--poll-seconds", type=int, default=60)
     vrun.add_argument("--once", action="store_true", help="one pass, then exit")
-    vrun.add_argument("--day", default=None, help="score this day instead of yesterday")
+    vrun.add_argument("--day", default=None, help="score this day (YYYY-MM-DD; only the oldest pending day)")
     vrun.add_argument(
         "--agent-service",
         default=os.environ.get("KOKOAH_AGENT_SERVICE", ""),
@@ -369,7 +369,11 @@ def _validator(args: argparse.Namespace) -> int:
         cfg = ValidatorConfig(
             network="", netuid=0, builder="", data_dir=args.data_dir or Path("."), burn_hotkey=args.burn_hotkey
         )
-        print(skip_day(store, args.day, day_index(cfg, args.day, DEFAULT), args.burn_hotkey, args.reason, DEFAULT))
+        try:
+            print(skip_day(store, args.day, day_index(cfg, args.day, DEFAULT), args.burn_hotkey, args.reason, DEFAULT))
+        except ValueError as exc:
+            print(exc)
+            return 1
         return 0
     if args.validator_command == "check":
         from kokoah_subnet.validator.health import main_report

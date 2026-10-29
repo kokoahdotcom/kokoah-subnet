@@ -233,4 +233,4 @@ sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 | "no TAO perpetual" | Pass `--tao-usd-fallback <price>`. |
 | No verified agents | `--agent-service https://api.kokoah.com/miners` must be set and reachable. |
 | Different figures from another validator | Compare the `/days/<day>` artifacts, and check that both run the same release. |
-| The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`. |
+| The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`. Days are scored and closed in order only: the day must be the one after the latest scored day. |

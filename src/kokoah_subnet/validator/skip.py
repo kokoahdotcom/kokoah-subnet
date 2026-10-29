@@ -13,8 +13,13 @@ from .store import Store
 
 
 def skip_day(store: Store, day: str, day_index: int, burn_hotkey: str, reason: str, params: Params) -> str:
+    """Close `day`; refused (ValueError) unless it is the day after the latest scored day, so the states always
+    advance in order."""
     if store.day(day) is not None:
         return f"{day} is already scored"
+    days = store.days_list()
+    if days and day != Store.day_after(days[-1]):
+        raise ValueError(f"{day} is out of order: the next day to score or close is {Store.day_after(days[-1])}")
     states = store.states_before(day)
     advanced = {hk: advance(s, DayFees.zero(), 0.0, 0.0, params, day_index=day_index) for hk, s in states.items()}
     store.put_states(advanced, day=day)

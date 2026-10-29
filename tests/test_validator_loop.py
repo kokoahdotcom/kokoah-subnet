@@ -418,6 +418,41 @@ async def test_pending_days_are_scored_in_order_and_a_missing_file_blocks(tmp_pa
     await hl.close()
 
 
+async def test_days_are_scored_only_in_order(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.loop import pending_days
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-20"})
+    now = DAY_MS / 1000 + 86_400 + 600
+    # 2026-10-20 is pending: asking for 2026-10-21 first is refused, nothing is scored
+    report = await step(cfg, store, hl, chain, wallet=None, now=now, day=DAY)
+    assert report["scored"] == {"day": DAY, "error": f"{DAY} is out of order: the oldest pending day is 2026-10-20"}
+    assert store.days_list() == []
+    # an unscored day before the latest scored one is never pending again
+    store.put_day(DAY, 2, "{}")
+    assert pending_days(store, "2026-10-19", "2026-10-23") == ["2026-10-22", "2026-10-23"]
+    await hl.close()
+
+
+async def test_nothing_is_scored_before_the_start_day(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "start_day": "2026-10-25"})  # after yesterday
+    report = await step(cfg, store, hl, chain, wallet=None, now=DAY_MS / 1000 + 86_400 + 600)
+    assert report["scored"] is None and store.days_list() == []
+    await hl.close()
+
+
+def test_skip_day_refuses_a_day_out_of_order(tmp_path: Path) -> None:
+    from kokoah_subnet.validator.skip import skip_day
+
+    store = Store(tmp_path / "o.sqlite")
+    store.put_day("2026-10-20", 1, "{}")
+    for day in ("2026-10-19", "2026-10-22"):
+        with pytest.raises(ValueError, match="the next day to score or close is 2026-10-21"):
+            skip_day(store, day, 3, BURN, "never published", DEFAULT)
+    assert "closed as skipped" in skip_day(store, "2026-10-21", 2, BURN, "never published", DEFAULT)
+
+
 def test_skip_day_advances_states_with_zero_credit(tmp_path: Path) -> None:
     from kokoah_subnet.mechanism import MinerState
     from kokoah_subnet.validator.skip import skip_day

@@ -285,8 +285,11 @@ class Store:
 
     @staticmethod
     def day_before(day: str) -> str:
-        d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) - timedelta(days=1)
-        return d.strftime("%Y-%m-%d")
+        return _days_before(day, 1)
+
+    @staticmethod
+    def day_after(day: str) -> str:
+        return _next_day(day)
 
     def equity_series(self, address: str, days: int) -> list[tuple[str, float, float]]:
         """Up to `days` most recent (day, value, flows + off-market transfers), oldest first."""

@@ -30,9 +30,13 @@ def previous_utc_day(now: float | None = None) -> str:
 
 
 def pending_days(store: Store, start_day: str, last_day: str) -> list[str]:
-    """Days from `start_day` to `last_day` not scored yet, oldest first. Scoring must stay in order (the smoothing
-    carries from day to day), so the loop takes the first one and waits for its file rather than skipping ahead."""
-    scored = set(store.days_list())
+    """Days from `start_day` to `last_day` not scored yet, oldest first, and never a day before the latest scored
+    day. Scoring must stay in order (the smoothing carries from day to day), so the loop takes the first one and
+    waits for its file rather than skipping ahead."""
+    days = store.days_list()
+    scored = set(days)
+    if days:
+        start_day = max(start_day, Store.day_after(days[-1]))
     d = datetime.strptime(start_day, "%Y-%m-%d").replace(tzinfo=UTC)
     end = datetime.strptime(last_day, "%Y-%m-%d").replace(tzinfo=UTC)
     out = []
@@ -58,14 +62,20 @@ async def step(
     latest weights when a tempo has passed since the last submission. Returns what happened, for logs and tests."""
     report: dict[str, Any] = {"scored": None, "weights": None}
     clock = now if now is not None else time.time()
+    pending = pending_days(store, cfg.start_day, previous_utc_day(now))
+    in_order = True
     if day is not None:
         target = day
+        if store.day(day) is None and (not pending or day != pending[0]):
+            # a day out of order would score against later rows and replace the states the next day starts from
+            in_order = False
+            oldest = f"the oldest pending day is {pending[0]}" if pending else "no completed day is pending"
+            report["scored"] = {"day": day, "error": f"{day} is out of order: {oldest}"}
     else:
-        pending = pending_days(store, cfg.start_day, previous_utc_day(now))
         target = pending[0] if pending else previous_utc_day(now)
         if len(pending) > 1:
             report["pending_days"] = pending
-    if store.day(target) is None:
+    if store.day(target) is None and in_order and target >= cfg.start_day:
         last_try = float(store.get_meta(f"attempt:{target}", "0") or 0)
         if clock - last_try >= cfg.retry_missing_s:
             store.set_meta(f"attempt:{target}", str(clock))
