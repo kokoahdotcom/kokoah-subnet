@@ -604,7 +604,7 @@ async def collect_and_score(
             MinerInputs(
                 hotkey=hk,
                 address=address,
-                returns=store.returns(address, max(params.confidence_days, params.entry_days)),
+                returns=store.returns(address, max(params.confidence_days, params.entry_days), day),
                 mean_equity_usd=store.mean_equity(address, params.gate_days, day),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),
@@ -615,7 +615,7 @@ async def collect_and_score(
                 avg_equity_usd=avg.value,
                 registered_block=registered_block.get(hk),
                 credited_notional_prior_usd=store.credited_notional(hk, day, params.skill_volume_days - 1),
-                dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days)),
+                dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days), day),
                 agent_verified=bool(agent_status.get(hk, False)),
                 record_start=store.first_scored_day(address, day) or day,
             )
@@ -654,7 +654,7 @@ async def collect_and_score(
         states=states,
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
-        penalized_until=store.penalties(day_index(cfg, day, params)),
+        penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)
     for r in result.records:

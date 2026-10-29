@@ -180,3 +180,20 @@ def test_one_missing_day_does_not_shorten_the_return_series(tmp_path: Path) -> N
     assert list(dated) == sorted(dated)
     assert dated[days[-1]] == pytest.approx(1.0 / 1198.0)
     assert len(s.dated_returns("0xA", 500)) == 195  # every known return: 199 pairs of days, four broken
+
+
+def test_window_reads_stop_at_the_scored_day(tmp_path: Path) -> None:
+    """Scoring 2026-10-03 again, with later days already stored: their returns, activity and reports are not read."""
+    s = Store(tmp_path / "w.sqlite")
+    for i, value in enumerate((1000.0, 1100.0, 1210.0, 600.0, 300.0)):
+        day = f"2026-10-{i + 1:02d}"
+        s.put_equity("0xA", day, value, 0.0)
+        s.put_activity("0xA", day, 1, 1, 10.0)
+    assert s.returns("0xA", 90, "2026-10-03") == pytest.approx([0.1, 0.1])
+    assert list(s.dated_returns("0xA", 90, "2026-10-03")) == ["2026-10-02", "2026-10-03"]
+    assert len(s.returns("0xA", 90)) == 4
+    assert s.activity_window("0xA", 30, "2026-10-03") == (3, 3, 30.0)
+    assert s.mean_equity("0xA", 30, "2026-10-03") == pytest.approx(1103.33, abs=0.01)
+    s.put_penalty("0xB", 40, "2026-10-02", "hk", "mirrored")
+    s.put_penalty("0xC", 40, "2026-10-03", "hk", "mirrored")
+    assert s.penalties(14, before_day="2026-10-03") == {"0xb": 40} and set(s.penalties(14)) == {"0xb", "0xc"}

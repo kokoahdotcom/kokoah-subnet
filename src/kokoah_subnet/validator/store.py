@@ -249,31 +249,30 @@ class Store:
             ).scalar()
         return str(first) if first is not None else None
 
-    def dated_returns(self, address: str, days: int) -> dict[str, float]:
-        """The last `days` known daily returns by day, oldest first (the same series as `returns`). A return needs two
-        consecutive stored days whose values are known; a day without one is skipped and the series reaches further
-        back, over at most the last 2 x `days` + 1 stored days, so one missing day never shortens the window."""
-        series = self._equity_rows(address, 2 * days + 1)
+    def dated_returns(self, address: str, days: int, through: str | None = None) -> dict[str, float]:
+        """The last `days` known daily returns by day up to `through` (default: all stored days), oldest first (the
+        same series as `returns`). A return needs two consecutive stored days whose values are known; a day without
+        one is skipped and the series reaches further back, over at most the last 2 x `days` + 1 stored days, so one
+        missing day never shortens the window."""
+        series = self._equity_rows(address, 2 * days + 1, through)
         out: dict[str, float] = {}
         for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
             if k0 and k1 and e0 > 0 and _next_day(d0) == d1:
                 out[d1] = (e1 - e0 - f1) / e0
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
-    def _equity_rows(self, address: str, days: int) -> list[tuple[str, float, float, bool]]:
+    def _equity_rows(self, address: str, days: int, through: str | None = None) -> list[tuple[str, float, float, bool]]:
+        query = select(
+            S.equity.c.day,
+            S.equity.c.value,
+            S.equity.c.flows,
+            S.equity.c.offmarket_pnl,
+            S.equity.c.return_known,
+        ).where(S.equity.c.address == address.lower())
+        if through is not None:
+            query = query.where(S.equity.c.day <= through)
         with self._engine.connect() as c:
-            rows = c.execute(
-                select(
-                    S.equity.c.day,
-                    S.equity.c.value,
-                    S.equity.c.flows,
-                    S.equity.c.offmarket_pnl,
-                    S.equity.c.return_known,
-                )
-                .where(S.equity.c.address == address.lower())
-                .order_by(S.equity.c.day.desc())
-                .limit(days)
-            ).all()
+            rows = c.execute(query.order_by(S.equity.c.day.desc()).limit(days)).all()
         return [(str(d), float(v), float(f) + float(o or 0.0), k is not False) for d, v, f, o, k in reversed(rows)]
 
     def equity_value(self, address: str, day: str) -> float | None:
@@ -300,10 +299,10 @@ class Store:
             ).all()
         return [(str(d), float(v), float(f) + float(o or 0.0)) for d, v, f, o in reversed(rows)]
 
-    def returns(self, address: str, days: int) -> list[float]:
-        """The last `days` known daily returns, oldest first, with deposits, withdrawals and money moved in through
-        off-market fills removed."""
-        return list(self.dated_returns(address, days).values())
+    def returns(self, address: str, days: int, through: str | None = None) -> list[float]:
+        """The last `days` known daily returns up to `through`, oldest first, with deposits, withdrawals and money
+        moved in through off-market fills removed."""
+        return list(self.dated_returns(address, days, through).values())
 
     def account_record(self, address: str, with_days: bool = True) -> dict[str, Any] | None:
         """An address's record as this validator scored it (None if never scored): its daily returns (the series the
@@ -615,12 +614,14 @@ class Store:
                 insert(S.penalties).values(address=a, until_day=int(until_day), day=day, hotkey=hotkey, reason=reason)
             )
 
-    def penalties(self, day_index: int) -> dict[str, int]:
-        """Addresses still penalized at `day_index` -> the day index the penalty ends."""
+    def penalties(self, day_index: int, before_day: str | None = None) -> dict[str, int]:
+        """Addresses still penalized at `day_index` -> the day index the penalty ends; with `before_day`, only the
+        penalties reported on an earlier day (a re-score of a day never applies its own or later reports)."""
+        query = select(S.penalties.c.address, S.penalties.c.until_day).where(S.penalties.c.until_day > day_index)
+        if before_day is not None:
+            query = query.where(S.penalties.c.day < before_day)
         with self._engine.connect() as c:
-            rows = c.execute(
-                select(S.penalties.c.address, S.penalties.c.until_day).where(S.penalties.c.until_day > day_index)
-            ).all()
+            rows = c.execute(query).all()
         return {str(a): int(u) for a, u in rows}
 
     def latest_neurons(self, before_day: str | None = None) -> list[dict[str, Any]]:
