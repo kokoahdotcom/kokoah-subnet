@@ -574,7 +574,11 @@ def _agent(args: argparse.Namespace) -> int:
     from kokoah_subnet.agent.bundle import encrypt, new_key, package, sha256_hex
 
     if args.agent_command == "package":
-        plain = package(args.directory)
+        try:
+            plain = package(args.directory)
+        except (OSError, ValueError) as exc:
+            print(f"not packaged: {exc}")
+            return 1
         data = plain
         if not args.public:
             key = new_key()

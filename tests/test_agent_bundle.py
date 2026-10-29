@@ -27,6 +27,23 @@ def test_the_same_files_always_give_the_same_fingerprint(tmp_path: Path) -> None
     assert sha256_hex(package(d)) != sha256_hex(first)
 
 
+def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
+    d = agent_dir(tmp_path)
+    clean = package(d)
+    (d / ".git" / "objects").mkdir(parents=True)
+    (d / ".git" / "config").write_text("[core]\n")
+    (d / "lib" / "__pycache__").mkdir()
+    (d / "lib" / "__pycache__" / "signals.cpython-312.pyc").write_bytes(b"\0")
+    assert package(d) == clean  # version control and caches are left out
+    for name in (".env", "secret.hex", "key.txt", "my-agent.bundle.key", "lib/hot.pem", "wallets/miner/coldkey"):
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text("x")
+        with pytest.raises(ValueError, match=name):
+            package(d)
+        (d / name).unlink()
+    assert package(d) == clean
+
+
 def test_private_code_round_trips_and_needs_the_key(tmp_path: Path) -> None:
     plain = package(agent_dir(tmp_path))
     key = new_key()

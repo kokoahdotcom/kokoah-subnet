@@ -57,6 +57,10 @@ def test_packaging_encrypts_by_default(tmp_path: Path) -> None:
     public = tmp_path / "p.bundle"
     assert main(["agent", "package", str(tmp_path / "agent"), "--out", str(public), "--public"]) == 0
     assert not is_encrypted(public.read_bytes()) and not (tmp_path / "p.bundle.key").exists()
+    (tmp_path / "agent" / ".env").write_text("SECRET=1\n")
+    refused = tmp_path / "r.bundle"
+    assert main(["agent", "package", str(tmp_path / "agent"), "--out", str(refused), "--public"]) == 1
+    assert not refused.exists()
 
 
 def test_release_checks_everything_it_can_before_taking_the_key_out(
