@@ -483,7 +483,11 @@ def _miner(args: argparse.Namespace) -> int:
             print(f"{exc}: give --previous-address and --previous-signature together")
             return 1
         if not verify_binding(args.netuid, hotkey, binding):
-            print(f"the signature does not match the message for hotkey {hotkey}; sign exactly:")
+            if binding.previous_address and verify_binding(args.netuid, hotkey, Binding(args.address, args.signature)):
+                who = f"the previous address {binding.previous_address}"  # it signs the same line as the new one
+            else:
+                who = f"the address {binding.address}"
+            print(f"the signature of {who} does not match the message for hotkey {hotkey}; sign exactly:")
             print(binding_message(args.netuid, hotkey, args.address))
             return 1
 

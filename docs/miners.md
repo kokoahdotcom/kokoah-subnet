@@ -244,7 +244,7 @@ weight. Everything else in this guide applies to its account too. See the [agent
 
 | Symptom | What to check |
 |---|---|
-| `miner bind` says the signature does not match | The signed text must be exactly the printed line, signed by the address in it (lowercase), as a personal message (EIP-191), not typed data. |
+| `miner bind` says the signature does not match | The signed text must be exactly the printed line, signed by the address in it (lowercase), as a personal message (EIP-191), not typed data. On a move to a new address, both addresses sign the line for the new address; the error names the address whose signature does not match. |
 | My binding does not show in `miner show` | The commitment needs the hotkey to be registered on the subnet and a few blocks to be included. |
 | Not eligible: account value | The day's *average* must be at least $10,000. A deposit late in the day raises the average only for the hours after it. |
 | Not eligible: account value unknown | The exchange recorded too few points of your account that day (fewer than 4). The validator never guesses; the next day is measured again. |
