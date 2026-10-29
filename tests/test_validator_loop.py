@@ -614,6 +614,32 @@ async def test_minute_candles_are_read_once_per_coin(tmp_path: Path) -> None:
     await hl.close()
 
 
+async def test_failed_minute_candles_wait_for_the_deadline_then_leave_the_coin_uncounted(tmp_path: Path) -> None:
+    """BTC's minute candles cannot be read: the day waits until the deadline (the clip is an anti-wash rule); after
+    it, the BTC builder fills go uncounted, the return of an address that traded BTC is unknown, ETH is untouched."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+
+    def btc_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m" and body["req"]["coin"] == "BTC":
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_down))
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="minute candles of BTC"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    assert [e["stage"] for e in store.execute_sql("select stage from errors where level = 'error'")] == ["marks"]
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10  # A traded BTC only, B traded ETH
+    excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+    assert excluded == [{"excluded": "no_mark"}]
+    known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
+    assert {r["address"]: bool(r["return_known"]) for r in known} == {addr_a: False, addr_b: False}  # both: BTC history
+    await hl.close()
+
+
 async def test_a_truncated_cached_file_is_downloaded_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from kokoah_subnet.validator import collect
 

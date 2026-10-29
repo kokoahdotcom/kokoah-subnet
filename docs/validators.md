@@ -164,9 +164,10 @@ All times are UTC.
    subnet's settings, including commit-reveal.
 
 A failed read of a miner's recorded account values fails that day's scoring; the validator retries within the
-hour. A failed read of a fill history, the explorer, a linked account or the unlinks fails the day's scoring until
-12 hours after the day ends; after that the day is scored and only the fills that needed the failed read go
-uncounted. Other reads (positions, fee rates, stake) fall back. Every failure is recorded.
+hour. A failed read of a fill history, the explorer, a linked account, the minute candles or the unlinks fails the
+day's scoring until 12 hours after the day ends; after that the day is scored and only the fills that needed the
+failed read go uncounted (without a coin's candles, also the day's return of an account that traded it). Other reads
+(positions, fee rates, stake) fall back. Every failure is recorded.
 
 ## 8. The public interface
 

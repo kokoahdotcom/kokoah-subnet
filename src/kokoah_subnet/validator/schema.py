@@ -132,7 +132,7 @@ fills = Table(
     Column("closed_pnl", Float),
     Column("twap_id", BigInteger),
     Column("mark_px", Float),
-    Column("excluded", String(32)),  # spot|unbound|cluster|bound_counterparty|mark_clip|unchecked_counterparty
+    Column("excluded", String(32)),  # spot|unbound|cluster|bound_counterparty|mark_clip|unchecked_counterparty|no_mark
     Column("source", String(8)),  # file | history | both (spec section 3: the file is incomplete)
     Column("tid", BigInteger),  # the exchange's trade id (history fills)
     Column("cloid", String(34)),  # the client order id (history fills)

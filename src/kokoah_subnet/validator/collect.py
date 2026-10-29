@@ -231,6 +231,7 @@ async def collect_and_score(
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
+    past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
     except NotPublished:
@@ -412,6 +413,7 @@ async def collect_and_score(
     # addresses whose linked-account reads failed after the deadline: "clusters" (its sub-accounts or transfer
     # partners are unknown) or "linked fills" (a linked account's trades are unknown)
     unchecked: dict[str, str] = {}
+    uncounted: list[tuple[Fill, str]] = []  # builder fills that needed a failed read, with the reason recorded
     builder = cfg.builder.lower()
 
     def record_activity(address: str, fills: list[Fill]) -> tuple[int, int]:
@@ -422,20 +424,24 @@ async def collect_and_score(
         rt_window, active_window, _ = store.activity_window(address, params.gate_days, day)
         return rt_window, active_window
 
-    marks_cache: dict[str, dict[int, float]] = {}
+    marks_cache: dict[str, dict[int, float] | None] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
 
-    async def marks_for(coin: str) -> dict[int, float]:
+    async def marks_for(coin: str) -> dict[int, float] | None:
         """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
         first address to ask reads them, the others wait for that answer), so every address is clipped against the
-        same marks."""
+        same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
+        after it, None: the coin's builder fills go uncounted and the day's return of an address that traded the
+        coin is unknown."""
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
                     marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
-                except Exception as exc:  # noqa: BLE001 - without marks the clip and the transfer check skip this coin
-                    log.warning("no minute candles for %s: %s", coin, exc)
-                    marks_cache[coin] = {}
+                except Exception as exc:  # noqa: BLE001
+                    store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
+                    if not past_deadline:
+                        raise RuntimeError(f"minute candles of {coin} unavailable: {exc}") from exc
+                    marks_cache[coin] = None
         return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
@@ -476,7 +482,6 @@ async def collect_and_score(
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
         # fills beyond the file go unconfirmed, and every other address is scored as usual
-        past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms)
         except Exception as exc:
@@ -526,15 +531,31 @@ async def collect_and_score(
         marked: list[Fill] = []
         coins = {f.coin for f in own if is_perp(f.coin)} | {f.coin for f in public if is_perp(f.coin)}
         marks_by_coin = {coin: await marks_for(coin) for coin in coins}
+        unmarked = {coin for coin, marks in marks_by_coin.items() if marks is None}
         for f in own:
-            mark = marks_by_coin.get(f.coin, {}).get(f.time_ms // 60_000 * 60_000)
+            if f.coin in unmarked:
+                uncounted.append((f, "no_mark"))
+                continue
+            mark = (marks_by_coin.get(f.coin) or {}).get(f.time_ms // 60_000 * 60_000)
             marked.append(replace(f, mark_px=mark) if mark else f)
         for f in public:
-            if not is_perp(f.coin):
+            if not is_perp(f.coin) or f.coin in unmarked:
                 continue
-            mark = marks_by_coin.get(f.coin, {}).get(f.time_ms // 60_000 * 60_000)
+            mark = (marks_by_coin.get(f.coin) or {}).get(f.time_ms // 60_000 * 60_000)
             if mark:
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
+        # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
+        return_known = not any(f.coin in unmarked for f in public)
+        if unmarked:
+            store.put_note(
+                day,
+                hk,
+                address,
+                "marks",
+                f"{len(own) - len(marked)} fills uncounted"
+                + ("" if return_known else " and the day's return unknown")
+                + f": no minute candles for {', '.join(sorted(unmarked))}",
+            )
         fills_by_address[address] = marked
         rates: tuple[float, float] | None = None
         # the day's return from the exchange's own record, the same for every validator whenever it scores; the end
@@ -563,7 +584,13 @@ async def collect_and_score(
                 base = previous if previous is not None else change.value_start or 0.0
                 flows = (change.value_end - base) - change.profit
                 store.put_equity(
-                    address, day, change.value_end, flows, raw=state.get("marginSummary"), offmarket_pnl=offmarket
+                    address,
+                    day,
+                    change.value_end,
+                    flows,
+                    raw=state.get("marginSummary"),
+                    offmarket_pnl=offmarket,
+                    known=return_known,
                 )
             else:
                 store.put_equity(
@@ -679,7 +706,6 @@ async def collect_and_score(
     # the sub-accounts or transfer partners, no counterparty outside the bound addresses can be told apart from the
     # address's own cluster; without a linked account's trades, a history fill whose counterparty is still unnamed
     # may have traded with that account
-    unchecked_fills: list[Fill] = []
     for i, m in enumerate(miners):
         unread = unchecked.get(m.address)
         if unread is None:
@@ -689,7 +715,10 @@ async def collect_and_score(
             needs = (
                 f.counterparty not in bound if unread == "clusters" else f.source == "history" and not f.counterparty
             )
-            (unchecked_fills if needs and is_perp(f.coin) else keep).append(f)
+            if needs and is_perp(f.coin):
+                uncounted.append((f, "unchecked_counterparty"))
+            else:
+                keep.append(f)
         dropped = len(fills_by_address.get(m.address, [])) - len(keep)
         if dropped:
             fills_by_address[m.address] = keep
@@ -743,14 +772,12 @@ async def collect_and_score(
     # every fill, with why it did or did not count
     against = bound_counterparty_notional({a: f for a, f in fills_by_address.items() if a in bound})
     rows = []
-    tagged = [(f, False) for f in all_fills] + [(f, True) for f in unchecked_fills]
-    for f, unchecked_fill in sorted(
-        tagged, key=lambda x: (x[0].time_ms, x[0].user, x[0].coin, x[0].side, x[0].px, x[0].sz)
-    ):
+    tagged = [(f, "") for f in all_fills] + uncounted  # "" = scored, else the reason it went uncounted
+    for f, why in sorted(tagged, key=lambda x: (x[0].time_ms, x[0].user, x[0].coin, x[0].side, x[0].px, x[0].sz)):
         fill_hk = hotkey_of_address.get(f.user)
         excluded: str | None
-        if unchecked_fill:
-            excluded = "unchecked_counterparty"
+        if why:
+            excluded = why
         elif not is_perp(f.coin):
             excluded = "spot"
         elif fill_hk is None:

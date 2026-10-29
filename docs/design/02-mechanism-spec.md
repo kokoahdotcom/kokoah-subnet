@@ -106,7 +106,9 @@ Removed before anything is computed:
 2. fills priced more than 0.5% from the mark (the close of the exchange's minute candle for the coin): valued at the
    mark (their notional counts at the mark price; their builder fee, the credit, is the fee they paid); and for skill, the money an off-market fill moves into the account (buying below the mark or
    selling above it) is removed from the day's return like a deposit, over all of the address's perpetual fills,
-   builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices;
+   builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices.
+   A failed read of a coin's minute candles fails the day's scoring until the file deadline; after it, the coin's
+   builder fills go uncounted and the day's return of every address that traded the coin is unknown;
 3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill), measured as a share of the address's notional, then removed from credit: the subnet
    does not pay for volume between its own miners. Exact, so an honest trader is never flagged by coincidence;
@@ -362,8 +364,8 @@ after 60 days.
 - An exchange API failure never costs a trader the day's fee credit by itself. The account's recorded history
   behind the equity floor (§9a) is always needed: a failed read fails the day's scoring, which is retried within
   the hour, so a trader is never made ineligible by an API failure. A failed read of the fill history, the explorer,
-  a linked account or the unlinks fails the day's scoring until the file deadline; after it, the day is scored and
-  only what depends on the failed read goes uncounted (§3). The other reads (account value, flows, positions, fee
+  a linked account, the minute candles or the unlinks fails the day's scoring until the file deadline; after it, the
+  day is scored and only what depends on the failed read goes uncounted (§3). The other reads (account value, flows, positions, fee
   rates, stake) fall back. Every failure is recorded.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
