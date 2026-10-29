@@ -207,8 +207,9 @@ Stakes are sampled and recorded for information; they do not affect pay.
 
 ## 9. Activity gates (for the skill pool and the leaderboard)
 
-Over the last 30 days: at least 10 completed round trips, at least 7 days with a builder-code fill, mean account
-value at least $500. A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
+Over the last 30 calendar days, today included: at least 10 completed round trips, at least 7 days with a
+builder-code fill, mean account value at least $500 (over the days whose end-of-day value is the exchange's
+recorded one). A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
 
 ## 9a. Eligibility: the equity floor and the qualifying trades
 

@@ -290,7 +290,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, pytest.approx(2000.0))]
     assert store.returns(addr_a, 5) == [pytest.approx((25000 - 24000 - 2000) / 24000)]
     assert store.position_series([addr_a], [DAY])[addr_a] == {"BTC": [50000.0]}
-    assert store.activity_window(addr_a, 30) == (10, 1, 1_000_000.0)
+    assert store.activity_window(addr_a, 30, DAY) == (10, 1, 1_000_000.0)
     assert set(store.bindings()) == {HK_A, HK_B}
     assert set(store.states()) == {HK_A, HK_B}
     published = json.loads(store.day(DAY) or "{}")

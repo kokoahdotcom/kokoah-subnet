@@ -386,9 +386,20 @@ class Store:
             out["days"] = rows
         return out
 
-    def mean_equity(self, address: str, days: int) -> float:
-        series = self.equity_series(address, days)
-        return sum(v for _, v, _ in series) / len(series) if series else 0.0
+    def mean_equity(self, address: str, days: int, through: str) -> float:
+        """The mean account value over the `days` calendar days ending with `through`, from the days whose end value
+        is the exchange's recorded one (0 without any)."""
+        e = S.equity
+        with self._engine.connect() as c:
+            mean = c.execute(
+                select(func.avg(e.c.value)).where(
+                    e.c.address == address.lower(),
+                    e.c.day >= _days_before(through, days - 1),
+                    e.c.day <= through,
+                    e.c.return_known.is_not(False),
+                )
+            ).scalar()
+        return float(mean) if mean is not None else 0.0
 
     # ----- positions (mirror rule and record) -------------------------------------------------------------
 
@@ -445,14 +456,15 @@ class Store:
                 )
             )
 
-    def activity_window(self, address: str, days: int) -> tuple[int, int, float]:
-        """(round trips, active days, notional) over the most recent `days` stored days."""
+    def activity_window(self, address: str, days: int, through: str) -> tuple[int, int, float]:
+        """(round trips, active days, notional) over the `days` calendar days ending with `through`."""
         with self._engine.connect() as c:
             rows = c.execute(
-                select(S.activity.c.round_trips, S.activity.c.fills, S.activity.c.notional)
-                .where(S.activity.c.address == address.lower())
-                .order_by(S.activity.c.day.desc())
-                .limit(days)
+                select(S.activity.c.round_trips, S.activity.c.fills, S.activity.c.notional).where(
+                    S.activity.c.address == address.lower(),
+                    S.activity.c.day >= _days_before(through, days - 1),
+                    S.activity.c.day <= through,
+                )
             ).all()
         return (
             sum(int(r) for r, _, _ in rows),
@@ -945,6 +957,11 @@ def _state_from_json(s: str) -> MinerState:
 
 def _next_day(day: str) -> str:
     d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)
+    return d.strftime("%Y-%m-%d")
+
+
+def _days_before(day: str, days: int) -> str:
+    d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) - timedelta(days=days)
     return d.strftime("%Y-%m-%d")
 
 

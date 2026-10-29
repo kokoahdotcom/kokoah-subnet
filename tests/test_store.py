@@ -16,7 +16,7 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     s.put_equity("0xA", "2026-10-04", 1200.0, 0.0)  # 10-03 missing: no return across the gap
     s.put_equity("0xA", "2026-10-05", 1140.0, 0.0)
     assert s.returns("0xa", 60) == pytest.approx([0.05, -0.05])
-    assert s.mean_equity("0xA", 30) == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
+    assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
 
 
@@ -32,11 +32,34 @@ def test_positions_aligned_over_days(tmp_path: Path) -> None:
 
 
 def test_activity_window(tmp_path: Path) -> None:
+    from datetime import date, timedelta
+
     s = Store(tmp_path / "v.sqlite")
     for d in range(40):
-        s.put_activity("0xA", f"2026-{(d // 28) + 8:02d}-{(d % 28) + 1:02d}", 1, 2 if d % 2 == 0 else 0, 100.0)
-    rt, active, notional = s.activity_window("0xA", 30)
+        day = (date(2026, 9, 1) + timedelta(days=d)).isoformat()
+        s.put_activity("0xA", day, 1, 2 if d % 2 == 0 else 0, 100.0)
+    rt, active, notional = s.activity_window("0xA", 30, "2026-10-10")  # 2026-09-11 to 2026-10-10
     assert rt == 30 and active == 15 and notional == 3000.0
+
+
+def test_gates_count_only_the_last_30_calendar_days(tmp_path: Path) -> None:
+    """Bound for 40 days, away for 60, back today: the gates see today's activity only, not 30 stored days from two
+    months ago; the mean account value leaves out days whose value is not the exchange's recorded one."""
+    from datetime import date, timedelta
+
+    s = Store(tmp_path / "c.sqlite")
+    start = date(2026, 6, 1)
+    for d in range(40):
+        day = (start + timedelta(days=d)).isoformat()
+        s.put_activity("0xA", day, 2, 5, 1000.0)
+        s.put_equity("0xA", day, 50_000.0, 0.0)
+    today = (start + timedelta(days=100)).isoformat()
+    s.put_activity("0xA", today, 1, 3, 500.0)
+    s.put_equity("0xA", today, 800.0, 0.0)
+    s.put_equity("0xA", (start + timedelta(days=99)).isoformat(), 90_000.0, 0.0, known=False)  # a live value
+    assert s.activity_window("0xA", 30, today) == (1, 1, 500.0)
+    assert s.mean_equity("0xA", 30, today) == pytest.approx(800.0)
+    assert s.mean_equity("0xA", 30, (start + timedelta(days=200)).isoformat()) == 0.0
 
 
 def test_states_bindings_days_meta(tmp_path: Path) -> None:

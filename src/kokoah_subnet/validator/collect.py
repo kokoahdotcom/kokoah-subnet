@@ -562,7 +562,7 @@ async def collect_and_score(
             store.put_error(day, hk, address, "fee rates", str(exc))
         perps_own = [f for f in marked if is_perp(f.coin)]
         store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
-        rt_window, active_window, _ = store.activity_window(address, params.gate_days)
+        rt_window, active_window, _ = store.activity_window(address, params.gate_days, day)
         # linked accounts (clusters, and the counterparties of history fills): like the history itself, a failed read
         # fails the day until the deadline; after it, the failure is recorded and the other reads go on
         try:
@@ -605,7 +605,7 @@ async def collect_and_score(
                 hotkey=hk,
                 address=address,
                 returns=store.returns(address, max(params.confidence_days, params.entry_days)),
-                mean_equity_usd=store.mean_equity(address, params.gate_days),
+                mean_equity_usd=store.mean_equity(address, params.gate_days, day),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),
                 collateral_locked_alpha=collateral_locked.get(hk, 0.0),
