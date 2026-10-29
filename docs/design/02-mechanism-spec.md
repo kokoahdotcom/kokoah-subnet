@@ -394,7 +394,8 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   the owner's service, which accepts it only with the machine's attestation. **Restore:** a new sealed machine
   started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
   service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
-  and the account stays an agent account. **Release:** the miner can take the copy themselves with a request
+  and the account stays an agent account. The key store accepts only tokens made for its own audience, which the
+  machine's public `/attestation` never asks for, so no answer to a validator's challenge can stand in for one. **Release:** the miner can take the copy themselves with a request
   signed by the machine's master address (`agent release`); the service records it publicly (`GET /key-store/released`),
   and from then on the account never earns the agent bonus again, whatever its machine says. The operator cannot
   read the copy (it lacks the secret); the miner cannot get it without a public release. **The secret** is 32 bytes
@@ -415,8 +416,10 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   an attestation token; the harness starts it only after a probe, run exactly as the agent, sees nothing there.
 - **Offers the agent a narrow interface**: orders (limit and trigger), cancels, leverage, isolated margin and a
   scheduled cancel; read-only exchange data, account queries answered for this account only. Kokoah's builder code
-  is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`); prices more than 5%
-  from the mid are refused. Not offered: modify, TWAP, trailing stops, withdrawals, transfers, approvals.
+  is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`). An order that executes
+  now (a limit order, or a trigger order already past its trigger price) is refused when priced more than 5% from
+  the mid; a trigger order that has not fired yet rests at any trigger price, and its limit price must be within 5%
+  of its trigger price. Not offered: modify, TWAP, trailing stops, withdrawals, transfers, approvals.
 - **Withdraws only to the miner's own address**, and only on a request signed by it.
 
 **Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
@@ -430,8 +433,8 @@ agent field (`A1`: the code fingerprint and the machine's address) as the hotkey
 **Verification, by every validator, every scored day** (`src/kokoah_subnet/validator/agents.py`):
 
 ```
-challenge  = 32 random bytes (hex)
-answer     = GET <machine>/attestation?challenge=...      {token, address, netuid, hotkey, code_sha256}
+challenge  = 32 random bytes, as 64 hex characters (the machine accepts exactly that)
+answer     = GET <machine>/attestation?challenge=<64 hex>  {token, address, netuid, hotkey, code_sha256}
 binding    = sha256("kokoah-agent-1 netuid=<n> hotkey=<ss58> address=<0x..> code=<sha256>")
 agent_i    = answer names this subnet, hotkey, account and the committed fingerprint
              ∧ Google's signature on the token verifies, iss/aud/exp, Confidential Space, production
