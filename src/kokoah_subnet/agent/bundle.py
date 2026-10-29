@@ -29,15 +29,28 @@ MAX_UNPACKED_BYTES = 200 * 2**20
 MAX_FILES = 5000
 _EPOCH = (1980, 1, 1, 0, 0, 0)
 LEFT_OUT = frozenset({".git", ".hg", ".svn", "__pycache__"})  # folders that are never the agent's code
-SECRET_FILES = (".env", ".env.*", "*.pem", "*.key", "*.mnemonic", "*.seed", "secret.hex", "key.txt")
-SECRET_FOLDERS = frozenset({"wallets", ".bittensor"})
+SECRET_FILES = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.mnemonic",
+    "*.seed",
+    "secret.hex",
+    "key.txt",
+    "coldkey",  # a Bittensor wallet copied without its wallets folder
+    "coldkeypub.txt",
+    "utc--*",  # an Ethereum keystore file
+)
+SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys"})  # a wallet's hotkeys are not encrypted by default
 
 
 def looks_secret(relative: Path) -> bool:
-    """A wallet, a key or a secret by its name: the bundle may be published, and the code has no use for one."""
+    """A wallet, a key or a secret by its name, in any case: the bundle may be published, and the code has no use for
+    one."""
     name = relative.name.lower()
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES) or bool(
-        SECRET_FOLDERS & set(relative.parts[:-1])
+        SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]}
     )
 
 

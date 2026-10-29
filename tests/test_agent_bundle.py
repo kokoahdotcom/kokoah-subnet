@@ -35,7 +35,19 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
     (d / "lib" / "__pycache__").mkdir()
     (d / "lib" / "__pycache__" / "signals.cpython-312.pyc").write_bytes(b"\0")
     assert package(d) == clean  # version control and caches are left out
-    for name in (".env", "secret.hex", "key.txt", "my-agent.bundle.key", "lib/hot.pem", "wallets/miner/coldkey"):
+    for name in (
+        ".env",
+        "secret.hex",
+        "key.txt",
+        "my-agent.bundle.key",
+        "lib/hot.pem",
+        "wallets/miner/coldkey",
+        "backup/Wallets/miner/notes.txt",  # folders in any case
+        "miner/coldkey",  # a wallet copied without its wallets folder
+        "miner/coldkeypub.txt",
+        "miner/hotkeys/default",
+        "keys/UTC--2026-10-29T00-00-00.000Z--1c8970117ad600590a21a4d0651865790f7a7253",  # an Ethereum keystore file
+    ):
         (d / name).parent.mkdir(parents=True, exist_ok=True)
         (d / name).write_text("x")
         with pytest.raises(ValueError, match=name):

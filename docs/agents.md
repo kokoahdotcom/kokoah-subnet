@@ -47,8 +47,9 @@ uv run kokoah-subnet agent submit --service https://api.kokoah.com/miners --bund
 ```
 
 The same files always give the same fingerprint. Version-control and cache folders (`.git`, `__pycache__`) are left
-out, and the tool refuses to package a file that looks like a key or a secret (`.env`, `*.key`, `*.pem`,
-`secret.hex`, `key.txt`, a `wallets` folder): keep those outside the agent directory. The code is encrypted so that
+out, and the tool refuses to package a file that looks like a key or a secret, whatever its case (`.env`, `*.key`,
+`*.pem`, `secret.hex`, `key.txt`, a Bittensor wallet's `coldkey`, `coldkeypub.txt` or `hotkeys` folder, a `wallets`
+folder, an Ethereum `UTC--` keystore file): keep those outside the agent directory. The code is encrypted so that
 only your sealed machine can read it; `--public` publishes it unencrypted instead, and then anyone can download it
 from the service. One submission per hotkey per 12 hours, and only from a hotkey that is registered on the subnet
 (the service also stores key copies only for registered hotkeys; getting an account back or taking its key out works
