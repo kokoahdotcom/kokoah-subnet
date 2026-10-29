@@ -90,7 +90,9 @@ sub-accounts first, then its transfer partners by the amount moved, largest firs
 appears among another known address's fills traded with that address. A failed read of the history, of the
 explorer or of a linked account fails the day's scoring until the file deadline (12 hours after the day ends;
 retried within the hour); after the deadline the day is scored, and only the fills that needed the failed read go
-uncounted for that address (the failure is recorded).
+uncounted for that address (the failure is recorded): when its sub-accounts or transfer partners cannot be read,
+every fill whose counterparty is not a bound address; when a linked account's fills cannot be read, the history
+fills whose counterparty stays unnamed.
 
 **Earnings check.** The exchange reports what the builder has earned (`referral`: `builderRewards`). The validator
 records it at every scoring run, and the health check raises an alarm when the builder fees of all counted fills

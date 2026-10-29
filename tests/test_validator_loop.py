@@ -1092,6 +1092,58 @@ async def test_one_linked_account_read_failure_does_not_skip_the_others(tmp_path
     await hl.close()
 
 
+async def test_a_fill_that_needed_a_failed_linked_read_goes_uncounted(tmp_path: Path) -> None:
+    """The only linked account on the other side of A's afternoon trade cannot be read: after the deadline, A's
+    history fills with no named counterparty go uncounted; the fills the file names stay as they were."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    broken = "0x" + "e1" * 20
+    LEDGER[addr_a] = _sends(addr_a, {broken: 9_000.0})
+    FILLS_FAIL.add(broken)
+    HISTORY[broken] = [dict(HISTORY[addr_a][-1], side="B", cloid=None)]  # the other side of A's last trade
+    end = DAY_MS + 86_400_000
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    ra = next(r for r in result.records if r.hotkey == HK_A)
+    assert ra.fees.fills == 20 and ra.credited.fills == 18  # the four history-only fills are not counted
+    rows = store.execute_sql(f"select tid, excluded from fills where address = '{addr_a}' and tid >= 1000")
+    assert sorted((r["tid"], r["excluded"]) for r in rows) == [(1000 + i, "unchecked_counterparty") for i in range(4)]
+    messages = [e["message"] for e in store.execute_sql("select message from errors where stage = 'clusters'")]
+    assert any("fills of" in m for m in messages) and "4 fills uncounted: their counterparty could not be checked" in (
+        messages
+    )
+    assert store.activity_window(addr_a, 30, DAY)[2] == pytest.approx(1_000_000.0)  # the file's 20 fills only
+    await hl.close()
+
+
+async def test_a_failed_transfer_read_keeps_the_sub_accounts_and_leaves_open_counterparties_uncounted(
+    tmp_path: Path,
+) -> None:
+    """A's ledger cannot be read after the deadline: its sub-account stays in its cluster, and every fill of A
+    whose counterparty is not a bound address goes uncounted (it may be a transfer partner). B is untouched."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    sub = "0x" + "ff" * 20
+    SUBS[addr_a] = [sub]
+
+    def ledger_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userNonFundingLedgerUpdates" and body["user"].lower() == addr_a:
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(ledger_down))
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="transfer partners"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10
+    excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+    assert excluded == [{"excluded": "unchecked_counterparty"}]
+    edges = store.execute_sql(f"select b, source from cluster_edges where a = '{addr_a}'")
+    assert edges == [{"b": sub, "source": "subaccount"}]
+    await hl.close()
+
+
 async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The chain connection drops during a pass: the failure is recorded, the connection is opened again and the
     next pass runs."""

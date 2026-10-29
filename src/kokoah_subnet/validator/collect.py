@@ -409,7 +409,18 @@ async def collect_and_score(
     edge_lists: dict[str, list[tuple[str, str, str]]] = {}
     avg_equity: dict[str, tuple[float | None, int]] = {}
     tid_owners: dict[int, set[str]] = {}  # trade id -> addresses with a fill in that trade (bound and linked)
+    # addresses whose linked-account reads failed after the deadline: "clusters" (its sub-accounts or transfer
+    # partners are unknown) or "linked fills" (a linked account's trades are unknown)
+    unchecked: dict[str, str] = {}
     builder = cfg.builder.lower()
+
+    def record_activity(address: str, fills: list[Fill]) -> tuple[int, int]:
+        """Store the day's round trips, fills and notional of the address's perpetual fills; the gate window's
+        round trips and active days through the day."""
+        perps = [f for f in fills if is_perp(f.coin)]
+        store.put_activity(address, day, round_trips(perps), len(perps), sum(f.notional for f in perps))
+        rt_window, active_window, _ = store.activity_window(address, params.gate_days, day)
+        return rt_window, active_window
 
     marks_cache: dict[str, dict[int, float]] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
@@ -583,20 +594,26 @@ async def collect_and_score(
             store.put_fee_rates(address, day, rates[0], rates[1], raw=fee_raw)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "fee rates", str(exc))
-        perps_own = [f for f in marked if is_perp(f.coin)]
-        store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
-        rt_window, active_window, _ = store.activity_window(address, params.gate_days, day)
+        rt_window, active_window = record_activity(address, marked)
         # linked accounts (clusters, and the counterparties of history fills): like the history itself, a failed read
-        # fails the day until the deadline; after it, the failure is recorded and the other reads go on
+        # fails the day until the deadline; after it, the failure is recorded, the other reads go on and the fills
+        # that needed the failed read go uncounted (below, once every address is read)
+        subs: set[str] = set()
+        partners: dict[str, float] = {}
         try:
-            window_start = start_ms - params.gate_days * 86_400_000
             subs = set(await sub_accounts(hl, address))
-            partners = await transfer_partners(hl, address, window_start, end_ms)
         except Exception as exc:  # noqa: BLE001
-            store.put_error(day, hk, address, "clusters", str(exc))
+            store.put_error(day, hk, address, "clusters", f"sub-accounts: {exc}")
             if not past_deadline:
-                raise RuntimeError(f"linked accounts of {address} unavailable: {exc}") from exc
-            subs, partners = set(), {}
+                raise RuntimeError(f"sub-accounts of {address} unavailable: {exc}") from exc
+            unchecked[address] = "clusters"
+        try:
+            partners = await transfer_partners(hl, address, start_ms - params.gate_days * 86_400_000, end_ms)
+        except Exception as exc:  # noqa: BLE001
+            store.put_error(day, hk, address, "clusters", f"transfer partners: {exc}")
+            if not past_deadline:
+                raise RuntimeError(f"transfer partners of {address} unavailable: {exc}") from exc
+            unchecked[address] = "clusters"
         edge_lists[address] = [(address, o, "subaccount") for o in sorted(subs)] + [
             (address, o, "transfer") for o in sorted(set(partners) - subs)
         ]
@@ -611,6 +628,7 @@ async def collect_and_score(
                 store.put_error(day, hk, address, "clusters", f"fills of {other}: {exc}")
                 if not past_deadline:
                     raise RuntimeError(f"fills of {other}, linked to {address}, unavailable: {exc}") from exc
+                unchecked.setdefault(address, "linked fills")
                 continue
             for f in other_fills:
                 if f.tid is not None:
@@ -655,6 +673,35 @@ async def collect_and_score(
     miners.sort(key=lambda m: m.hotkey)
     for a in address_of_hotkey.values():
         fills_by_address[a] = assign_counterparties(fills_by_address.get(a, []), tid_owners)
+    addresses = list(address_of_hotkey.values())
+    bound = set(addresses)
+    # a linked read that failed after the deadline: the fills that needed it go uncounted (recorded as such). Without
+    # the sub-accounts or transfer partners, no counterparty outside the bound addresses can be told apart from the
+    # address's own cluster; without a linked account's trades, a history fill whose counterparty is still unnamed
+    # may have traded with that account
+    unchecked_fills: list[Fill] = []
+    for i, m in enumerate(miners):
+        unread = unchecked.get(m.address)
+        if unread is None:
+            continue
+        keep: list[Fill] = []
+        for f in fills_by_address.get(m.address, []):
+            needs = (
+                f.counterparty not in bound if unread == "clusters" else f.source == "history" and not f.counterparty
+            )
+            (unchecked_fills if needs and is_perp(f.coin) else keep).append(f)
+        dropped = len(fills_by_address.get(m.address, [])) - len(keep)
+        if dropped:
+            fills_by_address[m.address] = keep
+            store.put_note(
+                day,
+                m.hotkey,
+                m.address,
+                "clusters",
+                f"{dropped} fills uncounted: their counterparty could not be checked",
+            )
+            rt_window, active_window = record_activity(m.address, keep)
+            miners[i] = replace(m, round_trips_window=rt_window, active_days_window=active_window)
     # what the day's builder fills actually charged (recorded)
     taker_notional = sum(f.notional for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
     taker_fees = sum(f.builder_fee for lst in fills_by_address.values() for f in lst if f.crossed and is_perp(f.coin))
@@ -668,7 +715,6 @@ async def collect_and_score(
         store.put_error(day, None, None, "builder rewards", str(exc))
     for lst in edge_lists.values():
         edges.extend(lst)
-    addresses = list(address_of_hotkey.values())
     cluster_of = clusters(addresses, [(a, b) for a, b, _ in edges])
     store.put_clusters(day, cluster_of, edges)
     all_fills = [f for lst in fills_by_address.values() for f in lst]
@@ -695,13 +741,17 @@ async def collect_and_score(
                 store.put_penalty(other, until, day, r.hotkey, f"tied to {r.address}")
 
     # every fill, with why it did or did not count
-    bound = set(addresses)
     against = bound_counterparty_notional({a: f for a, f in fills_by_address.items() if a in bound})
     rows = []
-    for f in sorted(all_fills, key=lambda x: (x.time_ms, x.user, x.coin, x.side, x.px, x.sz)):
+    tagged = [(f, False) for f in all_fills] + [(f, True) for f in unchecked_fills]
+    for f, unchecked_fill in sorted(
+        tagged, key=lambda x: (x[0].time_ms, x[0].user, x[0].coin, x[0].side, x[0].px, x[0].sz)
+    ):
         fill_hk = hotkey_of_address.get(f.user)
         excluded: str | None
-        if not is_perp(f.coin):
+        if unchecked_fill:
+            excluded = "unchecked_counterparty"
+        elif not is_perp(f.coin):
             excluded = "spot"
         elif fill_hk is None:
             excluded = "unbound"
