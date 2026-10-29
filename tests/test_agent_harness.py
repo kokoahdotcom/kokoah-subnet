@@ -182,3 +182,29 @@ def test_spot_usdc_is_moved_to_perpetuals_within_the_account(setup: Any) -> None
     assert h.fund_perps() is None and len(fake.posted) == count
     with pytest.raises(ValueError, match="not offered"):
         h.call("fund_perps", {})
+
+
+def test_numbers_that_are_not_finite_are_refused_before_signing(setup: Any) -> None:
+    h, fake, _, _ = setup
+    for x in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="finite"):
+            hlsign.float_to_wire(x)
+        with pytest.raises(ValueError, match="finite"):
+            hlsign.float_to_int(x)
+    btc = {"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}
+    trigger = {"trigger": {"triggerPx": "NaN", "isMarket": True, "tpsl": "sl"}}
+    for order in (
+        {**btc, "limit_px": "NaN"},
+        {**btc, "sz": float("nan")},
+        {**btc, "sz": "inf"},
+        {**btc, "order_type": trigger},
+    ):
+        with pytest.raises(ValueError):
+            h.call("order", {"orders": [order]})
+    with pytest.raises(ValueError, match="finite"):
+        h.call("update_isolated_margin", {"coin": "BTC", "amount_usd": "inf"})
+    agent = TestClient(agent_app(h))
+    body = '{"method": "update_leverage", "params": {"coin": "BTC", "leverage": Infinity}}'  # JSON parsers accept it
+    answer = agent.post("/call", content=body, headers={"content-type": "application/json"})
+    assert answer.status_code == 200 and answer.json()["ok"] is False
+    assert not fake.posted

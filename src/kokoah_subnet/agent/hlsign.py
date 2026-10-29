@@ -9,6 +9,7 @@ Two kinds of signatures:
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from typing import Any
 
@@ -46,6 +47,8 @@ USD_CLASS_TRANSFER_TYPES = [
 
 
 def float_to_wire(x: float) -> str:
+    if not math.isfinite(x):  # "NaN" and "Infinity" would otherwise be signed into the action
+        raise ValueError(f"not a finite number: {x}")
     rounded = f"{x:.8f}"
     if abs(float(rounded) - x) >= 1e-12:
         raise ValueError(f"float_to_wire causes rounding: {x}")
@@ -55,6 +58,8 @@ def float_to_wire(x: float) -> str:
 
 
 def float_to_int(x: float, power: int = 8) -> int:
+    if not math.isfinite(x):
+        raise ValueError(f"not a finite number: {x}")
     scaled = x * 10**power
     if abs(round(scaled) - scaled) >= 1e-3:
         raise ValueError(f"float_to_int causes rounding: {x}")

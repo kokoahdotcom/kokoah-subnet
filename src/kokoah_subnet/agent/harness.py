@@ -265,6 +265,8 @@ class Harness:
         return self._l1(action)
 
     def update_isolated_margin(self, coin: str, amount_usd: float, is_buy: bool = True) -> Any:
+        if not math.isfinite(float(amount_usd)):
+            raise ValueError(f"not a finite amount: {amount_usd}")
         ntli = round(float(amount_usd) * 1e6)
         action = {"type": "updateIsolatedMargin", "asset": self.asset(coin)[0], "isBuy": bool(is_buy), "ntli": ntli}
         return self._l1(action)
@@ -382,7 +384,7 @@ def _guard(fn: Callable[[], Any]) -> Any:
         return {"ok": True, "result": fn()}
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except (ValueError, KeyError, TypeError) as exc:
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:
         return {"ok": False, "error": str(exc)}
     except httpx.HTTPError as exc:
         return {"ok": False, "error": f"exchange: {exc}"}
