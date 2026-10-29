@@ -332,7 +332,11 @@ class Harness:
         now = int(time.time() * 1000)
         if abs(now - time_ms) > SIGNED_REQUEST_WINDOW_MS or time_ms <= self._last_signed_request:
             raise PermissionError("stale or replayed request")
-        signer = Account.recover_message(encode_defunct(text=message), signature=bytes.fromhex(signature[2:]))
+        try:
+            raw = bytes.fromhex(signature.removeprefix("0x"))
+            signer = Account.recover_message(encode_defunct(text=message), signature=raw)
+        except Exception as exc:  # noqa: BLE001 - a signature that cannot be read is not the miner's
+            raise PermissionError("not signed by the miner's address") from exc
         if str(signer).lower() != self.config.master.lower():
             raise PermissionError("not signed by the miner's address")
         self._last_signed_request = time_ms

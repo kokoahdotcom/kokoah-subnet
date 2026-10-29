@@ -236,3 +236,15 @@ def test_triggers_are_banded_where_they_execute(setup: Any) -> None:
     assert len(fake.posted) == 4
     fired = harness_module.trigger_fired
     assert fired(True, "sl", 100000, 100000) and fired(False, "tp", 100000, 100000)  # at the trigger: it fires
+
+
+def test_signed_requests_read_the_signature_with_or_without_0x(setup: Any) -> None:
+    h, fake, master, _ = setup
+    public = TestClient(public_app(h))
+    t = int(time.time() * 1000)
+    bare = bytes(master.sign_message(encode_defunct(text=withdraw_message(h.address, "5", t))).signature).hex()
+    answer = public.post("/withdraw", json={"time_ms": t, "signature": bare, "amount_usd": "5"})
+    assert answer.status_code == 200 and answer.json()["ok"] and fake.posted[-1]["action"]["type"] == "withdraw3"
+    for unreadable in ("0x" + "00" * 64, "0x" + "00" * 65, "zz"):
+        refused = public.post("/stop", json={"time_ms": t + 1, "signature": unreadable})
+        assert refused.status_code == 403 and "miner" in refused.json()["detail"]
