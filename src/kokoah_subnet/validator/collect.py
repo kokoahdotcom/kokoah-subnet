@@ -484,13 +484,22 @@ async def collect_and_score(
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
         # fills beyond the file go unconfirmed, and every other address is scored as usual
+        gaps: list[int] = []
         try:
-            public = await hl.fills_by_time(address, start_ms, end_ms)
+            public = await hl.fills_by_time(address, start_ms, end_ms, gaps)
         except Exception as exc:
             store.put_error(day, hk, address, "fill history", str(exc))
             if not past_deadline:
                 raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
             public = []
+        if gaps:
+            store.put_note(
+                day,
+                hk,
+                address,
+                "fill history",
+                f"{len(gaps)} milliseconds with more fills than a page: the rest unread",
+            )
         merged = merge_sources(own, public, params.builder_fee_rate)
         candidates = [f for f in merged if f.source == "history"]
         if candidates:

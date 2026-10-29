@@ -106,10 +106,11 @@ class HyperliquidInfo:
                 await asyncio.sleep(max(self._gap, self._backoff) * (2**attempt))
         raise RuntimeError(f"info request failed after {attempts} attempts: {last}")
 
-    async def fills_by_time(self, user: str, start_ms: int, end_ms: int) -> list[Fill]:
+    async def fills_by_time(self, user: str, start_ms: int, end_ms: int, gaps: list[int] | None = None) -> list[Fill]:
         """All fills of `user` in [start_ms, end_ms), paging forward (2,000 per page). A full page can end inside a
         group of fills at one millisecond (one order filling many resting orders), so the next page starts at that
-        millisecond again and the fills already read there are skipped."""
+        millisecond again and the fills already read there are skipped. A whole page at one millisecond leaves the
+        rest of that millisecond unread: its time is added to `gaps` when given."""
         out: list[Fill] = []
         cursor = start_ms
         seen: set[str] = set()  # the fills already read at the cursor's millisecond
@@ -130,6 +131,8 @@ class HyperliquidInfo:
             last = int(page[-1]["time"])
             if last == cursor:
                 # a whole page at one millisecond: nothing more can be read there
+                if gaps is not None:
+                    gaps.append(last)
                 cursor, seen = last + 1, set()
                 continue
             cursor = last

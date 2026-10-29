@@ -125,11 +125,12 @@ async def test_fill_history_paging_keeps_fills_at_the_page_boundary() -> None:
 
     client = HyperliquidInfo(rate_limit_s=0.0, page_size=4, backoff_s=0.0)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    fills = await client.fills_by_time("0xaaaa", 0, 11)
+    gaps: list[int] = []
+    fills = await client.fills_by_time("0xaaaa", 0, 11, gaps)
     got = sorted(f.tid for f in fills if f.tid is not None)
-    # the five fills at t=9 do not fit in one page of four: the fifth is the one a page cannot reach
+    # the five fills at t=9 do not fit in one page of four: the fifth is the one a page cannot reach, and is reported
     assert got == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12] and len(fills) == len(got)
-    assert starts == [0, 5, 7, 9, 10]
+    assert starts == [0, 5, 7, 9, 10] and gaps == [9]
     await client.close()
 
 
