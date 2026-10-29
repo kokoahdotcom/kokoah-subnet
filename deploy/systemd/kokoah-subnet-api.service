@@ -8,7 +8,8 @@ Type=simple
 User=kokoah-subnet
 Group=kokoah-subnet
 Environment=HOME=/var/lib/kokoah-subnet
-EnvironmentFile=/etc/kokoah-subnet/db.env
+# the read-only connection: this service never changes the record
+EnvironmentFile=/etc/kokoah-subnet/db-reader.env
 WorkingDirectory=/var/lib/kokoah-subnet
 ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet validator serve --data-dir /var/lib/kokoah-subnet/data --host 127.0.0.1 --port 48100
 Restart=always
@@ -17,7 +18,7 @@ MemoryMax=1G
 TasksMax=128
 ReadWritePaths=/var/lib/kokoah-subnet
 # the interface never needs the validator's hotkey
-InaccessiblePaths=-/var/lib/kokoah-subnet/wallets
+InaccessiblePaths=-/var/lib/kokoah-subnet/wallets -/etc/kokoah-subnet/db.env
 StandardOutput=append:/var/log/kokoah-subnet/api.log
 StandardError=append:/var/log/kokoah-subnet/api.log
 NoNewPrivileges=yes

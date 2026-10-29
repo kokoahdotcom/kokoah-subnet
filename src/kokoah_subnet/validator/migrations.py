@@ -113,6 +113,11 @@ STEPS: list[tuple[int, str, Step]] = [
 ]
 
 
+def latest_version() -> int:
+    """The schema version this release writes and reads."""
+    return STEPS[-1][0]
+
+
 def current_version(c: Connection) -> int:
     row = c.execute(text("SELECT value FROM meta WHERE key = 'schema_version'")).first()
     return int(row[0]) if row else 0

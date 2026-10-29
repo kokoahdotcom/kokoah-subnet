@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Grafana on the record (Docker, host network, 127.0.0.1:48120), provisioned with the PostgreSQL datasource and the
-# dashboards in dashboards/. Admin password generated once into the env file (outside the repo).
+# Grafana on the record (Docker, host network, 127.0.0.1:48120), provisioned with the PostgreSQL datasource (the
+# read-only role from scripts/db.sh) and the dashboards in dashboards/. Admin password generated once into the env file (outside the repo).
 #
 #   scripts/dashboard.sh start | stop | status | url
 set -euo pipefail
@@ -14,8 +14,10 @@ PROV="$HOME/.local/share/kokoah/grafana"
 DB_PORT="${KOKOAH_SUBNET_DB_PORT:-48110}"
 
 ensure() {
+  [ -f "$DB_ENV" ] || { echo "no $DB_ENV: run scripts/db.sh start first" >&2; exit 1; }
   # shellcheck disable=SC1090
   . "$DB_ENV"
+  : "${KOKOAH_SUBNET_DB_READER_PASSWORD:?no read-only role in $DB_ENV: run scripts/db.sh start first}"
   mkdir -p "$PROV/datasources" "$PROV/dashboards" "$PROV/data"
   if [ ! -f "$ENV_FILE" ]; then
     umask 077
@@ -29,11 +31,11 @@ datasources:
     uid: kokoah-subnet-pg
     type: grafana-postgresql-datasource
     url: 127.0.0.1:$DB_PORT
-    user: kokoah
+    user: kokoah_reader
     database: kokoah_subnet
     isDefault: true
     secureJsonData:
-      password: "$KOKOAH_SUBNET_DB_PASSWORD"
+      password: "$KOKOAH_SUBNET_DB_READER_PASSWORD"
     jsonData:
       sslmode: disable
       postgresVersion: 1700

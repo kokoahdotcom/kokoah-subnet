@@ -67,11 +67,13 @@ miner's figures with the parts behind them, every account value point, every age
 The tables are described in the [record guide](database.md).
 
 ```bash
-scripts/db.sh start      # PostgreSQL in Docker on 127.0.0.1:48110; writes the URL to ~/.local/share/kokoah/subnet-db.env
+scripts/db.sh start      # PostgreSQL in Docker on 127.0.0.1:48110; writes the URLs to ~/.local/share/kokoah/subnet-db.env
 set -a; . ~/.local/share/kokoah/subnet-db.env; set +a     # exports KOKOAH_SUBNET_DB_URL for the commands below
 ```
 
-Without a database URL the validator uses a SQLite file in its data directory, which is fine for trials.
+The env file holds two connections: `KOKOAH_SUBNET_DB_URL` for the validator, which writes the record, and
+`KOKOAH_SUBNET_DB_READER_URL`, a read-only role for the interface, the health check and the dashboards, which only
+read it. Without a database URL the validator uses a SQLite file in its data directory, which is fine for trials.
 
 ## 5. Configuration
 
@@ -127,6 +129,8 @@ sudo install -o kokoah-subnet -g kokoah-subnet -m 600 ~/.bittensor/wallets/valid
 # settings (readable by the service's group only) and logs
 sudo install -d -m 755 /etc/kokoah-subnet && sudo install -d -g kokoah-subnet -m 775 /var/log/kokoah-subnet
 sudo install -g kokoah-subnet -m 640 ~/.local/share/kokoah/subnet-db.env /etc/kokoah-subnet/db.env
+grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
+    | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
 echo 'KOKOAH_SUBNET_ARGS=--network test --netuid 385 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/validator-main.env
 
@@ -190,7 +194,7 @@ request limit. Publishing lets miners and other validators compare figures with 
 - **The earnings check.** The builder fees credited to miners must never exceed what Hyperliquid reports the builder
   has earned; the health check alarms if they do.
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source
-  and the dashboards in `dashboards/`.
+  (through the read-only role) and the dashboards in `dashboards/`.
 - **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `/var/backups/kokoah-subnet/`;
   `scripts/db.sh backup <file>` does it by hand.
 
@@ -204,6 +208,9 @@ by day; each account's earlier daily values are backfilled from the exchange whe
 
 ```bash
 git pull
+scripts/db.sh start      # already running: only makes sure the read-only role and its URL exist
+grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
+    | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
 sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
     uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
 sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/

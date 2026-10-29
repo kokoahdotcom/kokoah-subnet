@@ -20,7 +20,7 @@ from kokoah_subnet.binding import AcceptedBinding, Unlink
 from kokoah_subnet.mechanism import MinerState
 
 from . import schema as S
-from .migrations import apply_migrations
+from .migrations import apply_migrations, current_version, latest_version
 
 
 def _now() -> datetime:
@@ -41,19 +41,36 @@ def _growth(returns: Sequence[float]) -> tuple[float | None, float | None]:
 
 
 class Store:
-    """`Store(url)` for any SQLAlchemy URL, or `Store(Path)` for a SQLite file."""
+    """`Store(url)` for any SQLAlchemy URL, or `Store(Path)` for a SQLite file. The validator creates and migrates
+    the schema; readers (the interface, the health check) open it with `create=False`, which needs no rights to
+    change it and refuses a record that is not set up and migrated yet."""
 
-    def __init__(self, target: str | Path) -> None:
+    def __init__(self, target: str | Path, create: bool = True) -> None:
         if isinstance(target, Path):
+            if not create and not target.exists():
+                raise RuntimeError(f"no record at {target}: the validator creates it when it first runs")
             target.parent.mkdir(parents=True, exist_ok=True)
             url = f"sqlite:///{target}"
         else:
             url = target
         self.url = url
         self._engine: Engine = create_engine(url, future=True)
-        S.metadata.create_all(self._engine)
-        with self._engine.begin() as c:
-            self.migrations_applied = apply_migrations(c, self.is_postgres)
+        self.migrations_applied: list[str] = []
+        if create:
+            S.metadata.create_all(self._engine)
+            with self._engine.begin() as c:
+                self.migrations_applied = apply_migrations(c, self.is_postgres)
+            return
+        try:
+            with self._engine.connect() as c:
+                version = current_version(c)
+        except Exception as exc:
+            raise RuntimeError(f"the record is not set up yet (the validator creates it): {exc}") from exc
+        if version < latest_version():
+            raise RuntimeError(
+                f"the record is at schema version {version}, this release reads {latest_version()}: "
+                "start the validator of this release first, it migrates the record"
+            )
 
     def close(self) -> None:
         self._engine.dispose()

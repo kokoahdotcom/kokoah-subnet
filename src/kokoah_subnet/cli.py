@@ -221,7 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
     oburn.add_argument("--db-url", default=None, help="record the burn in the database (default $KOKOAH_SUBNET_DB_URL)")
     vcheck = vsub.add_parser("check", help="health check over the record (exit 1 on a problem)")
     vcheck.add_argument("--data-dir", type=Path, default=None)
-    vcheck.add_argument("--db-url", default=None)
+    vcheck.add_argument(
+        "--db-url", default=None, help="the record; default $KOKOAH_SUBNET_DB_READER_URL, else $KOKOAH_SUBNET_DB_URL"
+    )
     vcheck.add_argument(
         "--webhook", default=None, help="post the report to this JSON webhook (default $KOKOAH_SUBNET_ALERT_WEBHOOK)"
     )
@@ -239,7 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     vserve.add_argument(
         "--db-url",
         default=None,
-        help="the record (SQLAlchemy URL); default $KOKOAH_SUBNET_DB_URL, else SQLite in --data-dir",
+        help="the record (SQLAlchemy URL); default $KOKOAH_SUBNET_DB_READER_URL, else $KOKOAH_SUBNET_DB_URL, "
+        "else SQLite in --data-dir",
     )
     vserve.add_argument("--host", default="127.0.0.1")
     vserve.add_argument("--port", type=int, default=48100)
@@ -379,11 +382,11 @@ def _validator(args: argparse.Namespace) -> int:
         from kokoah_subnet.validator.health import main_report
         from kokoah_subnet.validator.store import Store
 
-        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
+        url = args.db_url or _reader_url()
         if not url and args.data_dir is None:
             print("give --db-url or --data-dir")
             return 2
-        store = Store(url or (args.data_dir / "validator.sqlite"))
+        store = Store(url or (args.data_dir / "validator.sqlite"), create=False)
         return main_report(store, args.webhook or os.environ.get("KOKOAH_SUBNET_ALERT_WEBHOOK"), args.only_problems)
     if args.validator_command == "serve":
         import uvicorn
@@ -391,11 +394,16 @@ def _validator(args: argparse.Namespace) -> int:
         from kokoah_subnet.validator.serve import create_app
         from kokoah_subnet.validator.store import Store
 
-        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
-        app = create_app(Store(url or (args.data_dir / "validator.sqlite")))
+        url = args.db_url or _reader_url()
+        app = create_app(Store(url or (args.data_dir / "validator.sqlite"), create=False))
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
     return 2
+
+
+def _reader_url() -> str:
+    """The record's read-only connection (`scripts/db.sh` makes the role), else the validator's own."""
+    return os.environ.get("KOKOAH_SUBNET_DB_READER_URL") or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
 
 
 def _owner(args: argparse.Namespace) -> int:

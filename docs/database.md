@@ -29,8 +29,10 @@ Conventions: `day` is the scored UTC day (YYYY-MM-DD); money is USD; alpha is in
 lowercase; `raw` columns keep the source record as JSON. Registration and binding times are estimated from block
 heights at 12 seconds a block; epoch and submission times are wall-clock at the validator.
 
-Connect: `scripts/db.sh psql` opens a shell; the URL is in `~/.local/share/kokoah/subnet-db.env` as
-`KOKOAH_SUBNET_DB_URL`, which the validator, the API and the burn command read when `--db-url` is not given.
+Connect: `scripts/db.sh psql` opens a shell; the URLs are in `~/.local/share/kokoah/subnet-db.env`:
+`KOKOAH_SUBNET_DB_URL`, which the validator and the burn command read when `--db-url` is not given, and
+`KOKOAH_SUBNET_DB_READER_URL`, the read-only role `kokoah_reader` that the interface, the health check and Grafana
+use (they read the record and never change it).
 Back up with `scripts/db.sh backup file.dump`.
 
 Schema changes: `create_all` adds new tables; column changes are numbered steps in

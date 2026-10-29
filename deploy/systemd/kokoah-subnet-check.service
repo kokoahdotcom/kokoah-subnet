@@ -8,7 +8,8 @@ Type=oneshot
 User=kokoah-subnet
 Group=kokoah-subnet
 Environment=HOME=/var/lib/kokoah-subnet
-EnvironmentFile=/etc/kokoah-subnet/db.env
+# the read-only connection: this service never changes the record
+EnvironmentFile=/etc/kokoah-subnet/db-reader.env
 EnvironmentFile=-/etc/kokoah-subnet/alert.env
 WorkingDirectory=/var/lib/kokoah-subnet
 # exits 1 on a problem, so a problem also shows as a failed unit (`systemctl --failed`)
@@ -18,7 +19,7 @@ MemoryMax=512M
 TasksMax=64
 ReadWritePaths=/var/lib/kokoah-subnet
 # the health check never needs the validator's hotkey
-InaccessiblePaths=-/var/lib/kokoah-subnet/wallets
+InaccessiblePaths=-/var/lib/kokoah-subnet/wallets -/etc/kokoah-subnet/db.env
 StandardOutput=append:/var/log/kokoah-subnet/check.log
 StandardError=append:/var/log/kokoah-subnet/check.log
 NoNewPrivileges=yes

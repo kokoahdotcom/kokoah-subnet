@@ -197,3 +197,24 @@ def test_window_reads_stop_at_the_scored_day(tmp_path: Path) -> None:
     s.put_penalty("0xB", 40, "2026-10-02", "hk", "mirrored")
     s.put_penalty("0xC", 40, "2026-10-03", "hk", "mirrored")
     assert s.penalties(14, before_day="2026-10-03") == {"0xb": 40} and set(s.penalties(14)) == {"0xb", "0xc"}
+
+
+def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
+    """The interface and the health check open an existing, migrated record read-only (no schema changes); a missing
+    or unmigrated one is refused with a clear message."""
+    from sqlalchemy import text
+
+    from kokoah_subnet.validator.health import check
+
+    path = tmp_path / "r.sqlite"
+    with pytest.raises(RuntimeError, match="the validator creates it"):
+        Store(path, create=False)
+    writer = Store(path)
+    writer.put_day("2026-10-21", 2, '{"x": 1}')
+    reader = Store(path, create=False)
+    assert reader.migrations_applied == [] and reader.day("2026-10-21") == '{"x": 1}'
+    assert "no weights submitted yet" in check(reader)["problems"]
+    with writer._engine.begin() as c:
+        c.execute(text("UPDATE meta SET value = '1' WHERE key = 'schema_version'"))
+    with pytest.raises(RuntimeError, match="start the validator of this release first"):
+        Store(path, create=False)

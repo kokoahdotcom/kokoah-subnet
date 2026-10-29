@@ -11,7 +11,8 @@ the health check, which never need the hotkey.
 | `/opt/kokoah-subnet/scripts` | `db.sh` and `backup.sh` from the release, run by the backup unit |
 | `/var/lib/kokoah-subnet/data` | the validator's data directory (`--data-dir`) |
 | `/var/lib/kokoah-subnet/wallets` | the validator's hotkey and the coldkey's public file only (`--wallet-path`) |
-| `/etc/kokoah-subnet/db.env` | `KOKOAH_SUBNET_DB_URL=...` (from `scripts/db.sh start`), readable by the group |
+| `/etc/kokoah-subnet/db.env` | `KOKOAH_SUBNET_DB_URL=...` (from `scripts/db.sh start`), readable by the group; the validator's connection, hidden from the interface and the health check |
+| `/etc/kokoah-subnet/db-reader.env` | `KOKOAH_SUBNET_DB_READER_URL=...`: the read-only role the interface and the health check connect with |
 | `/etc/kokoah-subnet/validator-<name>.env` | `KOKOAH_SUBNET_ARGS=...` for instance `<name>` |
 | `/etc/kokoah-subnet/alert.env` | optional: `KOKOAH_SUBNET_ALERT_WEBHOOK=...` |
 | `/var/log/kokoah-subnet/` | the logs |
