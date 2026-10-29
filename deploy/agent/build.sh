@@ -9,7 +9,7 @@ umask 022
 
 commit=${1:-HEAD}
 name=${2:-kokoahdotcom/kokoah-subnet-agent}
-root=$(git rev-parse --show-toplevel)
+root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)  # the checkout this script is in, from any directory
 tag=$(git -C "$root" rev-parse --short=12 "$commit")
 epoch=$(git -C "$root" log -1 --format=%ct "$commit")
 ctx=$(mktemp -d)
