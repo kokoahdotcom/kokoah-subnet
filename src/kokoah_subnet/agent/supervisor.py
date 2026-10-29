@@ -49,7 +49,7 @@ from cryptography.exceptions import InvalidTag
 from eth_account import Account
 
 from . import sandbox
-from .attest import LAUNCHER_SOCKET, ConfidentialSpaceAttestor, DevelopmentAttestor
+from .attest import KEYSTORE_AUDIENCE, LAUNCHER_SOCKET, ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
 from .keystore import KeyService, check_secret, decrypt_key, encrypt_key, restore_digest, store_digest
@@ -232,7 +232,7 @@ def account_key(
     if restore:
         address = restore.lower()
         challenge = keys.challenge(address)
-        blob = keys.restore(address, attestor.token([restore_digest(address, challenge)]))
+        blob = keys.restore(address, attestor.token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE))
         key = decrypt_key(blob, address, secret)
         log.info("restored account %s", address)
         return key
@@ -244,7 +244,7 @@ def account_key(
     address = account.address.lower()
     key = bytes(account.key)
     blob = encrypt_key(key, address, secret)
-    token = attestor.token([store_digest(address, master, blob, hotkey, submission, permit)])
+    token = attestor.token([store_digest(address, master, blob, hotkey, submission, permit)], KEYSTORE_AUDIENCE)
     keys.store(address, master, hotkey, blob, token, netuid, submission, permit)
     log.info("created account %s; its encrypted copy is stored", address)
     return key

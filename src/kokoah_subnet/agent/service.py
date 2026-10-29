@@ -357,12 +357,12 @@ def create_app(
         """Why the token is not a genuine sealed machine's answer to `nonce` (None when it is)."""
         if accept_unverified_machines:
             return None
-        from .attest import AttestationError, google_keys, verify_token
+        from .attest import KEYSTORE_AUDIENCE, AttestationError, google_keys, verify_token
 
         if key_source[0] is None:
             key_source[0] = google_keys()
         try:
-            verify_token(token, key_source[0], list(images or []), [nonce])
+            verify_token(token, key_source[0], list(images or []), [nonce], audience=KEYSTORE_AUDIENCE)
         except AttestationError as exc:
             return str(exc)
         return None

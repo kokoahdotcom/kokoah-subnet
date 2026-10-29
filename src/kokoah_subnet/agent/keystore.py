@@ -9,6 +9,8 @@
 - **Restore.** A new sealed machine started with the same secret gets the ciphertext back after proving, with a
   fresh attestation token, that it is a genuine sealed machine of an approved image; it decrypts the key inside.
   No person ever holds the key, so the account stays an agent account.
+- Both tokens carry the key store's own audience, which the machine's public `/attestation` never uses: only the
+  machine's supervisor asks for them, for the key it created or restores itself.
 - **Release.** The miner can take the ciphertext themselves, with a request signed by their own address (the
   machine's master). Then the miner holds the key and can trade the account by hand, so the release is public and
   the account never earns the agent bonus again.

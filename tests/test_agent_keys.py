@@ -20,8 +20,9 @@ from fastapi.testclient import TestClient
 from uploads import upload
 
 from kokoah_subnet.agent import service as service_module
-from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
+from kokoah_subnet.agent.attest import KEYSTORE_AUDIENCE, DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import package, sha256_hex
+from kokoah_subnet.agent.harness import Harness, HarnessConfig
 from kokoah_subnet.agent.keystore import (
     KeyService,
     decrypt_key,
@@ -138,7 +139,7 @@ def test_a_restore_needs_a_fresh_challenge(world: dict[str, Any]) -> None:
     keys: KeyService = world["keys"]
     key = start(world, Account.create())
     address = Account.from_key(key).address.lower()
-    replayed = world["machine"].token(["00" * 32])
+    replayed = world["machine"].token(["00" * 32], KEYSTORE_AUDIENCE)
     r = world["svc"].post(f"/key-store/{address}/restore", json={"token": replayed})
     assert r.status_code == 403  # it answers no current challenge
     keys.challenge(address)
@@ -299,7 +300,7 @@ def test_made_up_requests_leave_nothing_behind_and_touch_no_real_copy(world: dic
     # even a genuine machine with a valid permission cannot replace a kept copy
     other = base64.b64decode(fake["blob"])
     token = world["machine"].token(
-        [store_digest(address, master.address, other, ALICE.ss58_address, fake["submission"], p)]
+        [store_digest(address, master.address, other, ALICE.ss58_address, fake["submission"], p)], KEYSTORE_AUDIENCE
     )
     assert svc.put(f"/key-store/{address}", json={**fake, "token": token}).status_code == 409
     assert start(world, master, address) == key
@@ -314,7 +315,7 @@ def test_strangers_cannot_stop_a_machine_from_restoring(world: dict[str, Any]) -
     key = start(world, master)
     address = Account.from_key(key).address.lower()
     challenge = keys.challenge(address)
-    token = world["machine"].token([restore_digest(address, challenge)])
+    token = world["machine"].token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE)
     for _ in range(5):
         svc.get(f"/key-store/{address}/challenge")
         svc.post(f"/key-store/{address}/restore", json={"token": "junk"})
@@ -322,3 +323,34 @@ def test_strangers_cannot_stop_a_machine_from_restoring(world: dict[str, Any]) -
     assert blob.status_code == 200
     assert decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
     assert svc.post(f"/key-store/{address}/restore", json={"token": token}).status_code == 403  # used once
+
+
+def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dict[str, Any]) -> None:
+    """A genuine machine answers anyone's challenge at `/attestation`. Asked for a store or restore digest, its answer
+    is still refused by the key store: a key made by hand can never be filed as a machine's own, and a copy is never
+    handed to someone relaying the answer."""
+    svc: TestClient = world["svc"]
+    master = Account.create()
+    key = start(world, master)
+    address = Account.from_key(key).address.lower()
+    config = HarnessConfig(NETUID, ALICE.ss58_address, master.address, "11" * 32, "0x" + "43" * 20)
+    machine = Harness(config, Account.create().key, world["machine"])  # the same genuine machine key and image
+    by_hand = Account.create()
+    blob = encrypt_key(bytes(by_hand.key), by_hand.address, SECRET)
+    p = permit(world["submission"], master.address)
+    digest = store_digest(by_hand.address, master.address, blob, ALICE.ss58_address, world["submission"], p)
+    body = {
+        "blob": base64.b64encode(blob).decode(),
+        "master": master.address,
+        "hotkey": ALICE.ss58_address,
+        "netuid": NETUID,
+        "submission": world["submission"],
+        "permit": p,
+        "token": machine.attestation(digest)["token"],
+    }
+    refused = svc.put(f"/key-store/{by_hand.address}", json=body)
+    assert refused.status_code == 403 and "audience" in refused.json()["detail"].lower()
+    challenge = world["keys"].challenge(address)
+    relayed = machine.attestation(restore_digest(address, challenge))["token"]
+    assert svc.post(f"/key-store/{address}/restore", json={"token": relayed}).status_code == 403
+    assert start(world, master, address) == key  # the machine's own restore still works
