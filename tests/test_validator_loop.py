@@ -505,6 +505,20 @@ async def test_a_failed_history_read_fails_the_day_instead_of_zeroing_the_trader
     await hl.close()
 
 
+async def test_a_retried_day_keeps_its_binding_events(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    with pytest.raises(RuntimeError, match="portfolio history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.bindings() == {}  # nothing accepted on a day that was not scored
+    PORTFOLIO_FAILS.clear()
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    events = store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}' order by hotkey")
+    assert events == [{"event": "accepted", "hotkey": HK_A}, {"event": "accepted", "hotkey": HK_B}]
+    assert set(store.bindings()) == {HK_A, HK_B}
+    await hl.close()
+
+
 KO = "0x6b6f0101" + "cd" * 12
 
 

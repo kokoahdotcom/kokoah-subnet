@@ -295,11 +295,12 @@ async def collect_and_score(
         finally:
             if own_unlink_http:
                 await unlink_http.aclose()
+    # the accepted bindings and their events are written once the day is scored, so a retried day resolves them
+    # from the same bindings again
     before = store.bindings()
     resolution = resolve_bindings(
         before, published, snap.block, registered=uid_of.keys(), unlinks=store.unlinks(), day=day
     )
-    store.put_bindings(resolution.accepted, day=day)
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
         old = before.get(hk)
@@ -327,7 +328,6 @@ async def collect_and_score(
                 "reason": reason,
             }
         )
-    store.put_binding_events(day, events)
 
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
@@ -755,6 +755,8 @@ async def collect_and_score(
         ],
     )
     store.put_states(result.states, day=day)
+    store.put_bindings(resolution.accepted, day=day)
+    store.put_binding_events(day, events)
 
     # the miners dimension: who is who, when registered, bound, paid
     emission = store.emission_totals()
