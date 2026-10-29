@@ -107,6 +107,32 @@ async def test_info_client_parses_fills_flows_and_fees() -> None:
     await client.close()
 
 
+async def test_fill_history_paging_keeps_fills_at_the_page_boundary() -> None:
+    """Pages of four: the first ends inside three fills at one millisecond, so the next starts there again; every
+    fill is read once. A page made of one millisecond only moves on to the next one."""
+    times = [1, 2, 3, 5, 5, 5, 7, 9, 9, 9, 9, 9, 10]
+    records = [
+        {"coin": "BTC", "px": "100", "sz": "1", "side": "B", "time": t, "crossed": True, "fee": "1", "tid": i}
+        for i, t in enumerate(times)
+    ]
+    starts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        starts.append(body["startTime"])
+        page = [r for r in records if body["startTime"] <= r["time"] < body["endTime"]][:4]
+        return httpx.Response(200, json=page)
+
+    client = HyperliquidInfo(rate_limit_s=0.0, page_size=4)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fills = await client.fills_by_time("0xaaaa", 0, 11)
+    got = sorted(f.tid for f in fills if f.tid is not None)
+    # the five fills at t=9 do not fit in one page of four: the fifth is the one a page cannot reach
+    assert got == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12] and len(fills) == len(got)
+    assert starts == [0, 5, 7, 9, 10]
+    await client.close()
+
+
 async def test_info_client_retries_then_fails() -> None:
     calls = {"n": 0}
 
