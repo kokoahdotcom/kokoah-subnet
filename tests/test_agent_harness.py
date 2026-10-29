@@ -3,6 +3,7 @@ from the mid, unoffered methods and other accounts' data refused; withdrawals on
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -284,3 +285,22 @@ def test_each_signed_request_acts_once(setup: Any) -> None:
     for th in threads:
         th.join()
     assert sorted(results) == ["refused"] * 7 + ["sent"] and len(fake.posted) == count + 1
+
+
+def test_an_order_tells_why_the_builder_fee_is_not_approved(setup: Any) -> None:
+    h, fake, _, _ = setup
+    h.builder_approved = False
+    real: Callable[[httpx.Request], httpx.Response] = fake.handler
+
+    def refusing(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/exchange" and json.loads(request.content)["action"]["type"] == "approveBuilderFee":
+            return httpx.Response(200, json={"status": "err", "response": "Must deposit before performing actions."})
+        return real(request)
+
+    h.http = httpx.Client(transport=httpx.MockTransport(refusing), base_url="https://x")
+    with pytest.raises(ValueError, match="Must deposit before performing actions"):
+        h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    h.http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(502)), base_url="https://x")
+    with pytest.raises(ValueError, match="502"):
+        h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    assert not h.builder_approved

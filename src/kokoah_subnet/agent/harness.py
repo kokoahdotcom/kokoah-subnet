@@ -199,11 +199,14 @@ class Harness:
             raise ValueError("no orders")
         if not self.builder_approved:  # the exchange refuses builder orders until the account has approved the fee
             try:
-                self.approve_builder()
-            except (httpx.HTTPError, ValueError):
-                pass
+                answer: Any = self.approve_builder()
+            except (httpx.HTTPError, ValueError) as exc:
+                answer = exc
             if not self.builder_approved:
-                raise ValueError("Kokoah's builder fee is not approved yet (the account needs a deposit first)")
+                said = answer.get("response", answer) if isinstance(answer, dict) else answer
+                raise ValueError(
+                    f"Kokoah's builder fee is not approved yet (an account needs a deposit first): {str(said)[:200]}"
+                )
         mids = self.info({"type": "allMids"})
         wires = []
         cloids = []
