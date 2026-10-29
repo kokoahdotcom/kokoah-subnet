@@ -94,7 +94,7 @@ async def test_info_client_parses_fills_flows_and_fees() -> None:
             return httpx.Response(200, json=[{"universe": [{"name": "BTC"}]}, [{"markPx": "100500"}]])
         return httpx.Response(400)
 
-    client = HyperliquidInfo(rate_limit_s=0.0)
+    client = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     start, end = day_bounds_ms("2026-10-20")
     fills = await client.fills_by_time("0xAAAA", start, end)
@@ -123,7 +123,7 @@ async def test_fill_history_paging_keeps_fills_at_the_page_boundary() -> None:
         page = [r for r in records if body["startTime"] <= r["time"] < body["endTime"]][:4]
         return httpx.Response(200, json=page)
 
-    client = HyperliquidInfo(rate_limit_s=0.0, page_size=4)
+    client = HyperliquidInfo(rate_limit_s=0.0, page_size=4, backoff_s=0.0)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     fills = await client.fills_by_time("0xaaaa", 0, 11)
     got = sorted(f.tid for f in fills if f.tid is not None)
@@ -141,18 +141,26 @@ def test_linked_reads_put_sub_accounts_first_then_the_largest_transfers() -> Non
     assert linked_reads(set(), {}, 25) == ([], 0)
 
 
-async def test_info_client_retries_then_fails() -> None:
+async def test_info_client_retries_then_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import hyperliquid
+
     calls = {"n": 0}
+    waits: list[float] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         return httpx.Response(500)
 
+    async def wait(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", wait)
     client = HyperliquidInfo(rate_limit_s=0.0)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(RuntimeError):
-        await client.post({"type": "meta"}, attempts=2)
-    assert calls["n"] == 2
+        await client.post({"type": "meta"}, attempts=3)
+    assert calls["n"] == 3
+    assert waits == [0.5, 1.0]  # doubling waits between attempts, none after the last
     await client.close()
 
 

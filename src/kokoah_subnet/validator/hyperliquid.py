@@ -68,9 +68,11 @@ class HyperliquidInfo:
         concurrency: int = 6,
         explorer_url: str = MAINNET_EXPLORER,
         page_size: int = PAGE,
+        backoff_s: float = 0.5,
     ) -> None:
         self._url = url
         self._page = page_size
+        self._backoff = backoff_s  # the first retry's wait, doubled on every later one
         self._explorer = explorer_url
         self._client = httpx.AsyncClient(timeout=timeout_s)
         self._gap = rate_limit_s
@@ -100,7 +102,8 @@ class HyperliquidInfo:
                     return r.json()
                 except (httpx.HTTPError, ValueError) as exc:
                     last = exc
-            await asyncio.sleep(max(self._gap, 0.5) * (2**attempt))
+            if attempt + 1 < attempts:
+                await asyncio.sleep(max(self._gap, self._backoff) * (2**attempt))
         raise RuntimeError(f"info request failed after {attempts} attempts: {last}")
 
     async def fills_by_time(self, user: str, start_ms: int, end_ms: int) -> list[Fill]:

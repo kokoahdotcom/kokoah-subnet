@@ -289,7 +289,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         OWNER: _Commitment("not a binding", 1),
     }
     store = Store(tmp_path / "v.sqlite")
-    hl = HyperliquidInfo(rate_limit_s=0.0)
+    hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)  # retries without waiting
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(_info_handler))
     return cfg, store, hl, _FakeChain(commitments), a.address.lower(), b.address.lower()
 
@@ -571,15 +571,9 @@ async def test_a_retried_day_keeps_its_binding_events(tmp_path: Path) -> None:
     await hl.close()
 
 
-async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path) -> None:
     import asyncio
 
-    from kokoah_subnet.validator import hyperliquid
-
-    async def instant(_: float) -> None:
-        return None
-
-    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
     cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
     PORTFOLIO_FAILS.add(addr_a)
     cancelled: list[str] = []
@@ -924,15 +918,7 @@ async def test_cheap_tiny_orders_cannot_flood_the_validator_with_lookups(
     await hl.close()
 
 
-async def test_one_accounts_explorer_failure_affects_only_that_account_after_the_deadline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from kokoah_subnet.validator import hyperliquid
-
-    async def instant(_: float) -> None:
-        return None
-
-    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
+async def test_one_accounts_explorer_failure_affects_only_that_account_after_the_deadline(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
     HISTORY[addr_a] = _history_of_file_fills()
     HISTORY[addr_b] = _taker_fills_after_midday(3)
@@ -1088,17 +1074,9 @@ async def test_dust_transfers_cannot_push_a_sub_account_out_of_the_linked_reads(
     await hl.close()
 
 
-async def test_one_linked_account_read_failure_does_not_skip_the_others(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_one_linked_account_read_failure_does_not_skip_the_others(tmp_path: Path) -> None:
     """A sent money to two accounts: the first one's fills cannot be read. Until the deadline the day waits; after
     it, the second account's fills are still read and name the counterparty of A's afternoon trade."""
-    from kokoah_subnet.validator import hyperliquid
-
-    async def instant(_: float) -> None:
-        return None
-
-    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     HISTORY[addr_a] = _history_of_file_fills()
     broken, partner = "0x" + "e1" * 20, "0x" + "e2" * 20
