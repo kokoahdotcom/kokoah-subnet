@@ -18,7 +18,7 @@ The agent talks to the harness over a Unix socket whose path is in `KOKOAH_AGENT
 
 | Request | What it does |
 |---|---|
-| `POST /info {"request": {...}}` | read-only exchange data: `meta`, `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot`, `fundingHistory`, `predictedFundings`; account queries (`clearinghouseState`, `openOrders`, `userFills`, `userFillsByTime`, `orderStatus`, `historicalOrders`, `userFees`, `portfolio`, ...) answer for the agent's own account |
+| `POST /info {"request": {...}}` | read-only exchange data: `meta`, `metaAndAssetCtxs`, `allMids`, `l2Book`, `candleSnapshot`, `fundingHistory`, `predictedFundings`; account queries, answered for the agent's own account: `clearinghouseState`, `openOrders`, `frontendOpenOrders`, `userFills`, `userFillsByTime`, `userFunding`, `orderStatus`, `historicalOrders`, `userFees`, `userRateLimit`, `portfolio`. Nothing else is answered |
 | `POST /call {"method": "order", "params": {"orders": [...], "grouping": "na"}}` | limit or trigger orders: `{"coin", "is_buy", "sz", "limit_px", "order_type": {"limit": {"tif": "Gtc"/"Ioc"/"Alo"}} or {"trigger": {"triggerPx", "isMarket", "tpsl"}}, "reduce_only"}` |
 | `cancel {"coin", "oid"}`, `cancel_by_cloid {"coin", "cloid"}` | cancels |
 | `update_leverage {"coin", "leverage", "is_cross"}`, `update_isolated_margin {"coin", "amount_usd", "is_buy"}` | margin |
@@ -183,8 +183,13 @@ agent (positions stay open: close them first with the agent, or let it do so bef
 
 ## What the validators check every day
 
-A fresh challenge to `GET /attestation`; Google's signature on the token; a production Confidential Space machine
-on confidential hardware; an approved harness image; the challenge and the binding digest (subnet, hotkey, account,
-code fingerprint) in the token; the fingerprint you committed; no other trading key approved on the account; and
-the account's key never released to you.
-The result of every check is in each validator's record (`agent_checks`).
+Every validator checks every agent binding once a day, in this order. The first check that fails gives the reason
+recorded in the validator's record (`agent_checks`), and the account earns no agent bonus that day.
+
+| Check | Reasons when it fails |
+|---|---|
+| 1. The account's key was never released to you (the service's `/key-store/released` list, read every day) | `the key was released to the miner`; `released list unavailable` (then no account counts as an agent that day) |
+| 2. The machine answers a fresh challenge: `GET /attestation?challenge=<32 random bytes as hex>` at the published host and port, only on public addresses, within 30 seconds | `machine unreachable`, `machine too slow to answer`, `endpoint refused`, `bad answer`, `check timed out` |
+| 3. The answer names the bound account, the committed code fingerprint, your hotkey and this subnet | `the machine speaks for another account`, `the machine runs other code than the committed fingerprint`, `the machine is bound to another hotkey or subnet` |
+| 4. The token is Google's, from a production Confidential Space machine on confidential hardware with secure boot, of an approved harness image, and carries both the challenge and the binding digest (subnet, hotkey, account, code fingerprint) | `attestation: ...` (which part failed) |
+| 5. No other trading key is approved on the account, so nothing but the machine can sign for it | `the account has other trading keys approved`, `exchange: ...` (the exchange could not be read) |

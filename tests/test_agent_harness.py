@@ -304,3 +304,13 @@ def test_an_order_tells_why_the_builder_fee_is_not_approved(setup: Any) -> None:
     with pytest.raises(ValueError, match="502"):
         h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
     assert not h.builder_approved
+
+
+def test_the_agent_guide_lists_exactly_the_info_requests_answered() -> None:
+    import re
+    from pathlib import Path
+
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "agents.md").read_text()
+    row = next(line for line in guide.splitlines() if line.startswith("| `POST /info"))
+    listed = set(re.findall(r"`([A-Za-z0-9]+)`", row))
+    assert listed == harness_module.PUBLIC_INFO | harness_module.ACCOUNT_INFO
