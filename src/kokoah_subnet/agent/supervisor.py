@@ -16,7 +16,7 @@ Start settings (environment, passed by the miner when they start the machine):
   KOKOAH_AGENT_PERMIT       the miner's start permission (`kokoah-subnet agent authorize`): signed by the hotkey,
                             needed to file a new account's key copy; a restore does not need it
   KOKOAH_AGENT_RESTORE      after the machine stopped: the account address to resume on this new machine
-  KOKOAH_AGENT_NETWORK      mainnet (default) or testnet
+  KOKOAH_AGENT_NETWORK      mainnet (default) or testnet; any other value stops the machine
 
 The account key lives in memory. A copy encrypted with the miner's secret is stored with the owner's service before
 anything else happens (with this machine's attestation), so a machine that stops can be replaced: a new machine
@@ -52,7 +52,15 @@ from . import sandbox
 from .attest import KEYSTORE_AUDIENCE, LAUNCHER_SOCKET, ConfidentialSpaceAttestor, DevelopmentAttestor
 from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
-from .keystore import KeyService, check_secret, decrypt_key, encrypt_key, restore_digest, store_digest
+from .keystore import (
+    KeyService,
+    check_secret,
+    checked_address,
+    decrypt_key,
+    encrypt_key,
+    restore_digest,
+    store_digest,
+)
 
 log = logging.getLogger("kokoah_subnet.agent")
 IMAGE_SETTINGS = Path("/etc/kokoah-agent/image.json")
@@ -83,6 +91,20 @@ def env(name: str, default: str | None = None) -> str:
     if value is None or value == "":
         raise SystemExit(f"{name} is required")
     return value
+
+
+def address_setting(name: str, value: str) -> str:
+    try:
+        return checked_address(value)
+    except ValueError as exc:
+        raise SystemExit(f"{name}: {exc}") from None
+
+
+def mainnet_setting(value: str) -> bool:
+    """KOKOAH_AGENT_NETWORK: exactly mainnet or testnet (anything else stops the machine rather than guess)."""
+    if value not in ("mainnet", "testnet"):
+        raise SystemExit(f"KOKOAH_AGENT_NETWORK must be mainnet or testnet, not {value!r}")
+    return value == "mainnet"
 
 
 def fetch_code(service: str, submission: str, bundle_key: str | None, http: httpx.Client) -> tuple[bytes, str]:
@@ -283,7 +305,11 @@ def main() -> int:
     else:
         attestor = ConfidentialSpaceAttestor()
     hotkey = env("KOKOAH_AGENT_HOTKEY")
-    master = env("KOKOAH_AGENT_MASTER").lower()
+    master = address_setting("KOKOAH_AGENT_MASTER", env("KOKOAH_AGENT_MASTER"))
+    restore = os.environ.get("KOKOAH_AGENT_RESTORE") or None
+    if restore is not None:
+        restore = address_setting("KOKOAH_AGENT_RESTORE", restore)
+    mainnet = mainnet_setting(env("KOKOAH_AGENT_NETWORK", "mainnet"))
     try:
         secret = bytes.fromhex(env("KOKOAH_AGENT_SECRET"))
         check_secret(secret)
@@ -295,7 +321,7 @@ def main() -> int:
         secret,
         master,
         hotkey,
-        os.environ.get("KOKOAH_AGENT_RESTORE") or None,
+        restore,
         int(env("KOKOAH_AGENT_NETUID")),
         submission,
         os.environ.get("KOKOAH_AGENT_PERMIT") or None,
@@ -307,7 +333,7 @@ def main() -> int:
         code_sha256=code,
         builder=image.builder,
         builder_fee_tenths_bps=image.builder_fee_tenths_bps,
-        mainnet=env("KOKOAH_AGENT_NETWORK", "mainnet") != "testnet",
+        mainnet=mainnet,
     )
     runner = AgentRunner(
         agent_command(1024, uid, gid, hidden),

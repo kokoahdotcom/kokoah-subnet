@@ -389,6 +389,7 @@ def create_app(
     @app.put("/key-store/{address}")
     def store_key(address: str, body: StoredKey) -> dict[str, Any]:
         a = check_address(address)
+        master = check_address(body.master)  # the only withdrawal destination: never anything but an address
         if len(body.blob) > MAX_KEY_COPY_CHARS:
             raise HTTPException(status_code=413, detail="not a key copy")
         try:
@@ -427,11 +428,7 @@ def create_app(
                 raise HTTPException(status_code=409, detail="a key is already kept for this address")
             if c.execute(select(permits.c.signature).where(permits.c.signature == signature)).first():
                 raise HTTPException(status_code=409, detail="this start permission was used already: one per machine")
-            c.execute(
-                insert(keys).values(
-                    address=a, hotkey=body.hotkey, master=body.master.lower(), blob=stored, stored_at=clock()
-                )
-            )
+            c.execute(insert(keys).values(address=a, hotkey=body.hotkey, master=master, blob=stored, stored_at=clock()))
             c.execute(insert(permits).values(signature=signature, hotkey=body.hotkey, address=a, used_at=clock()))
             event(c, a, "store", f"hotkey {body.hotkey} submission {body.submission}")
         return {"stored": a}

@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from eth_account import Account
+from eth_utils.address import is_checksum_address
 
 KEY_MAGIC = b"KAK1"
 MIN_SECRET_BYTES = 32
@@ -70,6 +71,17 @@ def decrypt_key(blob: bytes, address: str, secret: bytes) -> bytes:
     if Account.from_key(key).address.lower() != a:
         raise ValueError("the key belongs to another account")
     return key
+
+
+def checked_address(address: str) -> str:
+    """A Hyperliquid (EVM) address as typed by the miner, lowercase; raises ValueError when it is not one, or when
+    its mixed case does not match its EIP-55 checksum (a typo)."""
+    a = address.strip()
+    if len(a) != 42 or not a.startswith("0x") or any(ch not in "0123456789abcdefABCDEF" for ch in a[2:]):
+        raise ValueError(f"{address!r} is not an address (0x and 40 hex characters)")
+    if a[2:] != a[2:].lower() and a[2:] != a[2:].upper() and not is_checksum_address(a):
+        raise ValueError(f"{address} does not match its checksum: check it for a typo")
+    return a.lower()
 
 
 PERMIT_DAYS = 7  # a start permission is good for one machine start within this many days of signing

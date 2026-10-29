@@ -25,6 +25,7 @@ from kokoah_subnet.agent.bundle import package, sha256_hex
 from kokoah_subnet.agent.harness import Harness, HarnessConfig
 from kokoah_subnet.agent.keystore import (
     KeyService,
+    checked_address,
     decrypt_key,
     encrypt_key,
     release_message,
@@ -33,7 +34,7 @@ from kokoah_subnet.agent.keystore import (
     store_digest,
 )
 from kokoah_subnet.agent.service import create_app, submit_message
-from kokoah_subnet.agent.supervisor import account_key
+from kokoah_subnet.agent.supervisor import account_key, address_setting, mainnet_setting
 from kokoah_subnet.binding import AgentRef, Binding
 from kokoah_subnet.chain import RegisteredHotkeys
 from kokoah_subnet.validator.agents import check_agents
@@ -378,3 +379,25 @@ def test_a_restore_in_progress_survives_a_service_restart(tmp_path: Path) -> Non
     assert blob.status_code == 200 and decrypt_key(base64.b64decode(blob.json()["blob"]), address, SECRET) == key
     again = restarted().post(f"/key-store/{address}/restore", json={"token": token})
     assert again.status_code == 403 and "used already" in again.json()["detail"]
+
+
+def test_the_machine_takes_only_real_addresses_and_a_known_network(world: dict[str, Any]) -> None:
+    from eth_utils.address import to_checksum_address
+
+    plain = Account.create().address.lower()
+    assert checked_address(plain) == plain and checked_address(to_checksum_address(plain)) == plain
+    assert checked_address("0x" + plain[2:].upper()) == plain
+    typo = to_checksum_address(plain).swapcase().replace("X", "x")  # every letter's case flipped
+    for wrong in (typo, plain[:-1], plain[2:], "0x" + "g" * 40, ""):
+        with pytest.raises(ValueError):
+            checked_address(wrong)
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_MASTER"):
+        address_setting("KOKOAH_AGENT_MASTER", plain[:-1])
+    assert mainnet_setting("mainnet") and not mainnet_setting("testnet")
+    for wrong in ("test", "Testnet", "finney", ""):
+        with pytest.raises(SystemExit, match="mainnet or testnet"):
+            mainnet_setting(wrong)
+    p = permit(world["submission"], "nope")  # signed by the hotkey, but for something that is not an address
+    body: dict[str, Any] = {"blob": base64.b64encode(b"KAK1" + bytes(60)).decode(), "master": "nope", "token": "x"}
+    body |= {"hotkey": ALICE.ss58_address, "netuid": NETUID, "submission": world["submission"], "permit": p}
+    assert world["svc"].put(f"/key-store/{plain}", json=body).status_code == 400
