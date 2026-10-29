@@ -16,6 +16,16 @@ from kokoah_subnet import __version__
 from kokoah_subnet.chain import NETWORKS, chain_info
 
 
+def _address(value: str) -> str:
+    """An address option: 0x and 40 hex characters, its checksum right when written in mixed case; lowercase."""
+    from kokoah_subnet.agent.keystore import checked_address
+
+    try:
+        return checked_address(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kokoah-subnet", description="Kokoah's Bittensor subnet tools.")
     parser.add_argument("--version", action="version", version=f"kokoah-subnet {__version__}")
@@ -43,12 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     message = msub.add_parser("message", help="print the exact text the Hyperliquid address must sign")
     message.add_argument("--netuid", required=True, type=int)
     message.add_argument("--hotkey", required=True, help="the hotkey's ss58 address")
-    message.add_argument("--address", required=True, help="the Hyperliquid (EVM) address")
+    message.add_argument("--address", required=True, type=_address, help="the Hyperliquid (EVM) address")
     bind = msub.add_parser("bind", help="publish the binding as the hotkey's on-chain commitment")
     bind.add_argument("--netuid", required=True, type=int)
-    bind.add_argument("--address", required=True)
+    bind.add_argument("--address", required=True, type=_address)
     bind.add_argument("--signature", required=True, help="0x-hex EIP-191 signature of the message by the address")
-    bind.add_argument("--previous-address", help="on a migration: the address the records come from")
+    bind.add_argument("--previous-address", type=_address, help="on a migration: the address the records come from")
     bind.add_argument("--previous-signature", help="its signature of the same message")
     bind.add_argument("--network", default="local")
     bind.add_argument("--wallet", required=True, help="wallet name")
@@ -64,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         u = msub.add_parser(name, help=text)
         u.add_argument("--service", default="https://api.kokoah.com/miners", help="the subnet's service")
         u.add_argument("--hotkey", required=True, help="the linked hotkey's ss58 address")
-        u.add_argument("--address", required=True, help="the linked Hyperliquid address")
+        u.add_argument("--address", required=True, type=_address, help="the linked Hyperliquid address")
         if name == "unlink":
             u.add_argument("--time-ms", required=True, type=int, help="the time printed with the message")
             u.add_argument("--signature", required=True, help="0x-hex EIP-191 signature of the message by the address")
@@ -94,13 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
     abind.add_argument("--wallet-path", default=None)
     amsg = asub.add_parser("message", help="print the text the miner's own address signs (withdraw, stop, release)")
     amsg.add_argument("kind", choices=["withdraw", "stop", "release"])
-    amsg.add_argument("--account", required=True, help="the agent account address")
+    amsg.add_argument("--account", required=True, type=_address, help="the agent account address")
     amsg.add_argument("--amount", default="", help="withdraw (required): the USDC amount, for example 100 or 25.5")
     arel = asub.add_parser(
         "release", help="take the account key out of the service (ends the agent bonus for the account, for good)"
     )
     arel.add_argument("--service", required=True)
-    arel.add_argument("--account", required=True)
+    arel.add_argument("--account", required=True, type=_address)
     arel.add_argument("--time-ms", required=True, type=int, help="from `agent message release`")
     arel.add_argument("--signature", required=True, help="the master address's signature of that message")
     arel_secret = arel.add_mutually_exclusive_group(required=True)
@@ -108,14 +118,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--secret-file", type=Path, help="the file `agent secret` wrote (the secret given at start)"
     )
     arel_secret.add_argument(
-        "--master", help="your master address: asks for the password the secret was made from (`agent secret`)"
+        "--master",
+        type=_address,
+        help="your master address: asks for the password the secret was made from (`agent secret`)",
     )
     arel.add_argument("--out", required=True, type=Path, help="where to write the private key (created, mode 600)")
     asec = asub.add_parser(
         "secret",
         help="make the secret for a sealed machine: from a strong password (checked) or at random (--generate)",
     )
-    asec.add_argument("--master", required=True, help="your own Hyperliquid address (the machine's master)")
+    asec.add_argument(
+        "--master", required=True, type=_address, help="your own Hyperliquid address (the machine's master)"
+    )
     asec.add_argument("--out", required=True, type=Path, help="where to write the secret (created, mode 600)")
     asec.add_argument("--generate", action="store_true", help="a random secret instead of one made from a password")
     asec.add_argument("--hotkey", default="", help="your hotkey, so the password check refuses passwords built on it")
@@ -124,7 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
         "authorize", help="sign the start permission for one sealed machine with your hotkey (one per machine start)"
     )
     aauth.add_argument("--netuid", required=True, type=int)
-    aauth.add_argument("--master", required=True, help="your own Hyperliquid address (the machine's master)")
+    aauth.add_argument(
+        "--master", required=True, type=_address, help="your own Hyperliquid address (the machine's master)"
+    )
     aauth.add_argument("--submission", required=True, help="the submission id the machine runs")
     aauth.add_argument("--out", required=True, type=Path, help="where to write the permission (created)")
     aauth.add_argument("--wallet", required=True)

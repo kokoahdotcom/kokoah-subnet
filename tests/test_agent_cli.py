@@ -15,7 +15,7 @@ from kokoah_subnet.agent import keystore
 from kokoah_subnet.agent.keystore import encrypt_key, parse_permit, start_message
 from kokoah_subnet.cli import main
 
-MASTER = "0x1c8970117AD600590a21a4d0651865790f7a7253"
+MASTER = "0x1c8970117aD600590a21A4D0651865790F7A7253"
 SUBMISSION = "eb" * 32
 
 
@@ -158,3 +158,16 @@ def test_agent_bind_takes_only_an_http_endpoint_with_its_port(
     assert bind("http://203.0.113.9:8080") == 1 and "cannot read the machine" in capsys.readouterr().out
     assert bind("http://203.0.113.5:8080/") == 1 and "set up for hotkey 5Other" in capsys.readouterr().out
     assert asked[-1] == "http://203.0.113.5:8080/binding"
+
+
+def test_address_options_refuse_typos(capsys: pytest.CaptureFixture[str]) -> None:
+    from kokoah_subnet.cli import build_parser
+
+    for wrong in (MASTER.swapcase().replace("X", "x"), MASTER[:-1], MASTER[2:]):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["agent", "secret", "--master", wrong, "--out", "s.hex", "--generate"])
+        assert "--master" in capsys.readouterr().err
+    args = build_parser().parse_args(["agent", "secret", "--master", MASTER, "--out", "s.hex", "--generate"])
+    assert args.master == MASTER.lower()
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["agent", "message", "stop", "--account", "0x123"])
