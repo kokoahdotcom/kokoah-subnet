@@ -147,10 +147,10 @@ with a typo, an unknown network, a missing or weak secret, a start permission th
 old, a bundle key that does not open the submission), then start a new machine.
 
 **If the machine stops.** The machine stores a copy of the account key encrypted with your secret (Kokoah cannot
-read it). Start a new machine with the same settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it
-proves to the service that it is a genuine sealed machine, gets the copy back, and the same account carries on as an
-agent. Keep your password (or the generated file) safe: without it the copy cannot be opened, and nobody can
-recover it for you.
+read it). Start a new machine from the newest approved image (its digest in `tee-image-reference`), with the same
+settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it proves to the service that it is a genuine sealed
+machine, gets the copy back, and the same account carries on as an agent. Keep your password (or the generated file)
+safe: without it the copy cannot be opened, and nobody can recover it for you.
 
 **Taking the key out yourself** (for example to trade the account by hand) ends the agent bonus for that account for
 good, and the release is public:
