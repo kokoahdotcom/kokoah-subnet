@@ -236,6 +236,7 @@ async def collect_and_score(
     fallback_hotkey = cfg.burn_hotkey if cfg.burn_hotkey and cfg.burn_hotkey in uid_of else snap.owner_hotkey
     if fallback_hotkey != cfg.burn_hotkey:
         log.warning("burn hotkey not registered: a day with no miner weight goes to the owner hotkey")
+    previous = {n["uid"]: n for n in store.latest_neurons(before_day=day)}
     store.put_neurons(day, snap.block, [n.as_row() for n in snap.neurons])
     committed = await read_file_commitment(client, cfg.netuid, snap.owner_hotkey)
     hash_matches: bool | None = None if committed is None or committed[0] != day else committed[1] == digest
@@ -262,13 +263,20 @@ async def collect_and_score(
             for hk, c in all_commitments.items()
         ],
     )
-    # hotkey swaps: the same UID on the same coldkey with a new hotkey keeps its pay history, skill and penalties,
-    # never its fee credit or qualification (re-binding required; the swap is recorded and applied when scoring)
+    # hotkey swaps: the same UID on the same coldkey and the same registration with a new hotkey keeps its pay
+    # history, skill and penalties, never its fee credit or qualification (re-binding required; the swap is recorded
+    # and applied when scoring). Compared with the metagraph of the previous scored day; a UID registered again
+    # (a new registration block) is a new registration, not a swap
     swaps: list[tuple[str, str]] = []
-    previous = {n["uid"]: n for n in store.latest_neurons()}
     for n in snap.neurons:
         prev_n = previous.get(n.uid)
-        if prev_n and prev_n["hotkey"] != n.hotkey and prev_n["coldkey"] == n.coldkey:
+        same_registration = (
+            not prev_n
+            or not prev_n["block_at_registration"]
+            or not n.block_at_registration
+            or prev_n["block_at_registration"] == n.block_at_registration
+        )
+        if prev_n and prev_n["hotkey"] != n.hotkey and prev_n["coldkey"] == n.coldkey and same_registration:
             store.put_swap(day, n.uid, prev_n["hotkey"], n.hotkey, n.coldkey)
             swaps.append((prev_n["hotkey"], n.hotkey))
             log.info("hotkey swap on uid %d: %s -> %s", n.uid, prev_n["hotkey"], n.hotkey)

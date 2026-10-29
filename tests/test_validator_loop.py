@@ -11,7 +11,7 @@ import pytest
 from eth_account import Account
 
 from kokoah_subnet.binding import AcceptedBinding, Binding, encode_binding, sign_binding, sign_unlink
-from kokoah_subnet.mechanism import DEFAULT
+from kokoah_subnet.mechanism import DEFAULT, MinerState
 from kokoah_subnet.validator.collect import ValidatorConfig, collect_and_score, day_index, day_strings
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
 from kokoah_subnet.validator.loop import step
@@ -46,6 +46,7 @@ class _Neuron:
     hotkey: str
     coldkey: str
     collateral_min: _Balance | None = None
+    block_at_registration: int = 0
 
 
 @dataclass
@@ -73,18 +74,18 @@ class _FakeChain:
         self.executed: list[Any] = []
         self.subnets = self
         self.staking = self
-
-    async def block(self) -> int:
-        return self._block
-
-    async def metagraph(self, netuid: int, block: int | None = None, commitments: bool = True) -> _Metagraph:
-        neurons = [
+        self.neurons = [
             _Neuron(0, OWNER, "ckOwner"),
             _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
             _Neuron(2, HK_B, "ckB", _Balance(10 * 10**9)),
             _Neuron(3, BURN, "ckBurn"),
         ]
-        return _Metagraph(block or self._block, 360, OWNER, neurons, 0.5)
+
+    async def block(self) -> int:
+        return self._block
+
+    async def metagraph(self, netuid: int, block: int | None = None, commitments: bool = True) -> _Metagraph:
+        return _Metagraph(block or self._block, 360, OWNER, list(self.neurons), 0.5)
 
     async def commitments(self, netuid: int) -> dict[str, _Commitment]:
         return self._commitments
@@ -806,4 +807,46 @@ async def test_a_validator_waits_for_the_unlink_list_until_the_deadline(tmp_path
         late = DAY_MS / 1000 + 86_400 + (DEFAULT.file_deadline_hours + 1) * 3600
         result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=late)
     assert {r.hotkey for r in result.records} == {HK_A, HK_B}
+    await hl.close()
+
+
+def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int]) -> None:
+    """The day before, uid 1 was hotkey A (registered at `registered[0]`), with a smoothed skill of 0.4; today uid 1
+    on the same coldkey is hotkey A2 (registered at `registered[1]`), bound to the same account."""
+    store.put_neurons(
+        "2026-10-20", 9_000, [{"uid": 1, "hotkey": HK_A, "coldkey": "ckA", "block_at_registration": registered[0]}]
+    )
+    store.put_states({HK_A: MinerState(g=0.4, phi_hat=50.0, qualified=True)}, day="2026-10-20")
+    a = ACCOUNTS["a"]
+    chain.neurons[1] = _Neuron(1, "hkA2", "ckA", _Balance(10 * 10**9), block_at_registration=registered[1])
+    chain._commitments["hkA2"] = _Commitment(
+        encode_binding(Binding(a.address, sign_binding(a.key, 2, "hkA2", a.address))), 9500
+    )
+    del chain._commitments[HK_A]
+    # a failed earlier attempt of the same day recorded today's metagraph already: it is not the previous day
+    store.put_neurons(
+        DAY, 9_900, [{"uid": 1, "hotkey": "hkA2", "coldkey": "ckA", "block_at_registration": registered[1]}]
+    )
+
+
+async def test_a_hotkey_swap_is_detected_between_two_scored_days(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    _swap_hotkey_a(store, chain, (100, 100))
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.swaps_through(DAY) == [(DAY, HK_A, "hkA2")]
+    events = store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}'")
+    assert {"event": "swapped", "hotkey": "hkA2"} in events
+    a2 = next(r for r in result.records if r.hotkey == "hkA2")
+    assert a2.g == pytest.approx(0.7 * 0.4 + 0.3 * a2.skill_raw)  # the skill record follows the new hotkey
+    assert a2.phi_hat == pytest.approx(0.3 * a2.credited.credit)  # the credit does not
+    await hl.close()
+
+
+async def test_a_new_registration_on_the_same_uid_is_not_a_swap(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    _swap_hotkey_a(store, chain, (100, 200))  # uid 1 was deregistered and registered again by the same coldkey
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.swaps_through(DAY) == []
+    a2 = next(r for r in result.records if r.hotkey == "hkA2")
+    assert a2.g == pytest.approx(0.3 * a2.skill_raw)  # a fresh hotkey: no skill record carried over
     await hl.close()

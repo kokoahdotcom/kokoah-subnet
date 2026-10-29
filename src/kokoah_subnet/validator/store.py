@@ -598,16 +598,24 @@ class Store:
             ).all()
         return {str(a): int(u) for a, u in rows}
 
-    def latest_neurons(self) -> list[dict[str, Any]]:
-        """The most recent metagraph snapshot recorded by a scoring run (uid, hotkey, coldkey)."""
+    def latest_neurons(self, before_day: str | None = None) -> list[dict[str, Any]]:
+        """The most recent metagraph snapshot recorded by a scoring run, or the latest one of a day before
+        `before_day` (uid, hotkey, coldkey, registration block)."""
+        n = S.neurons
         with self._engine.connect() as c:
-            day = c.execute(select(func.max(S.neurons.c.day))).scalar()
+            latest = select(func.max(n.c.day))
+            if before_day is not None:
+                latest = latest.where(n.c.day < before_day)
+            day = c.execute(latest).scalar()
             if day is None:
                 return []
             rows = c.execute(
-                select(S.neurons.c.uid, S.neurons.c.hotkey, S.neurons.c.coldkey).where(S.neurons.c.day == day)
+                select(n.c.uid, n.c.hotkey, n.c.coldkey, n.c.block_at_registration).where(n.c.day == day)
             ).all()
-        return [{"uid": int(u), "hotkey": str(h), "coldkey": str(k)} for u, h, k in rows]
+        return [
+            {"uid": int(u), "hotkey": str(h), "coldkey": str(k), "block_at_registration": int(b) if b else None}
+            for u, h, k, b in rows
+        ]
 
     # ----- chain samples ----------------------------------------------------------------------------------
 

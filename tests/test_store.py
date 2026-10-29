@@ -78,8 +78,12 @@ def test_penalties_swaps_and_latest_neurons(tmp_path: Path) -> None:
     s.put_penalty("0xA", 40, "2026-10-21", "hk", "mirrored")
     s.put_penalty("0xA", 30, "2026-10-21", "hk", "shorter one is ignored")
     assert s.penalties(10) == {"0xa": 40} and s.penalties(40) == {}
-    s.put_neurons("2026-10-21", 100, [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}])
-    assert s.latest_neurons() == [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck"}]
+    s.put_neurons("2026-10-21", 100, [{"uid": 1, "hotkey": "hkOld", "coldkey": "ck", "block_at_registration": 7}])
+    s.put_neurons("2026-10-22", 200, [{"uid": 1, "hotkey": "hkNew", "coldkey": "ck", "block_at_registration": 7}])
+    assert s.latest_neurons() == [{"uid": 1, "hotkey": "hkNew", "coldkey": "ck", "block_at_registration": 7}]
+    # the snapshot before a day, whatever was recorded for that day itself (a retried day)
+    assert s.latest_neurons(before_day="2026-10-22")[0]["hotkey"] == "hkOld"
+    assert s.latest_neurons(before_day="2026-10-21") == []
     s.put_swap("2026-10-21", 1, "hkOld", "hkNew", "ck")
     s.put_swap("2026-10-23", 2, "hkA", "hkB", "ck2")
     assert s.swaps_through("2026-10-22") == [("2026-10-21", "hkOld", "hkNew")]

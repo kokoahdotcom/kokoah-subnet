@@ -338,10 +338,11 @@ after 60 days.
 - **A mirror report follows the address**, and the addresses its owner controls (hotkeys on the same coldkey, its
   sub-accounts), not the hotkey; a transfer someone else sends never carries it: binding a penalized address to a new
   hotkey keeps the penalty.
-- **Hotkey swap on chain** (same UID and coldkey, new hotkey): the pay history, skill and penalties follow the new
-  hotkey, the credit and qualification do not (the swap is recorded in `hotkey_swaps` and applied when the
-  day is scored, so a re-score applies it again); the binding must be published again because the signed line
-  names the hotkey.
+- **Hotkey swap on chain** (same UID, coldkey and registration block as on the previous scored day, new hotkey):
+  the pay history, skill and penalties follow the new hotkey, the credit and qualification do not (the swap is
+  recorded in `hotkey_swaps` and applied when the day is scored, so a re-score applies it again); the binding must
+  be published again because the signed line names the hotkey. A UID registered again, even by the same coldkey,
+  is a new registration, not a swap.
 - **Trading before joining.** Fills of a day scored before the binding was accepted are recorded as unbound and
   never pay. The bindings are read when a day is scored and the day's file is scored as a whole, so a binding
   accepted before a day is scored covers that whole day, including its earlier fills (they also count toward
