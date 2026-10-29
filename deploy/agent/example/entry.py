@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import time
+from typing import Any
 
 SOCKET = os.environ["KOKOAH_AGENT_SOCKET"]
 
@@ -24,10 +25,11 @@ class _Unix(http.client.HTTPConnection):
         self.sock.connect(SOCKET)
 
 
-def harness(path: str, body: dict) -> dict:
+def harness(path: str, body: dict[str, Any]) -> dict[str, Any]:
     conn = _Unix("harness")
     conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
-    return json.loads(conn.getresponse().read())
+    answer: dict[str, Any] = json.loads(conn.getresponse().read())
+    return answer
 
 
 def main() -> None:
@@ -37,9 +39,10 @@ def main() -> None:
         if mids.get("ok") and state.get("ok"):
             value = state["result"].get("marginSummary", {}).get("accountValue")
             print(f"BTC mid {mids['result'].get('BTC')}, account value {value}", flush=True)
-        # A real strategy decides here, for example:
+        # A real strategy decides here, for example (a price has at most 5 significant figures: whole dollars for BTC):
         # harness("/call", {"method": "order", "params": {"orders": [{"coin": "BTC", "is_buy": True,
-        #     "sz": 0.001, "limit_px": float(mids["result"]["BTC"]) * 0.99, "order_type": {"limit": {"tif": "Alo"}}}]}})
+        #     "sz": 0.001, "limit_px": round(float(mids["result"]["BTC"]) * 0.99),
+        #     "order_type": {"limit": {"tif": "Alo"}}}]}})
         time.sleep(60)
 
 
