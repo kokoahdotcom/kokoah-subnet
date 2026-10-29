@@ -175,3 +175,27 @@ def test_address_options_refuse_typos(capsys: pytest.CaptureFixture[str]) -> Non
     assert args.master == MASTER.lower()
     with pytest.raises(SystemExit):
         build_parser().parse_args(["agent", "message", "stop", "--account", "0x123"])
+
+
+def test_missing_folders_files_and_services_are_reported_plainly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wallet = bt.Wallet(name="miner", hotkey="hk", path=str(tmp_path / "wallets"))
+    wallet.create_new_hotkey(use_password=False, overwrite=True, suppress=True)
+    signer = ["--wallet", "miner", "--wallet-hotkey", "hk", "--wallet-path", str(tmp_path / "wallets")]
+    nowhere = tmp_path / "no-such-folder" / "secret.hex"
+    assert main(["agent", "secret", "--master", MASTER, "--out", str(nowhere), "--generate"]) == 1
+    assert "cannot create" in capsys.readouterr().out
+    assert main(["agent", "submit", "--service", "http://svc", "--bundle", str(tmp_path / "none"), *signer]) == 1
+    assert "cannot read" in capsys.readouterr().out
+
+    def down(*a: Any, **kw: Any) -> httpx.Response:
+        raise httpx.ConnectError("no route")
+
+    monkeypatch.setattr(httpx, "post", down)
+    monkeypatch.setattr(httpx, "get", down)
+    (tmp_path / "b.bundle").write_bytes(b"PK")
+    assert main(["agent", "submit", "--service", "http://svc", "--bundle", str(tmp_path / "b.bundle"), *signer]) == 1
+    assert "cannot reach" in capsys.readouterr().out
+    assert main(["miner", "unlink-message", "--hotkey", wallet.hotkey.ss58_address, "--address", MASTER]) == 1
+    assert "cannot reach" in capsys.readouterr().out

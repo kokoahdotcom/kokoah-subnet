@@ -286,10 +286,8 @@ def _agent_secret(args: argparse.Namespace) -> int:
             return 1
         secret = derive_secret(password, args.master)
         how = "made from your password and your master address: the same password makes it again any time"
-    try:
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        print(f"{args.out} already exists: choose another --out (an existing secret is never overwritten)")
+    fd = _new_file(args.out, "choose another --out (an existing secret is never overwritten)")
+    if fd is None:
         return 1
     with os.fdopen(fd, "w") as f:
         f.write(secret.hex())  # no newline: the file is passed as is to the machine's start settings
@@ -532,21 +530,37 @@ def _miner(args: argparse.Namespace) -> int:
         import httpx
 
         base = args.service.rstrip("/")
-        if args.miner_command == "unlink-message":
-            r = httpx.get(
-                f"{base}/unlinks/message", params={"hotkey": args.hotkey, "address": args.address}, timeout=30
-            )
-        else:
-            body = {
-                "hotkey": args.hotkey,
-                "address": args.address,
-                "time_ms": args.time_ms,
-                "signature": args.signature,
-            }
-            r = httpx.post(f"{base}/unlinks", json=body, timeout=30)
+        try:
+            if args.miner_command == "unlink-message":
+                r = httpx.get(
+                    f"{base}/unlinks/message", params={"hotkey": args.hotkey, "address": args.address}, timeout=30
+                )
+            else:
+                body = {
+                    "hotkey": args.hotkey,
+                    "address": args.address,
+                    "time_ms": args.time_ms,
+                    "signature": args.signature,
+                }
+                r = httpx.post(f"{base}/unlinks", json=body, timeout=30)
+        except httpx.HTTPError as exc:
+            print(f"cannot reach the service at {base}: {exc!r}")
+            return 1
         print(r.text)
         return 0 if r.status_code == 200 else 1
     return 2
+
+
+def _new_file(path: Path, exists: str) -> int | None:
+    """A new file for a secret or a key (created, mode 600, never over an existing one): its descriptor, or None with
+    the reason printed."""
+    try:
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print(f"{path} already exists: {exists}")
+    except OSError as exc:
+        print(f"cannot create {path}: {exc.strerror} (does its folder exist?)")
+    return None
 
 
 def _detail(response: Any) -> str:
@@ -584,38 +598,48 @@ def _agent(args: argparse.Namespace) -> int:
             key = new_key()
             data = encrypt(plain, key)
             key_file = args.out.with_name(args.out.name + ".key")
-            try:
-                fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                print(f"{key_file} already exists: choose another --out")
+            fd = _new_file(key_file, "choose another --out")
+            if fd is None:
                 return 1
             with os.fdopen(fd, "w") as f:
                 f.write(key.hex())
             print(f"bundle key in {key_file} (mode 600): the sealed machine needs it, nobody else should have it")
         else:
             print("public code: anyone can download it from the service and copy your strategy")
-        args.out.write_bytes(data)
+        try:
+            args.out.write_bytes(data)
+        except OSError as exc:
+            print(f"cannot write {args.out}: {exc.strerror}")
+            return 1
         print(f"code fingerprint (commit this): {sha256_hex(plain)}")
         print(f"submission id: {sha256_hex(data)}  ({len(data)} bytes, {'plain' if args.public else 'encrypted'})")
         return 0
     if args.agent_command == "submit":
         from kokoah_subnet.agent.service import submit_message
 
-        blob = args.bundle.read_bytes()
+        try:
+            blob = args.bundle.read_bytes()
+        except OSError as exc:
+            print(f"cannot read {args.bundle}: {exc.strerror}")
+            return 1
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address
         signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
-        r = httpx.post(
-            f"{args.service.rstrip('/')}/agents",
-            content=blob,
-            headers={
-                "content-type": "application/octet-stream",
-                "x-kokoah-hotkey": hotkey,
-                "x-kokoah-bundle-sha256": sha256_hex(blob),
-                "x-kokoah-signature": signature,
-            },
-            timeout=120,
-        )
+        try:
+            r = httpx.post(
+                f"{args.service.rstrip('/')}/agents",
+                content=blob,
+                headers={
+                    "content-type": "application/octet-stream",
+                    "x-kokoah-hotkey": hotkey,
+                    "x-kokoah-bundle-sha256": sha256_hex(blob),
+                    "x-kokoah-signature": signature,
+                },
+                timeout=120,
+            )
+        except httpx.HTTPError as exc:
+            print(f"cannot reach the service at {args.service}: {exc!r}")
+            return 1
         print(r.status_code, r.text)
         return 0 if r.status_code == 200 else 1
     if args.agent_command == "bind":
@@ -715,10 +739,8 @@ def _agent(args: argparse.Namespace) -> int:
         t = int(time.time() * 1000)
         message = start_message(args.netuid, hotkey, args.master, args.submission, t)
         permit = f"{t}:{bytes(wallet.hotkey.sign(message.encode())).hex()}"
-        try:
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            print(f"{args.out} already exists: a permission is good for one machine start, write a new file")
+        fd = _new_file(args.out, "a permission is good for one machine start, write a new file")
+        if fd is None:
             return 1
         with os.fdopen(fd, "w") as f:
             f.write(permit)
@@ -728,10 +750,8 @@ def _agent(args: argparse.Namespace) -> int:
         print(f"start the machine with --metadata-from-file=tee-env-KOKOAH_AGENT_PERMIT={args.out}")
         return 0
     if args.agent_command == "service-key":
-        try:
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            print(f"{args.out} already exists: the service key is never replaced (every stored copy depends on it)")
+        fd = _new_file(args.out, "the service key is never replaced (every stored copy depends on it)")
+        if fd is None:
             return 1
         with os.fdopen(fd, "w") as f:
             f.write(os.urandom(32).hex() + "\n")
@@ -757,10 +777,8 @@ def _agent(args: argparse.Namespace) -> int:
             from kokoah_subnet.miner_secret import derive_secret
 
             secret = derive_secret(getpass.getpass("password the secret was made from: "), args.master)
-        try:
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            print(f"{args.out} already exists: choose another --out (nothing was released)")
+        fd = _new_file(args.out, "choose another --out (nothing was released)")
+        if fd is None:
             return 1
         private: bytes | None = None
         try:
