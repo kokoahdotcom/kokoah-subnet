@@ -20,6 +20,13 @@ coverage/
 wallets/
 *.mnemonic
 *.seed
+# Files the agent and database guides create: a machine secret, start permissions, a released account key, agent
+# bundles and database dumps.
+secret.hex
+permit*.txt
+key.txt
+*.bundle
+*.dump
 
 # Local state
 *.log
