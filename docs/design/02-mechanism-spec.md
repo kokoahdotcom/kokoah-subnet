@@ -86,9 +86,9 @@ its client order id belongs to an order the address placed with Kokoah's builder
 a modify carries no builder field), or, for a taker fill, when the transaction that placed and filled it
 (`txDetails` of the fill's hash) is such an order. Builder approvals are not used: the order's own builder field
 decides, and it cannot be changed after the fact. Counterparties of history fills come from trade ids: the
-validator reads the day's fills of every bound address and of up to 25 linked accounts per address (sub-accounts
-and transfer partners), and a fill whose trade id appears among another known address's fills traded with that
-address. A failed read of the history or of the explorer fails the day's scoring (retried within the hour) rather
+validator reads the day's fills of every bound address and of up to 25 linked accounts per address (its
+sub-accounts first, then its transfer partners by the amount moved, largest first), and a fill whose trade id
+appears among another known address's fills traded with that address. A failed read of the history or of the explorer fails the day's scoring (retried within the hour) rather
 than scoring the day without it. Checked against the exchange's own report of the builder's earnings: the confirmed
 fills add up to what the exchange reports as earned, to the cent, with no genuine fill refused.
 

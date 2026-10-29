@@ -44,6 +44,7 @@ from .hyperliquid import (
     daily_equity_from_portfolio,
     day_bounds_ms,
     ledger_amount,
+    linked_reads,
     mark_by_minute,
     mean_close,
     off_market_transfer,
@@ -562,20 +563,35 @@ async def collect_and_score(
         perps_own = [f for f in marked if is_perp(f.coin)]
         store.put_activity(address, day, round_trips(perps_own), len(perps_own), sum(f.notional for f in perps_own))
         rt_window, active_window, _ = store.activity_window(address, params.gate_days)
+        # linked accounts (clusters, and the counterparties of history fills): like the history itself, a failed read
+        # fails the day until the deadline; after it, the failure is recorded and the other reads go on
         try:
             window_start = start_ms - params.gate_days * 86_400_000
             subs = set(await sub_accounts(hl, address))
             partners = await transfer_partners(hl, address, window_start, end_ms)
-            edge_lists[address] = [(address, o, "subaccount") for o in subs] + [
-                (address, o, "transfer") for o in partners - subs
-            ]
-            # the linked accounts' trades of the day name the counterparty of history fills by trade id
-            for other in sorted(subs | partners)[: params.max_linked_accounts]:
-                for f in await hl.fills_by_time(other, start_ms, end_ms):
-                    if f.tid is not None:
-                        tid_owners.setdefault(f.tid, set()).add(other)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "clusters", str(exc))
+            if not past_deadline:
+                raise RuntimeError(f"linked accounts of {address} unavailable: {exc}") from exc
+            subs, partners = set(), {}
+        edge_lists[address] = [(address, o, "subaccount") for o in sorted(subs)] + [
+            (address, o, "transfer") for o in sorted(set(partners) - subs)
+        ]
+        # the linked accounts' trades of the day name the counterparty of history fills by trade id
+        linked, left_out = linked_reads(subs, partners, params.max_linked_accounts)
+        if left_out:
+            store.put_error(day, hk, address, "clusters", f"{left_out} linked accounts beyond the cap not read")
+        for other in linked:
+            try:
+                other_fills = await hl.fills_by_time(other, start_ms, end_ms)
+            except Exception as exc:  # noqa: BLE001
+                store.put_error(day, hk, address, "clusters", f"fills of {other}: {exc}")
+                if not past_deadline:
+                    raise RuntimeError(f"fills of {other}, linked to {address}, unavailable: {exc}") from exc
+                continue
+            for f in other_fills:
+                if f.tid is not None:
+                    tid_owners.setdefault(f.tid, set()).add(other)
         staked = 0.0
         try:
             stakes = await stake_samples(client, cfg.netuid, coldkey_of[hk], hk, blocks)

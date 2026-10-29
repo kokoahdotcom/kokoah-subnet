@@ -133,6 +133,14 @@ async def test_fill_history_paging_keeps_fills_at_the_page_boundary() -> None:
     await client.close()
 
 
+def test_linked_reads_put_sub_accounts_first_then_the_largest_transfers() -> None:
+    from kokoah_subnet.validator.hyperliquid import linked_reads
+
+    partners = {"0x01": 0.01, "0x02": 0.01, "0xbig": 5000.0, "0xsub": 3.0}
+    assert linked_reads({"0xsub"}, partners, 3) == (["0xsub", "0xbig", "0x01"], 1)
+    assert linked_reads(set(), {}, 25) == ([], 0)
+
+
 async def test_info_client_retries_then_fails() -> None:
     calls = {"n": 0}
 

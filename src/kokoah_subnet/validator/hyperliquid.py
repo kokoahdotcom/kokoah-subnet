@@ -199,21 +199,38 @@ async def sub_accounts(client: HyperliquidInfo, user: str) -> list[str]:
     return [str(s["subAccountUser"]).lower() for s in result if "subAccountUser" in s]
 
 
-async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> set[str]:
-    """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase."""
+async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> dict[str, float]:
+    """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase,
+    with the USD moved between them both ways."""
     updates = await client.post(
         {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
     )
     me = user.lower()
-    partners: set[str] = set()
+    partners: dict[str, float] = {}
     for u in updates:
         delta = u.get("delta", {})
         if delta.get("type") in ("internalTransfer", "subAccountTransfer", "send", "receive"):
+            moved = 0.0
+            for key in ("usdc", "usdcValue", "amount"):
+                try:
+                    moved = abs(float(delta.get(key) or 0.0))
+                except (TypeError, ValueError):
+                    continue
+                if moved:
+                    break
             for key in ("destination", "user", "fromUser", "toUser"):
                 other = str(delta.get(key, "")).lower()
                 if other.startswith("0x") and other != me:
-                    partners.add(other)
+                    partners[other] = partners.get(other, 0.0) + moved
     return partners
+
+
+def linked_reads(subs: set[str], partners: Mapping[str, float], cap: int) -> tuple[list[str], int]:
+    """The linked accounts whose trades are read, at most `cap`: the sub-accounts first, then the transfer partners
+    by the amount moved, largest first (anyone can send a small transfer, so small ones come last). Also returns how
+    many were left out."""
+    ordered = sorted(subs) + sorted((a for a in partners if a not in subs), key=lambda a: (-partners[a], a))
+    return ordered[:cap], max(0, len(ordered) - cap)
 
 
 async def positions_notional(client: HyperliquidInfo, user: str) -> dict[str, float]:

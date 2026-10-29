@@ -32,6 +32,9 @@ PNL_DAY: dict[str, float] = {}  # address -> recorded profit over the scored day
 LEDGER: dict[str, list[dict[str, Any]]] = {}  # address -> ledger records of the scored day
 EXPLORER_FAILS: set[str] = set()  # addresses whose explorer reads fail
 TX_LOOKUPS: list[str] = []  # every txDetails hash asked
+SUBS: dict[str, list[str]] = {}  # address -> its sub-accounts
+FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
+FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 
@@ -148,6 +151,10 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=dict(EARNED))
     if t == "extraAgents":
         return httpx.Response(200, json=[])
+    if t == "userFillsByTime":
+        FILLS_READ.append(body["user"].lower())
+        if body["user"].lower() in FILLS_FAIL:
+            return httpx.Response(500, json={"error": "down"})
     if t == "userFillsByTime" and body["user"].lower() in HISTORY and body.get("startTime") == DAY_MS:
         return httpx.Response(200, json=HISTORY[body["user"].lower()])
     if t == "userFillsByTime":
@@ -218,6 +225,8 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
                 ["perpAllTime", all_time],
             ],
         )
+    if t == "subAccounts" and body["user"].lower() in SUBS:
+        return httpx.Response(200, json=[{"subAccountUser": sub} for sub in SUBS[body["user"].lower()]])
     if t == "subAccounts":
         return httpx.Response(200, content=b"null", headers={"content-type": "application/json"})
     return httpx.Response(400, json={"error": t})
@@ -231,6 +240,9 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     LEDGER.clear()
     EXPLORER_FAILS.clear()
     TX_LOOKUPS.clear()
+    SUBS.clear()
+    FILLS_FAIL.clear()
+    FILLS_READ.clear()
     PORTFOLIO_FAILS.clear()
     HISTORY.clear()
     OTHER_BUILDER.clear()
@@ -868,4 +880,64 @@ async def test_one_missing_day_keeps_a_long_record_in_the_entry_test(tmp_path: P
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     a = next(r for r in result.records if r.hotkey == HK_A)
     assert a.entry_psr is not None and a.returns_days == 90
+    await hl.close()
+
+
+def _sends(user: str, amounts: dict[str, float]) -> list[dict[str, Any]]:
+    """Ledger records of USDC sent from `user` to each address."""
+    return [
+        {
+            "time": DAY_MS + i,
+            "hash": f"0x{i:064x}",
+            "delta": {
+                "type": "send",
+                "user": user,
+                "destination": to,
+                "token": "USDC",
+                "amount": str(usd),
+                "usdcValue": str(usd),
+            },
+        }
+        for i, (to, usd) in enumerate(amounts.items())
+    ]
+
+
+async def test_dust_transfers_cannot_push_a_sub_account_out_of_the_linked_reads(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    sub = "0x" + "ff" * 20
+    SUBS[addr_a] = [sub]
+    dust = {f"0x{i:040x}": 0.01 for i in range(1, 31)}  # 30 addresses that sort before the sub-account
+    partner = "0x" + "ee" * 20
+    LEDGER[addr_a] = _sends(addr_a, {**dust, partner: 5_000.0})
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    linked = [u for u in FILLS_READ if u not in (addr_a, ACCOUNTS["b"].address.lower())]
+    assert len(linked) == DEFAULT.max_linked_accounts and linked[:2] == [sub, partner]
+    messages = [e["message"] for e in store.execute_sql("select message from errors")]
+    assert "7 linked accounts beyond the cap not read" in messages
+    await hl.close()
+
+
+async def test_one_linked_account_read_failure_does_not_skip_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sent money to two accounts: the first one's fills cannot be read. Until the deadline the day waits; after
+    it, the second account's fills are still read and name the counterparty of A's afternoon trade."""
+    from kokoah_subnet.validator import hyperliquid
+
+    async def instant(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(f"{hyperliquid.__name__}.asyncio.sleep", instant)  # no back-off waits in the test
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    broken, partner = "0x" + "e1" * 20, "0x" + "e2" * 20
+    LEDGER[addr_a] = _sends(addr_a, {broken: 9_000.0, partner: 5_000.0})
+    FILLS_FAIL.add(broken)
+    HISTORY[partner] = [dict(HISTORY[addr_a][-1], side="B", cloid=None)]  # the other side of A's last trade
+    end = DAY_MS + 86_400_000
+    with pytest.raises(RuntimeError, match="linked to"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    traded = store.execute_sql(f"select counterparty, excluded from fills where tid = 1003 and address = '{addr_a}'")
+    assert traded == [{"counterparty": partner, "excluded": "cluster"}]  # a transfer partner: the same cluster
     await hl.close()
