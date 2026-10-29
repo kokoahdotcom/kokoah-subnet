@@ -23,8 +23,10 @@ The agent talks to the harness over a Unix socket whose path is in `KOKOAH_AGENT
 | `GET /address` | the account address |
 
 Every order gets Kokoah's builder code (0.025%) and an order id with Kokoah's agent marker; the response returns the
-order ids. Prices more than 5% from the mid are refused. Not offered: modify, TWAP, trailing stops, withdrawals,
-transfers, approvals. Main perpetuals only.
+order ids. An order that executes now (a limit order, or a trigger order already past its trigger price) is refused
+when its price is more than 5% from the mid. A trigger order that has not fired yet (a stop-loss or take-profit)
+rests wherever you place it, and its limit price must be within 5% of its trigger price. Not offered: modify, TWAP,
+trailing stops, withdrawals, transfers, approvals. Main perpetuals only.
 
 ## 2. Package and submit
 

@@ -208,3 +208,31 @@ def test_numbers_that_are_not_finite_are_refused_before_signing(setup: Any) -> N
     answer = agent.post("/call", content=body, headers={"content-type": "application/json"})
     assert answer.status_code == 200 and answer.json()["ok"] is False
     assert not fake.posted
+
+
+def test_triggers_are_banded_where_they_execute(setup: Any) -> None:
+    """The mid is 100000. A stop or take-profit that has not fired rests wherever it is placed, and its limit must be
+    near its own trigger; one already past its trigger executes now, so its limit must be near the mid."""
+    h, fake, _, _ = setup
+
+    def order(is_buy: bool, tpsl: str, trigger: float, limit: float) -> Any:
+        o = {"coin": "BTC", "is_buy": is_buy, "sz": 0.01, "limit_px": limit, "reduce_only": True}
+        o["order_type"] = {"trigger": {"triggerPx": trigger, "isMarket": True, "tpsl": tpsl}}
+        return h.call("order", {"orders": [o]})
+
+    order(False, "sl", 80000, 79000)  # a long's stop-loss 20% below the market
+    order(True, "sl", 130000, 131000)  # a short's stop-loss 30% above
+    order(False, "tp", 125000, 124000)  # a long's take-profit 25% above
+    order(True, "tp", 85000, 85500)  # a short's take-profit 15% below
+    assert len(fake.posted) == 4 and fake.posted[0]["action"]["orders"][0]["t"]["trigger"]["triggerPx"] == "80000"
+    with pytest.raises(ValueError, match="from its trigger"):
+        order(False, "sl", 80000, 70000)  # it would execute 12.5% below its trigger
+    with pytest.raises(ValueError, match="from the mid"):
+        order(False, "tp", 85000, 85000)  # a take-profit below the market fires at once, 15% below the mid
+    with pytest.raises(ValueError, match="from the mid"):
+        order(True, "sl", 85000, 85000)  # a stop-buy below the market fires at once too
+    with pytest.raises(ValueError, match="trigger price"):
+        order(False, "sl", 0, 0)
+    assert len(fake.posted) == 4
+    fired = harness_module.trigger_fired
+    assert fired(True, "sl", 100000, 100000) and fired(False, "tp", 100000, 100000)  # at the trigger: it fires

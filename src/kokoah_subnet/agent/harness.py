@@ -7,7 +7,9 @@ Unix socket (the agent has no other way out, see `sandbox.py`) and the outside w
 To the agent (Unix socket, `agent_app`):
   POST /call {method, params}: `order` (one or more limit or trigger orders), `cancel`, `cancel_by_cloid`,
       `update_leverage`, `update_isolated_margin`, `schedule_cancel`. Kokoah's builder code is attached to every
-      order; the order id carries Kokoah's agent marker; prices more than `price_band` from the mid are refused.
+      order; the order id carries Kokoah's agent marker. An order that executes now (a limit order, or a trigger
+      already past its trigger price) is refused when priced more than `price_band` from the mid; a trigger that has
+      not fired yet rests wherever it is placed, and its limit price must be within `price_band` of its trigger.
       Not offered: modify (its builder handling is unverified), TWAP and trailing stops (no builder field),
       withdrawals, transfers and approvals.
   POST /info {request}: read-only exchange data. Account queries are answered for this account only.
@@ -91,7 +93,7 @@ class HarnessConfig:
     builder: str  # Kokoah's builder address
     builder_fee_tenths_bps: int = 25  # 0.025%
     mainnet: bool = True
-    price_band: float = 0.05  # orders priced more than this from the mid are refused
+    price_band: float = 0.05  # how far an order may execute from the market (see `order`)
 
     @property
     def api(self) -> str:
@@ -187,12 +189,9 @@ class Harness:
     def new_cloid(self) -> str:
         return "0x" + AGENT_CLOID_PREFIX + self.config.code_sha256[:16] + os.urandom(4).hex()
 
-    def _check_price(self, coin: str, px: float, mids: dict[str, str]) -> None:
-        mid = float(mids.get(coin, 0) or 0)
-        if mid <= 0:
-            raise ValueError(f"no mid price for {coin}")
-        if abs(px / mid - 1) > self.config.price_band:
-            raise ValueError(f"price {px} is more than {self.config.price_band:.0%} from the mid {mid}")
+    def _check_price(self, px: float, reference: float, what: str) -> None:
+        if abs(px / reference - 1) > self.config.price_band:
+            raise ValueError(f"price {px} is more than {self.config.price_band:.0%} from {what} {reference}")
 
     def order(self, orders: list[dict[str, Any]], grouping: str = "na") -> Any:
         if not orders:
@@ -211,21 +210,32 @@ class Harness:
             coin = str(o["coin"])
             asset, _ = self.asset(coin)
             px = float(o["limit_px"])
-            self._check_price(coin, px, mids)
+            is_buy = bool(o["is_buy"])
+            mid = float(mids.get(coin, 0) or 0)
+            if mid <= 0:
+                raise ValueError(f"no mid price for {coin}")
             order_type = o.get("order_type") or {"limit": {"tif": "Gtc"}}
             if "limit" in order_type:
                 tif = order_type["limit"].get("tif", "Gtc")
                 if tif not in ("Gtc", "Ioc", "Alo"):
                     raise ValueError(f"unknown time in force {tif}")
+                self._check_price(px, mid, "the mid")
                 t: dict[str, Any] = {"limit": {"tif": tif}}
             elif "trigger" in order_type:
                 trig = order_type["trigger"]
-                self._check_price(coin, float(trig["triggerPx"]), mids)
+                trigger_px = float(trig["triggerPx"])
+                if not trigger_px > 0:
+                    raise ValueError(f"bad trigger price {trig['triggerPx']}")
+                tpsl = "tp" if trig.get("tpsl") == "tp" else "sl"
+                if trigger_fired(is_buy, tpsl, trigger_px, mid):  # it executes now: banded like a limit order
+                    self._check_price(px, mid, "the mid")
+                else:  # it rests until the market reaches its trigger, then executes at its limit price
+                    self._check_price(px, trigger_px, "its trigger")
                 t = {
                     "trigger": {
                         "isMarket": bool(trig.get("isMarket", False)),
-                        "triggerPx": float_to_wire(float(trig["triggerPx"])),
-                        "tpsl": "tp" if trig.get("tpsl") == "tp" else "sl",
+                        "triggerPx": float_to_wire(trigger_px),
+                        "tpsl": tpsl,
                     }
                 }
             else:
@@ -235,7 +245,7 @@ class Harness:
             wires.append(
                 {
                     "a": asset,
-                    "b": bool(o["is_buy"]),
+                    "b": is_buy,
                     "p": float_to_wire(px),
                     "s": float_to_wire(float(o["sz"])),
                     "r": bool(o.get("reduce_only", False)),
@@ -354,6 +364,14 @@ class Harness:
             "network": "mainnet" if self.config.mainnet else "testnet",
             "started_at": self.started_at,
         }
+
+
+def trigger_fired(is_buy: bool, tpsl: str, trigger_px: float, price: float) -> bool:
+    """Whether a trigger order fires at this price, as the exchange decides: a stop buys at or above its trigger and
+    sells at or below it; a take-profit buys at or below and sells at or above."""
+    if tpsl == "sl":
+        return price >= trigger_px if is_buy else price <= trigger_px
+    return price <= trigger_px if is_buy else price >= trigger_px
 
 
 def withdraw_message(account: str, amount_usd: str, time_ms: int) -> str:
