@@ -109,7 +109,8 @@ gcloud compute instances create kokoah-agent \
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
 ~tee-env-KOKOAH_AGENT_NETUID=385\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
-~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>" \
+~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>\
+~tee-env-KOKOAH_AGENT_NETWORK=mainnet" \
   --metadata-from-file=tee-env-KOKOAH_AGENT_SECRET=$HOME/kokoah-agent/secret.hex,\
 tee-env-KOKOAH_AGENT_PERMIT=$HOME/kokoah-agent/permit.txt,\
 tee-env-KOKOAH_AGENT_BUNDLE_KEY=$HOME/kokoah-agent/my-agent.bundle.key   # leave the bundle key out for a --public bundle
@@ -119,6 +120,25 @@ gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080 --target
 
 Use the production `confidential-space` image family, never `confidential-space-debug`: a debug machine is refused
 by every validator.
+
+`KOKOAH_AGENT_NETWORK` chooses the exchange: `mainnet` (the default), where the subnet's trading counts, or
+`testnet`, to try an agent on Hyperliquid's test exchange, where nothing it trades counts. Any other value stops the
+machine. Every start setting is its own `tee-env-<NAME>` entry, named exactly as above (the image accepts no other
+names); the `^~^` at the start makes `~` the separator between them, so leave no spaces around it.
+
+**Check that it started.** A production machine shows no logs, so check it from outside before you bind it:
+
+```bash
+curl http://<machine>:8080/status
+# {"address": the agent account, "netuid": 385, "hotkey": yours, "master": your address, "code_sha256": the
+#  fingerprint `agent package` printed, "harness_version", "builder_approved": false until the account is funded,
+#  "network": "mainnet", "started_at"}
+curl "http://<machine>:8080/attestation?challenge=$(openssl rand -hex 32)"   # a token: the machine proves itself
+```
+
+If `/status` does not answer a few minutes after the start, the machine stopped. Check every setting (an address
+with a typo, an unknown network, a missing or weak secret, a start permission that was used or is more than 7 days
+old, a bundle key that does not open the submission), then start a new machine.
 
 **If the machine stops.** The machine stores a copy of the account key encrypted with your secret (Kokoah cannot
 read it). Start a new machine with the same settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it
@@ -139,16 +159,15 @@ uv run kokoah-subnet agent release --service https://api.kokoah.com/miners --acc
 ## 5. Bind and fund
 
 ```bash
-curl http://<machine>:8080/status          # the account address, the code fingerprint, the hotkey
 uv run kokoah-subnet agent bind --netuid 385 --network test --endpoint http://<machine>:8080 \
   --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
-`agent bind` reads the binding line the machine signed with the account's key and publishes it from your hotkey
-with the agent field (the code fingerprint and the machine's address). Then deposit USDC to the account address on
-Hyperliquid (at least $10,000 for the account to be eligible). USDC that lands in the account's spot balance (as it
-does with Hyperliquid's "send") is moved to its perpetuals balance within a minute; the harness approves Kokoah's
-builder fee as soon as the account is funded, and your agent starts trading.
+`agent bind` reads the binding line the machine signed with the account's key and publishes it from your hotkey with
+the agent field (the code fingerprint and the machine's address). Then deposit USDC to the account address
+(`address` in `/status`) on Hyperliquid (at least $10,000 for the account to be eligible). USDC that lands in the
+account's spot balance (as it does with Hyperliquid's "send") is moved to its perpetuals balance within a minute;
+the harness approves Kokoah's builder fee as soon as the account is funded, and your agent starts trading.
 
 ## 6. Withdraw or stop
 
