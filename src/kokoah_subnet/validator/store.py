@@ -240,13 +240,15 @@ class Store:
         return float(total or 0.0)
 
     def dated_returns(self, address: str, days: int) -> dict[str, float]:
-        """Daily returns by day over consecutive stored days whose return is known (the same series as `returns`)."""
-        series = self._equity_rows(address, days + 1)
+        """The last `days` known daily returns by day, oldest first (the same series as `returns`). A return needs two
+        consecutive stored days whose values are known; a day without one is skipped and the series reaches further
+        back, over at most the last 2 x `days` + 1 stored days, so one missing day never shortens the window."""
+        series = self._equity_rows(address, 2 * days + 1)
         out: dict[str, float] = {}
         for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
             if k0 and k1 and e0 > 0 and _next_day(d0) == d1:
                 out[d1] = (e1 - e0 - f1) / e0
-        return out
+        return dict(list(out.items())[-days:]) if days > 0 else {}
 
     def _equity_rows(self, address: str, days: int) -> list[tuple[str, float, float, bool]]:
         with self._engine.connect() as c:
@@ -289,14 +291,15 @@ class Store:
         return [(str(d), float(v), float(f) + float(o or 0.0)) for d, v, f, o in reversed(rows)]
 
     def returns(self, address: str, days: int) -> list[float]:
-        """Daily returns over consecutive stored days, oldest first, with deposits, withdrawals and money moved in
-        through off-market fills removed."""
+        """The last `days` known daily returns, oldest first, with deposits, withdrawals and money moved in through
+        off-market fills removed."""
         return list(self.dated_returns(address, days).values())
 
     def account_record(self, address: str, with_days: bool = True) -> dict[str, Any] | None:
         """An address's record as this validator scored it (None if never scored): its daily returns (the series the
         skill test reads, with money moved in or out and off-market profit removed), the growth of 1 over them
-        (carried over days the exchange did not record), and each scored day's figures."""
+        (carried over days the exchange did not record), and each scored day's figures. The "90d" figures are over
+        the last 90 known returns, the window of the entry test."""
         a = address.lower()
         with self._engine.connect() as c:
             scored = (

@@ -136,3 +136,23 @@ def test_a_record_without_known_returns_says_so_with_nulls(tmp_path: Path) -> No
     r = (s.account_record(a) or {})["record"]
     assert r["record_days"] == 0 and r["return_90d"] is None and r["worst_drop_90d"] is None
     assert r["losing_days_90d"] is None and r["return_days_90d"] is None and r["return_all"] is None
+
+
+def test_one_missing_day_does_not_shorten_the_return_series(tmp_path: Path) -> None:
+    """199 stored days, one of them (ten days ago) missing and one unknown: the last 90 known returns are still 90,
+    reaching back over the gaps, and each is the return of two consecutive known days."""
+    from datetime import date, timedelta
+
+    s = Store(tmp_path / "g.sqlite")
+    start = date(2026, 4, 1)
+    days = [(start + timedelta(days=i)).isoformat() for i in range(200)]
+    for i, d in enumerate(days):
+        if i == 189:
+            continue  # no account value that day
+        s.put_equity("0xA", d, 1000.0 + i, 0.0, known=i != 150)
+    dated = s.dated_returns("0xA", 90)
+    assert len(dated) == 90 and len(s.returns("0xA", 90)) == 90
+    assert days[189] not in dated and days[190] not in dated and days[-1] in dated
+    assert list(dated) == sorted(dated)
+    assert dated[days[-1]] == pytest.approx(1.0 / 1198.0)
+    assert len(s.dated_returns("0xA", 500)) == 195  # every known return: 199 pairs of days, four broken

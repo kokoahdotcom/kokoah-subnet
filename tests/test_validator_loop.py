@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -849,4 +850,22 @@ async def test_a_new_registration_on_the_same_uid_is_not_a_swap(tmp_path: Path) 
     assert store.swaps_through(DAY) == []
     a2 = next(r for r in result.records if r.hotkey == "hkA2")
     assert a2.g == pytest.approx(0.3 * a2.skill_raw)  # a fresh hotkey: no skill record carried over
+    await hl.close()
+
+
+async def test_one_missing_day_keeps_a_long_record_in_the_entry_test(tmp_path: Path) -> None:
+    """A's 120 stored days miss one day ten days ago (an account read that failed): the entry test still has its 90
+    returns."""
+    import random
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    rng = random.Random(5)
+    value = 25_000.0
+    for back in range(120, 0, -1):
+        value *= 1 + rng.gauss(0.002, 0.01)
+        if back != 10:
+            store.put_equity(addr_a, (date.fromisoformat(DAY) - timedelta(days=back)).isoformat(), value, 0.0)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    a = next(r for r in result.records if r.hotkey == HK_A)
+    assert a.entry_psr is not None and a.returns_days == 90
     await hl.close()

@@ -157,7 +157,9 @@ r_d = (E_d − E_{d−1} − flows_d − offmarket_d) / E_{d−1}       r̃_d = 
 ```
 
 `flows_d` are deposits, withdrawals, account and vault transfers; `offmarket_d` is the money moved in through
-off-market fills that day (§3, item 2).
+off-market fills that day (§3, item 2). A day has a return only when its account value and the previous day's are
+both known; the windows below count known returns, so a day without one (an account value that could not be read,
+or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 
 Confidence, last 60 days: `PSR` = probabilistic Sharpe ratio of `r̃` (Bailey and López de Prado 2012; skew- and
 kurtosis-adjusted) against a benchmark daily Sharpe ratio of 0.03 (about 0.5 annualized); 0.5 if fewer than 10
@@ -184,7 +186,7 @@ w_i = s_i × v_i × (1.1 if a verified agent account, §16)    skill weight
 `V_i,30d` is the credited notional (eligible trades only, §9a) of the last 30 days, today included. A miner takes
 part only when all of these hold: eligible today (§9a); the activity gates pass (§9); no mirror penalty (§3); and
 the **entry test**: the probabilistic Sharpe ratio of the last 90 capped daily returns against the benchmark daily
-Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 days recorded: no entry). Then:
+Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no entry). Then:
 
 - **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
   (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
