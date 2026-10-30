@@ -33,8 +33,10 @@ from .skillpool import (
     apply_copy_groups,
     copy_groups,
     copy_leader,
+    copy_leads,
     entry_psr,
     skill_weight,
+    smoothed_leads,
     volume_factor,
 )
 from .state import MinerState, advance
@@ -63,7 +65,7 @@ class MinerInputs:
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days
     dated_returns: Mapping[str, float] = field(default_factory=dict)  # day -> return, for the copy rule
     agent_verified: bool = False  # a verified sealed-machine agent account (the skill bonus)
-    record_start: str | None = None  # the day the address's exchange history begins (the copy rule's longest record)
+    record_start: str | None = None  # the day the address's exchange history begins (recorded)
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,9 @@ class DayInputs:
     states: Mapping[str, MinerState]  # by hotkey; missing hotkeys start fresh
     cluster_of: Mapping[str, str] = field(default_factory=dict)
     positions: Mapping[str, Mapping[str, Sequence[float]]] = field(default_factory=dict)  # mirror rule inputs
+    # address -> its owner's group (hotkeys on one coldkey, a master and its sub-accounts): the position mirror rule
+    # compares only addresses in one group
+    owner_group_of: Mapping[str, str] = field(default_factory=dict)
     pool_alpha: float | None = None
     penalized_until: Mapping[str, int] = field(default_factory=dict)  # address -> day index: a report follows it
 
@@ -181,7 +186,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     bound_fills = {a: f for a, f in by_user(fills).items() if a in bound}
     against_bound = bound_counterparty_notional(bound_fills)  # measured before the fills are dropped
     bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
-    position_share = mirror_position_share(inputs.positions, params)
+    position_share = mirror_position_share(inputs.positions, params, inputs.owner_group_of)
 
     work: list[_Work] = []
     for m in inputs.miners:
@@ -204,9 +209,9 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         # only trades made while eligible earn credit; an ineligible day adds nothing and the smoothing decays
         credited = day_fees(qual.credited, params, m.exchange_rates_bps) if eligible else DayFees.zero()
         gross = fees.notional + against_bound.get(m.address, 0.0)
-        cp_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0
+        cp_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0  # recorded: removed, not reported
         pos_share = position_share.get(m.address, 0.0)
-        mirrored = max(cp_share, pos_share)
+        mirrored = pos_share
         action = mirror_action(mirrored, params)
         zeroed = (
             action.zero_multiplier
@@ -254,8 +259,13 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
     group_of = {k: tuple(g) for g in groups for k in g}
     fills_of = {w.m.hotkey: bound_fills.get(w.m.address, []) for w in work}
-    record_start = {w.m.hotkey: w.m.record_start or min(w.m.dated_returns, default=None) for w in work}
-    leaders = {tuple(g): copy_leader(g, fills_of, record_start) for g in groups}
+    today_leads: dict[str, dict[str, float]] = {}
+    for members in groups:
+        for x, row in copy_leads(members, fills_of).items():
+            today_leads.setdefault(x, {}).update(row)
+    led = smoothed_leads({w.m.hotkey: dict(w.state.led) for w in work}, today_leads, params)
+    registered = {w.m.hotkey: w.m.registered_block or w.state.registered_block for w in work}
+    leaders = {tuple(g): copy_leader(g, led, registered) for g in groups}
     skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}
     allocation = allocate(volume_weights, skill_weights, inputs.price_usd, params, inputs.pool_alpha)
@@ -328,6 +338,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             qual_notional=q.notional,
             address=w.m.address,
             registered_block=w.m.registered_block or w.state.registered_block,
+            led=tuple(sorted(led.get(w.m.hotkey, {}).items())),
         )
 
     return DayResult(inputs.day_index, allocation, records, states)

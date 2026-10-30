@@ -7,12 +7,13 @@
 A miner takes part only when it is eligible that day, passes the activity gates, has no mirror penalty, and passes
 the entry test: the probabilistic Sharpe ratio of its capped daily returns over the last `entry_days` days is at
 least `entry_psr` (with fewer days recorded, it does not pass). Accounts whose daily returns move almost together
-(the copy rule) share one weight: only the group's leader (the member that trades first, else the longest record)
-keeps its weight.
+(the copy rule) share one weight: only the group's leader (the member that trades first, by notional over the days,
+else the earliest registration) keeps its weight.
 """
 
 from __future__ import annotations
 
+import bisect
 import math
 from collections.abc import Mapping, Sequence
 
@@ -84,42 +85,82 @@ def copy_groups(dated_returns: Mapping[str, Mapping[str, float]], params: Params
     return sorted((sorted(g) for g in groups.values() if len(g) > 1), key=lambda g: g[0])
 
 
-def copy_leader(
-    group: Sequence[str],
-    fills_of: Mapping[str, Sequence[Fill]],
-    record_start: Mapping[str, str | None],
-    window_s: float = 600.0,
-    min_pairs: int = 5,
-) -> str:
-    """The member a copy group follows. Whoever trades first leads: every fill of one member is matched with the
-    nearest fill of another member on the same coin and side within `window_s`, and the member whose fills come
-    first most often leads (a copier always trades after what it copies). Without `min_pairs` matched fills the
-    longest record leads (the day its account history on the exchange begins), then the hotkey order."""
-    index: dict[str, dict[tuple[str, str], list[int]]] = {}
+def copy_leads(
+    group: Sequence[str], fills_of: Mapping[str, Sequence[Fill]], window_s: float = 600.0
+) -> dict[str, dict[str, float]]:
+    """`leads[x][y]`: the notional by which member `x` traded before member `y` today. Every fill of `x` is matched
+    with the nearest fill of `y` on the same coin and side; when `y`'s fill comes after it within `window_s`, the
+    pair counts the smaller of the two fills' notional, and each fill of `y` counts once, for its largest match
+    (a copier always trades after what it copies, and many small fills weigh no more than their size)."""
+    index: dict[str, dict[tuple[str, str], tuple[list[int], list[float]]]] = {}
     for k in group:
-        by_key: dict[tuple[str, str], list[int]] = {}
+        by_key: dict[tuple[str, str], list[tuple[int, float]]] = {}
         for f in fills_of.get(k, ()):
-            by_key.setdefault((f.coin, f.side), []).append(f.time_ms)
-        index[k] = {key: sorted(ts) for key, ts in by_key.items()}
-    led = dict.fromkeys(group, 0)
-    pairs = 0
+            by_key.setdefault((f.coin, f.side), []).append((f.time_ms, f.notional))
+        index[k] = {key: ([t for t, _ in sorted(v)], [n for _, n in sorted(v)]) for key, v in by_key.items()}
     window_ms = window_s * 1000
+    leads: dict[str, dict[str, float]] = {x: {} for x in group}
     for x in group:
         for y in group:
             if x == y:
                 continue
-            for key, times in index[x].items():
-                others = index[y].get(key, [])
-                for t in times:
-                    near = min(others, key=lambda u: abs(u - t), default=None)
-                    if near is not None and 0 < near - t <= window_ms:
-                        led[x] += 1
-                        pairs += 1
-    best = max(led.values())
-    top = [k for k in group if led[k] == best]
-    if pairs >= min_pairs and len(top) == 1:
+            total = 0.0
+            for key, (times, sizes) in index[x].items():
+                if key not in index[y]:
+                    continue
+                other_times, other_sizes = index[y][key]
+                best: dict[int, float] = {}  # y's fill -> its largest match
+                for t, n in zip(times, sizes, strict=True):
+                    i = bisect.bisect_left(other_times, t)
+                    # the nearest of y's fills: the last before t or the first at or after it (ties go to the earlier)
+                    near = min(
+                        (j for j in (i - 1, i) if 0 <= j < len(other_times)),
+                        key=lambda j: (abs(other_times[j] - t), other_times[j]),
+                        default=None,
+                    )
+                    if near is not None and 0 < other_times[near] - t <= window_ms:
+                        best[near] = max(best.get(near, 0.0), min(n, other_sizes[near]))
+                total += sum(best.values())
+            if total > 0:
+                leads[x][y] = total
+    return leads
+
+
+def copy_leader(
+    group: Sequence[str],
+    led: Mapping[str, Mapping[str, float]],
+    registered_block: Mapping[str, int | None],
+) -> str:
+    """The member a copy group follows: the one that led the most notional (`led[x][y]`: smoothed over the days, see
+    `copy_leads`), when it led strictly the most. Without that, the earliest registration on the subnet (the same on
+    every validator, and no later account can have an earlier one), then the hotkey order."""
+    totals = {k: sum(v for y, v in led.get(k, {}).items() if y in group and y != k) for k in group}
+    best = max(totals.values(), default=0.0)
+    top = [k for k in group if totals[k] == best]
+    if best > 0 and len(top) == 1:
         return top[0]
-    return min(group, key=lambda k: (record_start.get(k) or "9999-99-99", k))
+    return min(group, key=lambda k: (registered_block.get(k) is None, registered_block.get(k) or 0, k))
+
+
+LEAD_FLOOR = 0.01  # USD: smaller smoothed leads are dropped from the state
+
+
+def smoothed_leads(
+    previous: Mapping[str, Mapping[str, float]], today: Mapping[str, Mapping[str, float]], params: Params
+) -> dict[str, dict[str, float]]:
+    """Each member's lead over each other, smoothed over the days like credit and skill (`params.smoothing` for
+    today), so one day of many quick trades does not decide who leads."""
+    out: dict[str, dict[str, float]] = {}
+    for x in set(previous) | set(today):
+        before, now = previous.get(x, {}), today.get(x, {})
+        row = {
+            y: (1 - params.smoothing) * before.get(y, 0.0) + params.smoothing * now.get(y, 0.0)
+            for y in set(before) | set(now)
+        }
+        kept = {y: v for y, v in row.items() if v >= LEAD_FLOOR}
+        if kept:
+            out[x] = kept
+    return out
 
 
 def apply_copy_groups(

@@ -1004,6 +1004,7 @@ def _state_from_json(s: str) -> MinerState:
     raw = json.loads(s)
     raw["paid"] = tuple(raw.get("paid", ()))
     raw["paid_days"] = tuple((int(d), float(a)) for d, a in raw.get("paid_days", ()))
+    raw["led"] = tuple((str(k), float(v)) for k, v in raw.get("led", ()))
     known = set(MinerState.__dataclass_fields__)
     return MinerState(**{k: v for k, v in raw.items() if k in known})
 

@@ -36,7 +36,8 @@ def clip_to_mark(fills: Iterable[Fill], params: Params) -> list[Fill]:
 
 def bound_counterparty_notional(fills_by_address: Mapping[str, Sequence[Fill]]) -> dict[str, float]:
     """Mirror rule (counterparties): notional each bound address traded directly against another bound address,
-    read from the fill's counterparty field. Exact, so an honest trader is never flagged by coincidence."""
+    read from the fill's counterparty field. Such fills are removed from credit; they report no one, since another
+    miner can take anyone's resting orders (recorded only)."""
     bound = set(fills_by_address)
     return {
         a: sum(f.notional for f in fills if f.counterparty in bound and f.counterparty != a)
@@ -61,11 +62,19 @@ def _pearson(x: Sequence[float], y: Sequence[float]) -> float:
     return sxy / math.sqrt(sxx * syy)
 
 
-def mirror_position_share(positions: Mapping[str, Mapping[str, Sequence[float]]], params: Params) -> dict[str, float]:
-    """Mirror rule (positions): `positions[address][coin]` is the signed daily net position notional over the same
-    days for every address. For each pair and coin, days where both hold a position are compared; a correlation
-    below the threshold on at least `mirror_min_days` such days marks `min(|a|, |b|)` of each day as mirrored.
-    Returns mirrored notional / total position notional per address."""
+def mirror_position_share(
+    positions: Mapping[str, Mapping[str, Sequence[float]]],
+    params: Params,
+    owner_group_of: Mapping[str, str] | None = None,
+) -> dict[str, float]:
+    """Mirror rule (positions): `positions[address][coin]` is the signed end-of-day net position notional over the
+    same days for every address. Only pairs one owner tied together are compared (`owner_group_of`: address -> its
+    group of hotkeys on one coldkey, a master and its sub-accounts; an address missing from it is alone): anyone can
+    hold the opposite of another trader's position, so an unlinked pair reports no one. For each such pair and coin,
+    days where both hold a position are compared; a correlation below the threshold on at least `mirror_min_days`
+    such days marks `min(|a|, |b|)` of each day as mirrored. Returns mirrored notional / total position notional per
+    address."""
+    group = owner_group_of or {}
     totals: dict[str, float] = {}
     # mirrored notional per address, coin and day; capped at the own position so several partners cannot count
     # the same day twice
@@ -76,6 +85,8 @@ def mirror_position_share(positions: Mapping[str, Mapping[str, Sequence[float]]]
     addresses = sorted(positions)
     for i, a in enumerate(addresses):
         for b in addresses[i + 1 :]:
+            if group.get(a, a) != group.get(b, b):
+                continue
             for coin, sa in positions[a].items():
                 sb = positions[b].get(coin)
                 if sb is None:

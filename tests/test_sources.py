@@ -123,7 +123,7 @@ def test_two_bound_traders_trading_each_other_after_midday_earn_nothing_from_it(
     states = {"hkA": MinerState(qualified=True), "hkB": MinerState(qualified=True)}
     res = score_day(DayInputs(day_index=3, price_usd=1.0, fills=fills, miners=miners, states=states), DEFAULT)
     for r in res.records:
-        assert r.fees.fills == 0 and r.mirrored_share == pytest.approx(1.0) and r.pay_alpha == 0.0
+        assert r.fees.fills == 0 and r.counterparty_share == pytest.approx(1.0) and r.pay_alpha == 0.0
 
 
 def test_an_order_id_another_order_also_used_proves_nothing() -> None:

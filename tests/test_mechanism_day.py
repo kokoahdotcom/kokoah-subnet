@@ -122,13 +122,13 @@ def test_copies_share_one_skill_weight_through_the_day() -> None:
     assert ra.skill_weight + rb.skill_weight == pytest.approx(ra.skill_adjusted * ra.volume_factor)
 
 
-def test_the_older_record_leads_a_copy_group_without_matched_fills() -> None:
-    """Two correlated records, no fills to tell who trades first: the account whose history on the exchange begins
-    earlier keeps the weight, though the copier's hotkey sorts first and both return series cover the same 90 days."""
+def test_the_earlier_registration_leads_a_copy_group_without_matched_fills() -> None:
+    """Two correlated records, no fills to tell who trades first: the hotkey registered on the subnet earlier keeps
+    the weight (not the older exchange account, which can be bought), though the copier's hotkey sorts first."""
     rec = strong_record(1)
     states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
-    copier = replace(miner("hkA", A, list(rec)), record_start="2026-09-01")
-    original = replace(miner("hkB", B, rec), record_start="2026-03-15")
+    copier = replace(miner("hkA", A, list(rec)), record_start="2020-01-01", registered_block=9_000)
+    original = replace(miner("hkB", B, rec), record_start="2026-03-15", registered_block=1_000)
     inputs = DayInputs(day_index=5, price_usd=1.0, fills=[], states=states, miners=[copier, original])
     ra, rb = score_day(inputs, DEFAULT).records
     assert ra.copy_group == ("hkA", "hkB")
@@ -148,24 +148,39 @@ def test_fresh_miner_earns_volume_pay_but_not_yet_skill_pay() -> None:
     assert r.volume_pay_alpha == pytest.approx(DEFAULT.miner_pool_alpha)
 
 
-def test_mirrored_pair_loses_credit_and_is_reported() -> None:
-    # A and B trade against each other all day (the counterparty field says so): mirrored above 50%
+def test_trades_between_miners_are_not_paid_and_report_no_one() -> None:
+    """A and B trade against each other all day (the counterparty field says so): none of it earns credit, but
+    nobody is reported, since any miner can take another's resting orders to get it reported."""
     fa = [Fill(DAY0 + i * 60_000, A, "BTC", "B", 100_000.0, 1.0, True, 25.0, counterparty=B) for i in range(20)]
     fb = [Fill(DAY0 + i * 60_000, B, "BTC", "A", 100_000.0, 1.0, False, 25.0, counterparty=A) for i in range(20)]
+    own = taker_fills(B, 4, 10_000.0)  # B's own trades with the market
     inputs = DayInputs(
         day_index=5,
         price_usd=1.0,
-        fills=fa + fb,
+        fills=fa + fb + own,
         states={"hkA": MinerState(qualified=True), "hkB": MinerState(qualified=True)},
         miners=[MinerInputs("hkA", A, avg_equity_usd=1e6), MinerInputs("hkB", B, avg_equity_usd=1e6)],
     )
     res = score_day(inputs, DEFAULT)
+    ra, rb = res.records
+    assert ra.counterparty_share == pytest.approx(1.0) and rb.counterparty_share > 0.9  # recorded
     for r in res.records:
-        assert r.mirrored_share == pytest.approx(1.0)
-        assert r.credit_factor == pytest.approx(0.0) and r.reported and r.zeroed
-        assert r.pay_alpha == 0.0
-    assert res.states["hkA"].is_zeroed(34) and not res.states["hkA"].is_zeroed(35)
-    assert res.allocation.burn_alpha == pytest.approx(DEFAULT.miner_pool_alpha)  # nobody has weight
+        assert r.mirrored_share == 0.0 and r.credit_factor == 1.0 and not r.reported and not r.zeroed
+    assert ra.credited.fills == 0 and rb.credited.fills == 4  # only B's trades with the market earn credit
+    assert not res.states["hkB"].is_zeroed(6)
+
+
+def test_opposite_positions_report_only_a_pair_one_owner_tied_together() -> None:
+    days = 12
+    long = [float(100_000 + 1_000 * d) for d in range(days)]
+    positions = {A: {"BTC": long}, B: {"BTC": [-x for x in long]}}
+    states = {"hkA": MinerState(qualified=True), "hkB": MinerState(qualified=True)}
+    miners = [MinerInputs("hkA", A, avg_equity_usd=1e6), MinerInputs("hkB", B, avg_equity_usd=1e6)]
+    base = DayInputs(day_index=5, price_usd=1.0, fills=[], states=states, miners=miners, positions=positions)
+    stranger = score_day(base, DEFAULT)  # anyone can hold the opposite of a trader's position: nobody reported
+    assert all(not r.reported and r.position_share == 0.0 for r in stranger.records)
+    same_owner = score_day(replace(base, owner_group_of={A: A, B: A}), DEFAULT)  # e.g. hotkeys on one coldkey
+    assert all(r.reported and r.position_share == pytest.approx(1.0) for r in same_owner.records)
 
 
 def test_cluster_self_matches_count_for_nothing() -> None:
