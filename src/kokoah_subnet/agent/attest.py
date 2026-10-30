@@ -24,8 +24,9 @@ from __future__ import annotations
 import hashlib
 import json
 import socket
+import threading
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -108,12 +109,44 @@ class KeySource(Protocol):
     def get_signing_key_from_jwt(self, token: str) -> Any: ...
 
 
+KEYS_REFRESH_S = 300.0  # Google's key set is read again at most this often (it changes every few weeks)
+RETRY_S = 10.0  # after a failed read
+
+
+class PublishedKeys:
+    """A published key set (JWKS), read again only when a token names a key not in it, and at most once every
+    `refresh_s`, so tokens naming made-up keys cost no fetches; such a token is refused."""
+
+    def __init__(self, fetch: Callable[[], Iterable[Any]], refresh_s: float = KEYS_REFRESH_S) -> None:
+        self.fetch = fetch  # the set's keys (PyJWK, with key_id)
+        self.refresh_s = refresh_s
+        self._keys: dict[str, Any] = {}
+        self._read_at = float("-inf")
+        self._lock = threading.Lock()
+
+    def get_signing_key_from_jwt(self, token: str) -> Any:
+        kid = str(jwt.get_unverified_header(token).get("kid", ""))
+        with self._lock:
+            if kid not in self._keys and time.monotonic() - self._read_at >= self.refresh_s:
+                try:
+                    self._keys = {k.key_id: k for k in self.fetch()}
+                    self._read_at = time.monotonic()
+                except Exception:
+                    self._read_at = time.monotonic() - self.refresh_s + RETRY_S  # a failed read is tried again soon
+                    raise
+            key = self._keys.get(kid)
+        if key is None:
+            raise jwt.PyJWKClientError(f"no published signing key {kid!r}")
+        return key
+
+
 def google_keys() -> KeySource:
-    """Google's published token-signing keys (fetched from the OIDC discovery document, cached by PyJWT)."""
+    """Google's published token-signing keys (from the OIDC discovery document)."""
     import httpx
 
     jwks_uri = httpx.get(DISCOVERY, timeout=20).json()["jwks_uri"]
-    return jwt.PyJWKClient(jwks_uri, cache_keys=True)
+    client = jwt.PyJWKClient(jwks_uri, cache_keys=False, cache_jwk_set=False, timeout=20)
+    return PublishedKeys(lambda: client.get_signing_keys())
 
 
 def _nonces(claims: Mapping[str, Any]) -> set[str]:
