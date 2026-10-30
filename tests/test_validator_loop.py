@@ -1177,6 +1177,10 @@ def test_a_backlog_after_an_outage_shares_one_grace_window(tmp_path: Path) -> No
     evening = first + 20 * hour
     assert retry_deadline(store, "2026-10-20", evening, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
     assert retry_deadline(store, "2026-10-20", evening + hour, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
+    # attempts that are always more than two hours apart restart the window once, then it ends
+    t = evening + 3 * hour
+    assert retry_deadline(store, "2026-10-20", t, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
+    assert retry_deadline(store, "2026-10-20", t + 3 * hour, end("2026-10-20"), DEFAULT, 3.0) < t + 3 * hour
 
 
 def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int]) -> None:
