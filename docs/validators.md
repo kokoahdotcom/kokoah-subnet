@@ -85,15 +85,16 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 | `--network` | `test` or `finney` | The Bittensor network. |
 | `--netuid` | `385` on testnet | The subnet. |
 | `--builder` | `0x43ccc0618e4358494f87a4b8699230203dc4ab67` | Kokoah's builder address: whose builder fills are scored. |
-| `--burn-hotkey` | testnet: `5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz` | The subnet's burn hotkey, published by the operator. It receives a day only when no miner has any weight. |
+| `--burn-hotkey` | testnet: `5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz` | The subnet's burn hotkey, published by the operator. It receives a day only when no miner has any weight; without one, such a day goes to the owner hotkey. |
 | `--agent-service` | `https://api.kokoah.com/miners` | The subnet's service: the released agent keys and the unlinks signed by linked addresses. Without it, no account counts as a verified agent and no unlink is applied. |
 | `--data-dir` | a directory | Cached builder files and local state. |
-| `--db-url` | default `$KOKOAH_SUBNET_DB_URL` | The record; SQLite in `--data-dir` when unset. |
+| `--db-url` | default `$KOKOAH_SUBNET_DB_URL` | The record; SQLite in `--data-dir` when unset. A record serves one subnet: the validator refuses one made on another network or netuid. |
 | `--wallet`, `--wallet-hotkey`, `--wallet-path` | your wallet | The validator's hotkey. |
-| `--start-day` | `YYYY-MM-DD` | The first day this validator scores (section 10). |
+| `--start-day` | `YYYY-MM-DD` | The first day this validator scores (section 10); default: the one its record remembers, else yesterday. |
 | `--hl-info-url` | default Hyperliquid's public API | Point it at your own Hyperliquid node or endpoint to avoid public rate limits. |
 | `--tao-usd-fallback` | a price | TAO/USD used only if the exchange lists no TAO perpetual. |
 | `--poll-seconds` | default `60` | How often the loop wakes up. |
+| `--watch` | | Score and record every day, never submit weights: to follow the subnet before or without a permit. |
 
 ## 6. Run
 

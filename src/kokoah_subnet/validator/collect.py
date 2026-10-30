@@ -81,7 +81,7 @@ class ValidatorConfig:
     wallet_name: str = "validator"
     wallet_hotkey: str = "default"
     wallet_path: str | None = None
-    start_day: str = "2026-10-20"  # day index 0
+    start_day: str = "2026-10-20"  # the first day scored (the CLI: given, else remembered, else yesterday)
     hl_info_url: str = MAINNET_INFO
     builder_base_url: str = BASE_URL
     tao_coin: str = "TAO"  # the perp whose mark price gives TAO/USD
@@ -96,6 +96,7 @@ class ValidatorConfig:
     # attempt at the day, so a validator that comes back after an outage still retries before it scores without them
     retry_grace_hours: float = 3.0
     agent_service: str = ""  # the owner's agent service (its released list); empty: no account counts as an agent
+    watch: bool = False  # score and record every day, never submit weights
     extra: dict[str, str] = field(default_factory=dict)
 
     def store_target(self) -> str | Path:
@@ -299,7 +300,7 @@ async def collect_and_score(
     # hotkey when no burn hotkey is registered
     fallback_hotkey = cfg.burn_hotkey if cfg.burn_hotkey and cfg.burn_hotkey in uid_of else snap.owner_hotkey
     if fallback_hotkey != cfg.burn_hotkey:
-        log.warning("burn hotkey not registered: a day with no miner weight goes to the owner hotkey")
+        log.warning("no burn hotkey registered: a day with no miner weight goes to the owner hotkey")
     previous = {n["uid"]: n for n in store.latest_neurons(before_day=day)}
     store.put_neurons(day, snap.block, [n.as_row() for n in snap.neurons])
     committed = await read_file_commitment(client, cfg.netuid, snap.owner_hotkey)
