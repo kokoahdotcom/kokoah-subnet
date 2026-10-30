@@ -16,6 +16,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import io
+import json
 import os
 import re
 import stat
@@ -52,25 +53,51 @@ SECRET_FILES = (
     "utc--*",  # an Ethereum keystore file
 )
 SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys", ".ssh"})  # a wallet's hotkeys are not encrypted
-# a whole PEM private key block (any kind, PGP included): a header line, its body and the matching end line, so a
-# library that only names the header in its code (as key parsers do) is not taken for a key
-PRIVATE_KEY_BLOCK = re.compile(
-    rb"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-----\r?\n(?:[A-Za-z0-9+/=:,\- ]*\r?\n)+?-----END \1-----"
-)
-# encrypted key files whatever their name: an Ethereum keystore (ciphertext and its key derivation) and a Bittensor
-# key file (its secret phrase or seed)
-KEY_FILE_FIELDS = ((b'"ciphertext"', b'"kdf"'), (b'"secretPhrase"',), (b'"secretSeed"',))
+# a private key in PEM or PGP armor, whatever its kind: the header, then the key's base64 within a short window (past
+# armor header lines, indentation, quotes or escaped line breaks), before anything else that starts with dashes. A
+# library that only names the header in its code (as key parsers do) has no key text after it, so it is packaged.
+PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----")
+KEY_TEXT = re.compile(rb"[A-Za-z0-9+/]{32,}")
+KEY_WINDOW = 2048
+KEY_FILE_MAX = 64 * 1024  # an encrypted key file is small JSON
+
+
+def holds_private_key(content: bytes) -> bool:
+    for header in PRIVATE_KEY_HEADER.finditer(content):
+        window = content[header.end() : header.end() + KEY_WINDOW].replace(b"\\n", b"\n").replace(b"\\r", b"\n")
+        end = window.find(b"-----")
+        if KEY_TEXT.search(window if end < 0 else window[:end]):
+            return True
+    return False
+
+
+def holds_key_file(content: bytes) -> bool:
+    """An Ethereum keystore (`crypto` with `ciphertext` and `kdf`) or a Bittensor key file (`secretPhrase` or
+    `secretSeed`), whatever its name: judged by its JSON, so code that only names those fields is packaged."""
+    if len(content) > KEY_FILE_MAX or content.lstrip()[:1] != b"{":
+        return False
+    try:
+        data = json.loads(content)
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    crypto = data.get("crypto", data.get("Crypto"))
+    return (isinstance(crypto, dict) and "ciphertext" in crypto and "kdf" in crypto) or bool(
+        {"secretPhrase", "secretSeed"} & set(data)
+    )
 
 
 def looks_secret(relative: Path, content: bytes = b"") -> bool:
-    """A wallet, a key or a secret by its name, in any case, or a file holding a PEM private key: the bundle may be
-    published, and the code has no use for one. Certificate files (a vendored package's `cacert.pem`) are fine."""
+    """A wallet, a key or a secret by its name, in any case, or a file holding a private key or an encrypted key
+    file: the bundle may be published, and the code has no use for one. Certificate files (a vendored package's
+    `cacert.pem`) are fine."""
     name = relative.name.lower()
     return (
         any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES)
         or bool(SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]})
-        or PRIVATE_KEY_BLOCK.search(content) is not None
-        or any(all(field in content for field in fields) for fields in KEY_FILE_FIELDS)
+        or holds_private_key(content)
+        or holds_key_file(content)
     )
 
 

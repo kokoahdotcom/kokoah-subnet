@@ -1,6 +1,7 @@
 """Agent bundles: reproducible fingerprints, encryption for private code, safe unpacking."""
 
 import io
+import time
 import zipfile
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import pytest
 from cryptography.exceptions import InvalidTag
 
 from kokoah_subnet.agent.bundle import check_zip, decrypt, encrypt, is_encrypted, new_key, package, sha256_hex, unpack
+
+BODY = "MHcCAQEEIOdkh8MBVi6sNTH8Rn0Iw3/a8sHgV0Kp1b9lRvZ0cZfeoAoGCCqGSM49"  # a key line
 
 
 def agent_dir(tmp_path: Path) -> Path:
@@ -57,8 +60,8 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
         (d / name).unlink()
     assert package(d) == clean
     # a PEM file is refused when it holds a private key, by its content and whatever its name
-    (d / "lib" / "hot.pem").write_text("-----BEGIN EC PRIVATE KEY-----\nMHc=\n-----END EC PRIVATE KEY-----\n")
-    (d / "lib" / "notes.txt").write_text("-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n")
+    (d / "lib" / "hot.pem").write_text(f"-----BEGIN EC PRIVATE KEY-----\n{BODY}\n-----END EC PRIVATE KEY-----\n")
+    (d / "lib" / "notes.txt").write_text(f"-----BEGIN PRIVATE KEY-----\n{BODY}\n-----END PRIVATE KEY-----\n")
     with pytest.raises(ValueError, match="lib/hot.pem") as refused:
         package(d)
     assert "lib/notes.txt" in str(refused.value)
@@ -66,7 +69,19 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
     (d / "lib" / "notes.txt").unlink()
     # other kinds of keys by content or name
     for name, text in (
-        ("lib/backup.asc", "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOY\n-----END PGP PRIVATE KEY BLOCK-----\n"),
+        (
+            "lib/backup.asc",
+            f"-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v1.4.11 (GNU/Linux)\nComment: https://example.org\n\n"
+            f"{BODY}\n=AbCd\n-----END PGP PRIVATE KEY BLOCK-----\n",
+        ),
+        (
+            "deploy/service-account.json",
+            f'{{"private_key": "-----BEGIN PRIVATE KEY-----\\n{BODY}\\n-----END PRIVATE KEY-----\\n"}}',
+        ),
+        (
+            "deploy/values.yaml",
+            f"tls:\n  key: |\n    -----BEGIN RSA PRIVATE KEY-----\n    {BODY}\n    -----END RSA PRIVATE KEY-----\n",
+        ),
         ("lib/store.json", '{"crypto": {"ciphertext": "ab", "kdf": "scrypt"}}'),
         ("lib/hk.json", '{"secretPhrase": "x", "accountId": "0x"}'),
         ("lib/server.ppk", "PuTTY-User-Key-File-3: ssh-ed25519\n"),
@@ -76,9 +91,21 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
             package(d)
         (d / name).unlink()
     # a key parser that only names the header in its code is packaged
-    (d / "lib" / "ssh.py").write_text('_SK_START = b"-----BEGIN OPENSSH PRIVATE KEY-----"\n')
-    assert "lib/ssh.py" in zipfile.ZipFile(io.BytesIO(package(d))).namelist()
+    (d / "lib" / "ssh.py").write_text(
+        '_SK_START = b"-----BEGIN OPENSSH PRIVATE KEY-----"\n_SK_END = b"-----END OPENSSH PRIVATE KEY-----"\n'
+    )
+    # a key-file library that only names the fields is packaged too
+    (d / "lib" / "keyfile.py").write_text('def decode(k):\n    return k["crypto"]["ciphertext"], k["crypto"]["kdf"]\n')
+    names = zipfile.ZipFile(io.BytesIO(package(d))).namelist()
+    assert "lib/ssh.py" in names and "lib/keyfile.py" in names
     (d / "lib" / "ssh.py").unlink()
+    (d / "lib" / "keyfile.py").unlink()
+    # many headers with no key after them are checked quickly
+    (d / "lib" / "many.txt").write_text("-----BEGIN RSA PRIVATE KEY-----\n" * 8000)
+    started = time.monotonic()
+    package(d)
+    assert time.monotonic() - started < 2
+    (d / "lib" / "many.txt").unlink()
     # a vendored package's certificate bundle is packaged
     (d / "certifi").mkdir()
     (d / "certifi" / "cacert.pem").write_text("-----BEGIN CERTIFICATE-----\nMIID\n-----END CERTIFICATE-----\n")
