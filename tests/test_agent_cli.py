@@ -166,6 +166,8 @@ def test_agent_bind_takes_only_an_http_endpoint_with_its_port(
 
     for wrong in ("203.0.113.5:8080", "https://203.0.113.5", "http://203.0.113.5", "http://203.0.113.5:99999"):
         assert bind(wrong) == 1 and "http://<host>:<port>" in capsys.readouterr().out
+    for private in ("http://127.0.0.1:8080", "http://10.0.0.5:8080", "http://192.168.1.2:8080"):
+        assert bind(private) == 1 and "public" in capsys.readouterr().out
     assert not asked  # nothing was contacted
     assert bind("http://203.0.113.9:8080") == 1 and "cannot read the machine" in capsys.readouterr().out
     assert bind("http://203.0.113.5:8080/") == 1 and "set up for hotkey 5Other" in capsys.readouterr().out

@@ -434,6 +434,7 @@ def test_the_machine_takes_only_real_addresses_and_a_known_network(world: dict[s
     plain = Account.create().address.lower()
     assert checked_address(plain) == plain and checked_address(to_checksum_address(plain)) == plain
     assert checked_address("0x" + plain[2:].upper()) == plain
+    assert checked_address("0X" + plain[2:]) == plain  # an upper-case prefix is still the same address
     typo = to_checksum_address(plain).swapcase().replace("X", "x")  # every letter's case flipped
     for wrong in (typo, plain[:-1], plain[2:], "0x" + "g" * 40, ""):
         with pytest.raises(ValueError):

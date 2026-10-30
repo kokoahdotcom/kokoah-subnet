@@ -110,7 +110,7 @@ def mainnet_setting(value: str) -> bool:
 
 START_TRIES = 4  # each call to the owner's service at start: a passing network or service fault is tried again
 START_PAUSE_S = 5.0  # doubled after every failed try
-TRANSIENT_STATUS = frozenset({502, 503, 504})
+TRANSIENT_STATUS = frozenset({502, 503, 504, 520, 521, 522, 523, 524})  # 52x: Cloudflare could not reach the service
 
 
 def retried[T](what: str, step: Callable[[], T]) -> T:

@@ -669,6 +669,16 @@ def _agent(args: argparse.Namespace) -> int:
         if len(host.encode()) > 51:
             print(f"--endpoint {args.endpoint}: the host name is longer than the binding holds (51 bytes)")
             return 1
+        from kokoah_subnet.validator.agents import EndpointRefused, public_address
+
+        try:
+            asyncio.run(public_address(host))
+        except EndpointRefused as exc:
+            print(f"--endpoint {args.endpoint}: {exc}; validators reach only public addresses and host names")
+            return 1
+        except OSError as exc:
+            print(f"--endpoint {args.endpoint}: the host name does not resolve ({exc})")
+            return 1
         base = f"http://{url.netloc}"
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address

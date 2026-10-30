@@ -77,6 +77,7 @@ def checked_address(address: str) -> str:
     """A Hyperliquid (EVM) address as typed by the miner, lowercase; raises ValueError when it is not one, or when
     its mixed case does not match its EIP-55 checksum (a typo)."""
     a = address.strip()
+    a = "0x" + a[2:] if a.startswith("0X") else a
     if len(a) != 42 or not a.startswith("0x") or any(ch not in "0123456789abcdefABCDEF" for ch in a[2:]):
         raise ValueError(f"{address!r} is not an address (0x and 40 hex characters)")
     if a[2:] != a[2:].lower() and a[2:] != a[2:].upper() and not is_checksum_address(a):
