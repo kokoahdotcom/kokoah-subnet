@@ -735,6 +735,38 @@ async def test_failed_minute_candles_wait_for_the_deadline_then_leave_the_coin_u
     await hl.close()
 
 
+@pytest.mark.parametrize("days_late", [5, 3.6, 1])
+async def test_a_day_older_than_the_minute_candles_kept_is_settled_at_once(tmp_path: Path, days_late: float) -> None:
+    """The exchange keeps only its latest 5000 minute candles. Scored 5 days late, BTC's day answers empty; 3.6 days
+    late, its first hours are gone: waiting cannot help and part of a day must not be clipped, so the day is scored at
+    once (even inside this validator's retry window) with the BTC builder fills uncounted. A day within reach whose
+    answer starts late (a quiet coin) keeps its marks."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    now_ms = DAY_MS + 86_400_000 + int(days_late * 86_400_000)
+    kept_from = now_ms - 5000 * 60_000 if days_late > 3.5 else DAY_MS + 16 * 60_000
+
+    def btc_kept(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        req = body.get("req", {})
+        if body["type"] == "candleSnapshot" and req["interval"] == "1m" and req["coin"] == "BTC":
+            minutes = range(req["startTime"], req["endTime"] + 1, 60_000)
+            return httpx.Response(200, json=[{"t": t, "c": "100000"} for t in minutes if t >= kept_from])
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_kept))
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=now_ms / 1000)
+    records = {r.hotkey: r for r in result.records}
+    lost = store.execute_sql("select message from errors where stage = 'marks' and level = 'error'")
+    if days_late > 3.5:
+        assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10  # A traded BTC only, B traded ETH
+        excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+        assert excluded == [{"excluded": "no_mark"}]
+        assert [e["message"] for e in lost] == ["minute candles of BTC: older than the exchange keeps"]
+    else:
+        assert records[HK_A].fees.fills > 0 and lost == []
+    await hl.close()
+
+
 @pytest.mark.parametrize("listed", [False, True])
 async def test_a_coin_the_exchange_does_not_list_never_holds_the_day(tmp_path: Path, listed: bool) -> None:
     """BTC's minute candles fail the way the exchange answers a coin it does not list (an error and `null`). Unlisted,

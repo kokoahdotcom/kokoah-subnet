@@ -55,6 +55,7 @@ from .hyperliquid import (
     linked_reads,
     mark_by_minute,
     mean_close,
+    minutes_lost,
     off_market_transfer,
     portfolio_origin,
     portfolio_pnl_points,
@@ -486,16 +487,25 @@ async def collect_and_score(
         same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
         after it, or at once for a coin the exchange does not list (it answers such a coin with an error, so it would
         otherwise hold everyone's day), None: the coin's builder fills go uncounted and the day's return of an address
-        that traded the coin is unknown."""
+        that traded the coin is unknown. A day older than the minute candles the exchange keeps is settled at once the
+        same way: its start is gone for good, and clipping only part of the day would let the rest through."""
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
-                    marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
+                    marks = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
                 except Exception as exc:  # noqa: BLE001
                     store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
                     if not past_deadline and await listed(coin) is not False:
                         raise RuntimeError(f"minute candles of {coin} unavailable: {exc}") from exc
                     marks_cache[coin] = None
+                else:
+                    if minutes_lost(marks, start_ms, int(clock * 1000)):
+                        store.put_error(
+                            day, None, None, "marks", f"minute candles of {coin}: older than the exchange keeps"
+                        )
+                        marks_cache[coin] = None
+                    else:
+                        marks_cache[coin] = marks
         return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
