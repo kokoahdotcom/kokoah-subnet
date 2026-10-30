@@ -128,9 +128,17 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
         ("deploy/net.json", f'"-----BEGIN PRIVATE KEY-----\\u000a{BODY}\\u000a{BODY}\\u000a-----END"'),
         (
             "lib/armored.asc",
-            "-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: Exported-from-the-keychain-app by me\n\n"
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: Exportedfromthekeychainapp by me\n"
+            "Comment: 0123456789abcdef0123456789abcdef01234567\nVersion: GnuPG v1.4.11 (GNU/Linux)\n\n"
             f"{BODY}\n-----END PGP PRIVATE KEY BLOCK-----\n",
         ),
+        (
+            "deploy/pgp.env",
+            'PGP_KEY="-----BEGIN PGP PRIVATE KEY BLOCK----- Version: OpenPGP.js v4.10.10 '
+            "Comment: https://openpgpjs.org "
+            f' {BODY} {BODY} =uzkY -----END PGP PRIVATE KEY BLOCK-----"',
+        ),
+        ("deploy/plus.pem", "-----BEGIN DSA PRIVATE KEY-----\n+ptsw8tpfFluxwIb\n/vzHoAoGCCqGSM49\n" + BODY + "\n"),
         ("deploy/twice.json", f'"-----BEGIN PRIVATE KEY-----\\\\n{BODY}\\\\n-----END PRIVATE KEY-----"'),
         (
             "deploy/narrow.pem",

@@ -63,7 +63,8 @@ NOT_HEX = re.compile(rb"[g-zG-Z+/]")
 ARMOR_LINE = re.compile(rb"[A-Za-z][A-Za-z0-9-]*: .*")
 ALNUM = re.compile(rb"[A-Za-z0-9]")  # a token without one is an operator or a comment mark, not part of a key
 QUOTE_START = re.compile(rb"^(?:[bBrRuUfF]{0,2}[\"'])+")
-LEAD = re.compile(rb"^[\s\"'+.&,;#/>*()\[\]{}|]+")  # comment marks, operators and quotes before a line's text
+# comment marks, operators and quotes before a line's text; `+` and `/` (also base64) only with a blank or quote after
+LEAD = re.compile(rb"^(?:[\s\"'.&,;#>*()\[\]{}|]|[+/]+(?=[\s\"']))+")
 EDGES = b"\\\"',;()"
 ESCAPES = ((b"\\r\\n", b"\n"), (b"\\n", b"\n"), (b"\\r", b"\n"), (b"\\/", b"/"), (b"\\u002B", b"+"), (b"\\u002b", b"+"),
            (b"\\u002F", b"/"), (b"\\u002f", b"/"), (b"\\u000a", b"\n"), (b"\\u000A", b"\n"), (b"\\t", b" "),
@@ -82,19 +83,28 @@ def _key_follows(window: bytes) -> bool:
     for raw in window.split(b"\n", 256):
         line = raw.strip()
         for _ in range(3):  # `" + "`, `# `, `// "` and the like, in any order
-            line = QUOTE_START.sub(b"", LEAD.sub(b"", line))
+            stripped = QUOTE_START.sub(b"", LEAD.sub(b"", line))
+            if stripped == line:
+                break
+            line = stripped
         if not started and not line.strip(EDGES):
             continue
         body, dashes, _ = line.partition(b"-----")
         tokens = [t for t in body.split() if ALNUM.search(t)]  # joined strings (`+`, `.`), comment marks
         if not started and ARMOR_LINE.fullmatch(line):
-            # armor header lines are skipped; on one line with the key, the key is the run of chunks at its end
-            first = len(tokens)
-            while first and KEY_CHUNK.fullmatch(tokens[first - 1].strip(EDGES)):
-                first -= 1
-            if first == len(tokens):
-                continue
-            tokens = tokens[first:]
+            # an armor header line is skipped, unless the whole key is on it too (a key flattened onto one line)
+            run, run_not_hex = 0, False
+            for token in tokens:
+                token = token.strip(EDGES)
+                if KEY_CHUNK.fullmatch(token):
+                    run, run_not_hex = run + len(token), run_not_hex or NOT_HEX.search(token) is not None
+                    if run >= 64 and run_not_hex:
+                        return True
+                else:
+                    run, run_not_hex = 0, False
+            if dashes:
+                return False
+            continue
         for token in tokens:
             token = token.strip(EDGES)
             if not KEY_CHUNK.fullmatch(token):
