@@ -517,14 +517,9 @@ def test_a_starting_machine_gets_past_a_passing_fault(world: dict[str, Any], mon
     assert plain[:2] == b"PK" and bundle.calls == ["GET", "GET"]
 
 
-def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_files_nothing(
-    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Harness 1.1.0 asks for its key-store tokens with the default audience: from that image only, its own store and
-    restore are accepted (exactly the one digest), while its public answer to the same digest is refused (two nonces).
-    Another image's default-audience token is refused."""
-    from kokoah_subnet.agent import images
-
+def test_a_key_store_token_needs_the_key_stores_audience_and_exactly_its_digest(world: dict[str, Any]) -> None:
+    """Only the key store's own audience with exactly the store digest files a copy: a default-audience token (as
+    the retired harness 1.1.0 made) and a public answer with two nonces are refused."""
     svc: TestClient = world["svc"]
     master, account = Account.create(), Account.create()
     blob = encrypt_key(bytes(account.key), account.address, SECRET)
@@ -538,20 +533,10 @@ def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_
         "submission": world["submission"],
         "permit": p,
     }
-    own = world["machine"].token([digest])
-    refused = svc.put(f"/key-store/{account.address}", json={**body, "token": own})
-    assert refused.status_code == 403 and "only from harness 1.1.0" in refused.json()["detail"]  # not 1.1.0
-    unapproved = DevelopmentAttestor(world["machine_key"], "sha256:" + "0d" * 32).token([digest])
-    refused = svc.put(f"/key-store/{account.address}", json={**body, "token": unapproved})
-    assert refused.status_code == 403 and "not an approved harness" in refused.json()["detail"]
-    monkeypatch.setattr(images, "DEFAULT_AUDIENCE_KEYSTORE_IMAGES", (IMAGE,))  # the test image stands in for 1.1.0
-    public = world["machine"].token([digest, "ab" * 32])  # how /attestation answers: the challenge and the binding
-    assert svc.put(f"/key-store/{account.address}", json={**body, "token": public}).status_code == 403
-    stored = svc.put(f"/key-store/{account.address}", json={**body, "token": own})
+    for token in (world["machine"].token([digest]), world["machine"].token([digest, "ab" * 32], KEYSTORE_AUDIENCE)):
+        refused = svc.put(f"/key-store/{account.address}", json={**body, "token": token})
+        assert refused.status_code == 403
+    stored = svc.put(
+        f"/key-store/{account.address}", json={**body, "token": world["machine"].token([digest], KEYSTORE_AUDIENCE)}
+    )
     assert stored.status_code == 200, stored.text
-    address = account.address.lower()
-    challenge = world["keys"].challenge(address)
-    old_style = world["machine"].token([restore_digest(address, challenge)])
-    restored = svc.post(f"/key-store/{address}/restore", json={"token": old_style})
-    assert restored.status_code == 200
-    assert decrypt_key(base64.b64decode(restored.json()["blob"]), address, SECRET) == bytes(account.key)
