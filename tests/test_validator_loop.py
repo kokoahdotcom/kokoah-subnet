@@ -14,8 +14,14 @@ from eth_account import Account
 
 from kokoah_subnet.binding import AcceptedBinding, Binding, encode_binding, sign_binding, sign_unlink
 from kokoah_subnet.mechanism import DEFAULT, MinerState
-from kokoah_subnet.validator.collect import ValidatorConfig, collect_and_score, day_index, day_strings
-from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
+from kokoah_subnet.validator.collect import (
+    ValidatorConfig,
+    collect_and_score,
+    day_index,
+    day_strings,
+    retry_deadline,
+)
+from kokoah_subnet.validator.hyperliquid import HyperliquidInfo, day_bounds_ms
 from kokoah_subnet.validator.loop import step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
@@ -1090,6 +1096,32 @@ async def test_a_validator_back_after_the_deadline_still_retries_a_failed_read_f
         result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back + 4 * 3600)
     assert {r.hotkey for r in result.records} == {HK_A, HK_B}
     await hl.close()
+
+
+def test_a_backlog_after_an_outage_shares_one_grace_window(tmp_path: Path) -> None:
+    """On time, a day waits until its file deadline. Back from a week away, the first pending day gets the grace from
+    that first attempt, and every later day of the backlog shares it instead of waiting another grace each."""
+    store = Store(tmp_path / "g.sqlite")
+    hour = 3600.0
+
+    def end(day: str) -> int:
+        return day_bounds_ms(day)[1]
+
+    on_time = end("2026-10-01") / 1000 + 600
+    assert (
+        retry_deadline(store, "2026-10-01", on_time, end("2026-10-01"), DEFAULT, 3.0)
+        == end("2026-10-01") / 1000 + 12 * hour
+    )
+    nxt = end("2026-10-02") / 1000 + 600  # the next day, attempted on time too: its own file deadline
+    assert (
+        retry_deadline(store, "2026-10-02", nxt, end("2026-10-02"), DEFAULT, 3.0)
+        == end("2026-10-02") / 1000 + 12 * hour
+    )
+    back = end("2026-10-09") / 1000 + 5 * hour  # away from 10-03 to 10-09
+    assert retry_deadline(store, "2026-10-03", back, end("2026-10-03"), DEFAULT, 3.0) == back + 3 * hour
+    later = back + 3.5 * hour  # 10-03 was scored after its grace; 10-04 is first attempted now
+    assert retry_deadline(store, "2026-10-04", later, end("2026-10-04"), DEFAULT, 3.0) == back + 3 * hour  # shared
+    assert retry_deadline(store, "2026-10-04", later + hour, end("2026-10-04"), DEFAULT, 3.0) == back + 3 * hour
 
 
 def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int]) -> None:

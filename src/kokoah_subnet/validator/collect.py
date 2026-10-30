@@ -148,6 +148,24 @@ def _readable(data: bytes) -> bool:
     return ",".join(h.strip() for h in first.split(",")) == BUILDER_CSV_HEADER
 
 
+def retry_deadline(store: Store, day: str, clock: float, end_ms: int, params: Params, grace_hours: float) -> float:
+    """When this validator stops waiting for failed reads of `day`: the file deadline, and never sooner than
+    `grace_hours` after its first attempt at the day. A day that was already over when the day before it was first
+    attempted (a backlog after an outage) takes that day's first attempt, so a backlog has one grace window, not one
+    per day."""
+    key = f"first_attempt:{day}"
+    stored = store.get_meta(key)
+    if stored is None:
+        first = clock
+        before = store.get_meta(f"first_attempt:{store.day_before(day)}")
+        if before is not None and float(before) * 1000 >= end_ms:
+            first = min(first, float(before))
+        store.set_meta(key, repr(first))
+    else:
+        first = float(stored)
+    return max(end_ms / 1000 + params.file_deadline_hours * 3600, first + grace_hours * 3600)
+
+
 async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, bool]:
     """The day's builder file, from the local cache or downloaded (and cached); the flag says it was downloaded.
     The cache is kept per builder and written whole (a temporary file renamed into place); a cached file that does
@@ -236,12 +254,7 @@ async def collect_and_score(
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
-    first_attempt = store.get_meta(f"first_attempt:{day}")
-    if first_attempt is None:
-        store.set_meta(f"first_attempt:{day}", repr(clock))
-    first_ts = float(first_attempt) if first_attempt is not None else clock
-    deadline_ts = max(end_ms / 1000 + params.file_deadline_hours * 3600, first_ts + cfg.retry_grace_hours * 3600)
-    past_deadline = clock >= deadline_ts
+    past_deadline = clock >= retry_deadline(store, day, clock, end_ms, params, cfg.retry_grace_hours)
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
     except NotPublished:
