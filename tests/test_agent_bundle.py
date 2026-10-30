@@ -100,6 +100,37 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
     assert "lib/ssh.py" in names and "lib/keyfile.py" in names
     (d / "lib" / "ssh.py").unlink()
     (d / "lib" / "keyfile.py").unlink()
+    # more wrappings of a real key, and files that only mention the header
+    escaped = BODY.replace("/", "\\/")
+    for name, text in (
+        ("deploy/php.json", f'{{"key": "-----BEGIN PRIVATE KEY-----\\n{escaped}\\n-----END PRIVATE KEY-----"}}'),
+        ("deploy/key.env", f"KEY=-----BEGIN RSA PRIVATE KEY----- {BODY} {BODY} -----END RSA PRIVATE KEY-----\n"),
+        ("deploy/bom.json", '\ufeff{"crypto": {"ciphertext": "ab", "kdf": "scrypt"}}'),
+        ("deploy/twice.json", f'"-----BEGIN PRIVATE KEY-----\\\\n{BODY}\\\\n-----END PRIVATE KEY-----"'),
+        (
+            "deploy/narrow.pem",
+            "-----BEGIN PRIVATE KEY-----\n" + "\n".join(BODY[i : i + 16] for i in range(0, 64, 16)) + "\n",
+        ),
+        (
+            "deploy/oneline.env",
+            "KEY=-----BEGIN RSA PRIVATE KEY----- Proc-Type: 4,ENCRYPTED DEK-Info: AES-128-CBC,0A1B2C3D "
+            f"{BODY} -----END",
+        ),
+    ):
+        (d / name).write_text(text)
+        with pytest.raises(ValueError, match=name):
+            package(d)
+        (d / name).unlink()
+    (d / "lib" / "test_ckeygen.py").write_text(
+        'KEY = b"-----BEGIN OPENSSH PRIVATE KEY-----\\n" in testDisplayPublicKeyEncryptedPassphrasePromptCase\n'
+        "    def test_displayPublicKeyEncryptedPassphrasePrompt(self):\n        pass\n"
+    )
+    (d / "lib" / "deep.json").write_text("{" + '"a":' + "[" * 20000 + "]" * 20000 + "}")
+    (d / "lib" / "digest.py").write_text('HEADER = "-----BEGIN PRIVATE KEY-----"\nSHA = "' + "ab" * 32 + '"\n')
+    names = zipfile.ZipFile(io.BytesIO(package(d))).namelist()
+    assert {"lib/test_ckeygen.py", "lib/deep.json", "lib/digest.py"} <= set(names)
+    for name in ("test_ckeygen.py", "deep.json", "digest.py"):
+        (d / "lib" / name).unlink()
     # many headers with no key after them are checked quickly
     (d / "lib" / "many.txt").write_text("-----BEGIN RSA PRIVATE KEY-----\n" * 8000)
     started = time.monotonic()

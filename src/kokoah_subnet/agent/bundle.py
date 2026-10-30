@@ -53,32 +53,66 @@ SECRET_FILES = (
     "utc--*",  # an Ethereum keystore file
 )
 SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys", ".ssh"})  # a wallet's hotkeys are not encrypted
-# a private key in PEM or PGP armor, whatever its kind: the header, then the key's base64 within a short window (past
-# armor header lines, indentation, quotes or escaped line breaks), before anything else that starts with dashes. A
-# library that only names the header in its code (as key parsers do) has no key text after it, so it is packaged.
+# a private key in PEM or PGP armor, whatever its kind: the header, then the key's body. Past blanks, armor header
+# lines (`Name: value`) and string quoting, the body is chunks of base64 of 16 characters or more (64 or more in all,
+# not all of them hex digits); in a JSON or code string the escaped line breaks and slashes are undone first. A
+# library that only names the header in its code is followed by code, not by such chunks, so it is packaged.
 PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----")
-KEY_TEXT = re.compile(rb"[A-Za-z0-9+/]{32,}")
-KEY_WINDOW = 2048
+KEY_CHUNK = re.compile(rb"[A-Za-z0-9+/]{16,}={0,2}")
+NOT_HEX = re.compile(rb"[g-zG-Z+/]")
+ARMOR_LINE = re.compile(rb"[A-Za-z][A-Za-z0-9-]*: .*")
+QUOTE_START = re.compile(rb"^(?:[bBrRuUfF]{0,2}[\"'])+")
+EDGES = b"\\\"',;()"
+ESCAPES = ((b"\\r\\n", b"\n"), (b"\\n", b"\n"), (b"\\r", b"\n"), (b"\\/", b"/"), (b"\\u002B", b"+"), (b"\\u002b", b"+"),
+           (b"\\u002F", b"/"), (b"\\u002f", b"/"), (b"\r", b"\n"))  # fmt: skip
+KEY_WINDOW = 8192
 KEY_FILE_MAX = 64 * 1024  # an encrypted key file is small JSON
 
 
-def holds_private_key(content: bytes) -> bool:
-    for header in PRIVATE_KEY_HEADER.finditer(content):
-        window = content[header.end() : header.end() + KEY_WINDOW].replace(b"\\n", b"\n").replace(b"\\r", b"\n")
-        end = window.find(b"-----")
-        if KEY_TEXT.search(window if end < 0 else window[:end]):
-            return True
+def _key_follows(window: bytes) -> bool:
+    for escaped, plain in ESCAPES:
+        window = window.replace(escaped, plain)
+    text, not_hex, started = 0, False, False
+    for raw in window.split(b"\n", 256):
+        line = QUOTE_START.sub(b"", raw.strip()).strip()
+        if not started and not line.strip(EDGES):
+            continue
+        body, dashes, _ = line.partition(b"-----")
+        tokens = body.split()
+        if not started and ARMOR_LINE.fullmatch(line):
+            # armor header lines are skipped; on one line with the key, its chunks start after them
+            first = next((k for k, t in enumerate(tokens) if KEY_CHUNK.fullmatch(t.strip(EDGES))), None)
+            if first is None:
+                continue
+            tokens = tokens[first:]
+        for token in tokens:
+            token = token.strip(EDGES)
+            if not KEY_CHUNK.fullmatch(token):
+                return False
+            text, not_hex, started = text + len(token), not_hex or NOT_HEX.search(token) is not None, True
+            if text >= 64 and not_hex:
+                return True
+        if dashes:
+            return False
     return False
+
+
+def holds_private_key(content: bytes) -> bool:
+    return any(
+        _key_follows(content[header.end() : header.end() + KEY_WINDOW])
+        for header in PRIVATE_KEY_HEADER.finditer(content)
+    )
 
 
 def holds_key_file(content: bytes) -> bool:
     """An Ethereum keystore (`crypto` with `ciphertext` and `kdf`) or a Bittensor key file (`secretPhrase` or
     `secretSeed`), whatever its name: judged by its JSON, so code that only names those fields is packaged."""
+    content = content.removeprefix(b"\xef\xbb\xbf")  # a UTF-8 byte-order mark
     if len(content) > KEY_FILE_MAX or content.lstrip()[:1] != b"{":
         return False
     try:
         data = json.loads(content)
-    except ValueError:
+    except (ValueError, RecursionError):
         return False
     if not isinstance(data, dict):
         return False
