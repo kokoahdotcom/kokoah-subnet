@@ -19,10 +19,13 @@ To the world (TCP, `public_app`):
   GET /status, GET /binding (the subnet binding line signed by the account), GET /attestation?challenge=<64 hex>
   (a fresh token with the challenge and the binding digest as nonces, the validators' 32 random bytes), POST
   /withdraw and POST /stop (both signed by the miner's own address; withdrawals go only to that address).
+  Attestations and signed requests are rate limited per caller and overall, and run on threads of their own, so a
+  flood of them never holds up the agent's calls.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import threading
@@ -31,10 +34,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import anyio
 import httpx
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from .attest import Attestor, binding_digest
@@ -76,6 +80,11 @@ AGENT_METHODS = frozenset(
     {"order", "cancel", "cancel_by_cloid", "update_leverage", "update_isolated_margin", "schedule_cancel"}
 )
 SIGNED_REQUEST_WINDOW_MS = 300_000
+# the public interface: requests a minute (from one caller, from everyone), and the threads its slow work may hold
+ATTESTATIONS_PER_MINUTE = (6, 120)  # validators ask once per check; each answer is a call to the launcher
+SIGNED_PER_MINUTE = (10, 60)  # /withdraw and /stop: the miner's own requests
+ATTESTATION_WORKERS = 4
+SIGNED_WORKERS = 2
 
 
 def binding_message(netuid: int, hotkey: str, address: str) -> str:
@@ -122,6 +131,7 @@ class Harness:
         self._signed_lock = threading.Lock()
         self._signed: dict[str, int] = {}  # every master-signed message accepted within the window, with its time
         self._assets: dict[str, tuple[int, int]] = {}  # coin -> (asset id, size decimals)
+        self._binding: dict[str, str] | None = None
         self.builder_approved = False
         self.allow_writes = allow_writes  # False only in development runs: nothing is sent to the exchange
 
@@ -317,9 +327,12 @@ class Harness:
     # ----- what the world may ask ----------------------------------------------------------------------------
 
     def binding(self) -> dict[str, str]:
-        message = binding_message(self.config.netuid, self.config.hotkey, self.address)
-        signed = self._account.sign_message(encode_defunct(text=message))
-        return {"address": self.address, "message": message, "signature": "0x" + bytes(signed.signature).hex()}
+        if self._binding is None:  # signed once: the signature is deterministic
+            message = binding_message(self.config.netuid, self.config.hotkey, self.address)
+            signed = self._account.sign_message(encode_defunct(text=message))
+            sig = "0x" + bytes(signed.signature).hex()
+            self._binding = {"address": self.address, "message": message, "signature": sig}
+        return dict(self._binding)
 
     def attestation(self, challenge: str) -> dict[str, Any]:
         if len(challenge) != 64 or any(c not in "0123456789abcdef" for c in challenge.lower()):
@@ -445,33 +458,86 @@ def agent_app(h: Harness) -> FastAPI:
     return app
 
 
+class Throttle:
+    """Token buckets: at most `per_caller` requests a minute from one caller and `overall` from everyone (bursts up to
+    the same numbers). A request over either is refused before any work; idle callers are forgotten."""
+
+    def __init__(self, per_caller: int, overall: int, max_callers: int = 4096) -> None:
+        self.per_caller, self.overall, self.max_callers = per_caller, overall, max_callers
+        self._lock = threading.Lock()
+        self._callers: dict[str, tuple[float, float]] = {}  # caller -> (tokens, when)
+        self._everyone = (float(overall), time.monotonic())
+
+    @staticmethod
+    def _take(bucket: tuple[float, float], per_minute: int, now: float) -> tuple[float, float] | None:
+        tokens = min(float(per_minute), bucket[0] + max(0.0, now - bucket[1]) * per_minute / 60)
+        return (tokens - 1, now) if tokens >= 1 else None
+
+    def allow(self, caller: str, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            mine = self._take(self._callers.get(caller, (float(self.per_caller), now)), self.per_caller, now)
+            everyone = self._take(self._everyone, self.overall, now) if mine else None
+            if mine is None or everyone is None:
+                return False
+            if caller not in self._callers and len(self._callers) >= self.max_callers:
+                idle = [c for c, (_, when) in self._callers.items() if now - when >= 60]  # full again: forgettable
+                for c in idle or sorted(self._callers, key=lambda c: self._callers[c][1])[: self.max_callers // 2]:
+                    del self._callers[c]
+            self._callers[caller] = mine
+            self._everyone = everyone
+            return True
+
+
+def caller(request: Request) -> str:
+    """Who is asking, for the rate limits: the peer's address (an IPv6 caller by its /64, which one host holds)."""
+    host = request.client.host if request.client else ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    return str(ipaddress.ip_network(f"{ip}/64", strict=False)) if ip.version == 6 else str(ip)
+
+
 def public_app(h: Harness) -> FastAPI:
     app = FastAPI(title="Kokoah agent harness", docs_url=None, redoc_url=None)
+    attestations, signed = Throttle(*ATTESTATIONS_PER_MINUTE), Throttle(*SIGNED_PER_MINUTE)
+    # threads of their own (the agent's calls use the default ones), so these never hold up the agent
+    attesting, checking = anyio.CapacityLimiter(ATTESTATION_WORKERS), anyio.CapacityLimiter(SIGNED_WORKERS)
+
+    def admit(throttle: Throttle, request: Request) -> None:
+        if not throttle.allow(caller(request)):
+            raise HTTPException(status_code=429, detail="too many requests: try again in a minute")
 
     @app.get("/status")
-    def status() -> dict[str, Any]:
+    async def status() -> dict[str, Any]:
         return h.status()
 
     @app.get("/binding")
-    def binding() -> dict[str, str]:
+    async def binding() -> dict[str, str]:
         return h.binding()
 
     @app.get("/attestation")
-    def attestation(challenge: str) -> Any:
+    async def attestation(challenge: str, request: Request) -> Any:
+        admit(attestations, request)
         try:
-            return h.attestation(challenge)
+            return await anyio.to_thread.run_sync(h.attestation, challenge, limiter=attesting)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/withdraw")
-    def withdraw(body: Signed) -> Any:
+    async def withdraw(body: Signed, request: Request) -> Any:
         if not body.amount_usd:
             raise HTTPException(status_code=400, detail="amount_usd is required")
+        admit(signed, request)
         amount = body.amount_usd
-        return _guard(lambda: h.withdraw(amount, body.time_ms, body.signature))
+        return await anyio.to_thread.run_sync(
+            _guard, lambda: h.withdraw(amount, body.time_ms, body.signature), limiter=checking
+        )
 
     @app.post("/stop")
-    def stop(body: Signed) -> Any:
-        return _guard(lambda: h.stop(body.time_ms, body.signature))
+    async def stop(body: Signed, request: Request) -> Any:
+        admit(signed, request)
+        return await anyio.to_thread.run_sync(_guard, lambda: h.stop(body.time_ms, body.signature), limiter=checking)
 
     return app
