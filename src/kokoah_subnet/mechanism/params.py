@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "6.3"
+SPEC_VERSION = "6.4"
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,7 @@ class Params:
     mirror_exclude_share: float = 0.25
     mirror_zero_share: float = 0.50
     mirror_zero_days: int = 30
+    thin_market_share: float = 0.25  # above this share of a coin's day volume, the address's own trades set its marks
     # calendar: day index 0 (penalty windows count from here; the same for every validator)
     day_zero: str = "2026-10-19"
     # chain (section 1)

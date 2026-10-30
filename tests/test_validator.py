@@ -414,3 +414,31 @@ def test_a_report_never_reaches_an_address_through_a_transfer_it_received() -> N
         ("0xv", "0xw", "coldkey"),  # the victim's own other address stays untouched too
     ]
     assert penalty_reach("0xA", edges) == {"0xa", "0xsub", "0xsame"}
+
+
+def test_positions_are_taken_at_the_day_s_end_whenever_they_are_read() -> None:
+    from kokoah_subnet.mechanism import Fill
+    from kokoah_subnet.validator.hyperliquid import day_volume_usd, end_of_day_positions
+
+    state = {
+        "time": 1_792_600_000_000,
+        "assetPositions": [
+            {"position": {"coin": "BTC", "szi": "0.7"}},
+            {"position": {"coin": "ETH", "szi": "-2"}},
+            {"position": {"coin": "SOL", "szi": "5"}},
+        ],
+    }
+    # since the day ended: bought 0.2 BTC, bought back half of a 4 ETH short, sold out of a DOGE long
+    later = [
+        Fill(1, "a", "BTC", "B", 101_000.0, 0.2, True, 0.0),
+        Fill(2, "a", "ETH", "B", 4_000.0, 2.0, True, 0.0),
+        Fill(3, "a", "DOGE", "A", 0.2, 1_000.0, True, 0.0),
+    ]
+    prices = {"BTC": 100_000.0, "ETH": 3_900.0, "SOL": None, "DOGE": 0.19}
+    out = end_of_day_positions(state, later, prices)
+    assert out["BTC"]["notional"] == pytest.approx(0.5 * 100_000.0)  # what it held at the day's end, at its mark
+    assert out["ETH"]["notional"] == pytest.approx(-4 * 3_900.0)
+    assert out["DOGE"]["notional"] == pytest.approx(1_000 * 0.19)  # sold after the day's end: long at the end
+    assert "SOL" not in out  # no mark for the day's end: left out
+    assert day_volume_usd([{"c": "10", "v": "3"}, {"c": "20", "v": "1"}]) == 50.0
+    assert day_volume_usd([{"c": "10"}]) is None  # candles without volume: unknown, never zero

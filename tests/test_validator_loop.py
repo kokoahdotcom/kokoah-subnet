@@ -217,7 +217,9 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         if req["interval"] == "1h":
             return httpx.Response(200, json=[{"t": req["startTime"] + h * 3_600_000, "c": "400"} for h in range(24)])
         px = "100000" if req["coin"] == "BTC" else "4000"
-        return httpx.Response(200, json=[{"t": req["startTime"] + m * 60_000, "c": px} for m in range(0, 1440, 1)])
+        return httpx.Response(
+            200, json=[{"t": req["startTime"] + m * 60_000, "c": px, "v": "50"} for m in range(0, 1440, 1)]
+        )  # a deep market: no address makes a quarter of its volume
     if t == "portfolio":
         user = body["user"].lower()
         if user in PORTFOLIO_FAILS:
@@ -1571,4 +1573,28 @@ async def test_a_file_published_after_scoring_is_recorded_as_such(
     assert report["file_recheck"] == {"day": DAY, "changed": False}
     rows = store.execute_sql("select level, message from errors where stage = 'file recheck'")
     assert len(rows) == 1 and rows[0]["level"] == "note" and rows[0]["message"].startswith("published after scoring")
+    await hl.close()
+
+
+async def test_a_coin_whose_volume_is_mostly_the_address_s_own_leaves_its_return_unknown(tmp_path: Path) -> None:
+    """In a coin almost nobody else traded, the minute marks are the address's own prices (and its counterparty's),
+    so they say nothing about what the account made there: its day's return is unknown, its fees still count."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+
+    def thin_btc(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        req = body.get("req", {})
+        if body["type"] == "candleSnapshot" and req.get("interval") == "1m" and req.get("coin") == "BTC":
+            candles = [{"t": req["startTime"] + m * 60_000, "c": "100000", "v": "0.00001"} for m in range(1440)]
+            return httpx.Response(200, json=candles)  # about $1,440 of BTC traded all day
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(thin_btc))
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].fees.fills > 0  # the builder fees were paid: they count
+    known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
+    assert {r["address"]: bool(r["return_known"]) for r in known}[addr_a] is False
+    notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'marks'")
+    assert any("over 25% of the day's volume in BTC" in n["message"] for n in notes)
     await hl.close()

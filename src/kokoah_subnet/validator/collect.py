@@ -45,12 +45,14 @@ from kokoah_subnet.mechanism.fills import (
 from .agents import check_agents, fetch_unlinks
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
-from .clusters import clusters, coldkey_edges, penalty_reach
+from .clusters import OWNER_LINKS, clusters, coldkey_edges, penalty_reach
 from .hyperliquid import (
     MAINNET_INFO,
     HyperliquidInfo,
     daily_equity_from_portfolio,
     day_bounds_ms,
+    day_volume_usd,
+    end_of_day_positions,
     ledger_amount,
     linked_reads,
     mark_by_minute,
@@ -60,7 +62,6 @@ from .hyperliquid import (
     portfolio_origin,
     portfolio_pnl_points,
     portfolio_points,
-    positions_from_state,
     sub_accounts,
     transfer_partners,
 )
@@ -465,6 +466,8 @@ async def collect_and_score(
         return rt_window, active_window
 
     marks_cache: dict[str, dict[int, float] | None] = {}
+    volume_of: dict[str, float | None] = {}  # a coin's traded notional over the day, from the same candles
+    day_end_cache: dict[str, float | None] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
     listings: dict[str, set[str] | None] = {}
     listing_locks: dict[str, asyncio.Lock] = {}
@@ -493,7 +496,9 @@ async def collect_and_score(
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
-                    marks = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
+                    candles = await hl.candles(coin, "1m", start_ms, end_ms)
+                    marks = mark_by_minute(candles)
+                    volume_of[coin] = day_volume_usd(candles)
                 except Exception as exc:  # noqa: BLE001
                     store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
                     if not past_deadline and await listed(coin) is not False:
@@ -508,6 +513,21 @@ async def collect_and_score(
                     else:
                         marks_cache[coin] = marks
         return marks_cache[coin]
+
+    async def day_end_price(coin: str) -> float | None:
+        """The coin's last minute mark of the day (the minute marks when they were read, else that one candle);
+        None when it cannot be read."""
+        lock = marks_locks.setdefault(coin, asyncio.Lock())
+        async with lock:
+            if coin not in day_end_cache:
+                marks = marks_cache.get(coin)
+                if not marks:
+                    try:
+                        marks = mark_by_minute(await hl.candles(coin, "1m", end_ms - 60_000, end_ms))
+                    except Exception:  # noqa: BLE001 - the coin's position is left out of the day
+                        marks = {}
+                day_end_cache[coin] = marks[max(marks)] if marks else None
+        return day_end_cache[coin]
 
     async def one(hk: str, address: str) -> None:
         """Everything for one bound address. A failed read of the account's recorded history, the fill history, the
@@ -632,8 +652,22 @@ async def collect_and_score(
             mark = (marks_by_coin.get(f.coin) or {}).get(f.time_ms // 60_000 * 60_000)
             if mark:
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
+        # a coin in which this address made more than `thin_market_share` of the day's volume was priced by its own
+        # trades (and whoever it traded with): its marks tell nothing about what the account made there
+        thin = sorted(
+            coin
+            for coin in {f.coin for f in public if is_perp(f.coin)} - unmarked
+            if (volume := volume_of.get(coin)) is not None
+            and sum(f.notional for f in public if f.coin == coin) > params.thin_market_share * volume
+        )
+        if thin:
+            store.put_note(
+                day, hk, address, "marks",
+                f"the day's return unknown: its own trades made over {params.thin_market_share:.0%} of the day's "
+                f"volume in {', '.join(thin)}",
+            )  # fmt: skip
         # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
-        return_known = history_read and not any(f.coin in unmarked for f in public)
+        return_known = history_read and not thin and not any(f.coin in unmarked for f in public)
         if unmarked:
             store.put_note(
                 day,
@@ -700,7 +734,17 @@ async def collect_and_score(
                     for u in updates
                 ],
             )
-            store.put_positions(address, day, positions_from_state(state))
+            # positions at the day's end, the same whenever a validator reads them: the state less the fills since
+            state_ms = int(state.get("time") or clock * 1000)
+            try:
+                later = await hl.fills_by_time(address, end_ms, state_ms + 1)
+            except Exception as exc:  # noqa: BLE001 - no positions today: the position series has a gap
+                store.put_error(day, hk, address, "positions", f"fills since the day's end: {exc}")
+            else:
+                held = {str(ap.get("position", {}).get("coin")) for ap in state.get("assetPositions", [])}
+                held |= {f.coin for f in later}
+                prices = {coin: await day_end_price(coin) for coin in sorted(held) if is_perp(coin)}
+                store.put_positions(address, day, end_of_day_positions(state, later, prices))
         except Exception as exc:  # noqa: BLE001 - no account value today: the return series has a gap, nothing else
             errors[hk] = f"account state: {str(exc)[:160]}"
             store.put_error(day, hk, address, "account state", str(exc))
@@ -840,6 +884,7 @@ async def collect_and_score(
         edges.extend(lst)
     cluster_of = clusters(addresses, [(a, b) for a, b, _ in edges])
     store.put_clusters(day, cluster_of, edges)
+    owner_group_of = clusters(addresses, [(a, b) for a, b, kind in edges if kind in OWNER_LINKS])
     all_fills = [f for lst in fills_by_address.values() for f in lst]
     states = store.states_before(day)
     for _, old_hk, new_hk in store.swaps_through(day):
@@ -853,6 +898,7 @@ async def collect_and_score(
         states=states,
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
+        owner_group_of=owner_group_of,
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)
