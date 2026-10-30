@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -601,6 +601,43 @@ async def test_after_the_deadline_a_failed_history_read_costs_that_address_the_d
     assert not records[HK_A].eligible and records[HK_A].pay_alpha == 0.0
     assert records[HK_B].eligible and records[HK_B].pay_alpha > 0
     assert store.execute_sql(f"select stage from errors where day = '{DAY}' and stage = 'portfolio'")
+    # unknown, not $0; and no equity row, so the address's history is still backfilled once a read succeeds
+    daily = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
+    assert daily == [{"avg_equity_usd": None, "note": "recorded history unavailable"}]
+    assert store.equity_series(addr_a, 5) == []
+    await hl.close()
+
+
+async def test_points_an_earlier_attempt_stored_still_measure_the_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first attempt read A's recorded history (past the day's end) and then failed on its fill history; by the
+    retry past the deadline the history read fails. The stored points still give the same average for every
+    validator, and the copy rule still sees where A's history begins, not the scored day."""
+    from kokoah_subnet.validator import collect
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    FILLS_FAIL.add(addr_a)
+    with pytest.raises(RuntimeError, match="fill history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+    first = store.execute_sql(f"select avg_equity_usd, origin_ms from equity_daily where address = '{addr_a}'")[0]
+    FILLS_FAIL.clear()
+    PORTFOLIO_FAILS.add(addr_a)
+    seen: list[Any] = []
+    real = collect.score_day
+
+    def spy(inputs: Any, *a: Any, **kw: Any) -> Any:
+        seen.append(inputs)
+        return real(inputs, *a, **kw)
+
+    monkeypatch.setattr(collect, "score_day", spy)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert {r.hotkey: r for r in result.records}[HK_A].eligible
+    a = next(m for m in seen[0].miners if m.hotkey == HK_A)
+    origin_day = datetime.fromtimestamp(first["origin_ms"] / 1000, tz=UTC).strftime("%Y-%m-%d")
+    assert a.record_start == origin_day != DAY
+    again = store.execute_sql(f"select avg_equity_usd from equity_daily where address = '{addr_a}'")
+    assert again == [{"avg_equity_usd": first["avg_equity_usd"]}]
     await hl.close()
 
 

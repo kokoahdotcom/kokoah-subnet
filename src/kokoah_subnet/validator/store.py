@@ -238,6 +238,17 @@ class Store:
                 )
             )
 
+    def last_origin(self, address: str) -> int | None:
+        """When the address's recorded history begins, as its latest scored day read it (None if never read)."""
+        with self._engine.connect() as c:
+            v = c.execute(
+                select(S.equity_daily.c.origin_ms)
+                .where(S.equity_daily.c.address == address.lower(), S.equity_daily.c.origin_ms.is_not(None))
+                .order_by(S.equity_daily.c.day.desc())
+                .limit(1)
+            ).scalar()
+        return int(v) if v is not None else None
+
     def put_swap(self, day: str, uid: int, old_hotkey: str, new_hotkey: str, coldkey: str | None) -> None:
         with self._engine.begin() as c:
             c.execute(delete(S.hotkey_swaps).where(S.hotkey_swaps.c.day == day, S.hotkey_swaps.c.uid == uid))

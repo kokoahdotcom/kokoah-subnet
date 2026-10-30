@@ -32,7 +32,7 @@ from kokoah_subnet.mechanism import (
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
-from kokoah_subnet.mechanism.eligibility import daily_average_equity, day_change, fresh_identity
+from kokoah_subnet.mechanism.eligibility import EquityAverage, daily_average_equity, day_change, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 from kokoah_subnet.mechanism.fills import (
     BUILDER_CSV_HEADER,
@@ -483,15 +483,19 @@ async def collect_and_score(
         return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
-        """Everything for one bound address. A failed read of the account's recorded history fails the day (it is
-        retried within the hour). A failed read of the fill history, the explorer, the minute candles or a linked
-        account fails the day until the deadline; after it, only what needed the failed read goes uncounted. The
-        other reads (account state, ledger, fee rates, stake) fall back. Every failure is recorded."""
+        """Everything for one bound address. A failed read of the account's recorded history, the fill history, the
+        explorer, the minute candles or a linked account fails the day (retried within the hour) until the deadline;
+        after it, only what needed the failed read is lost. The other reads (account state, ledger, fee rates, stake)
+        fall back. Every failure is recorded."""
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
         # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
-        # hourly) until the deadline, and the average is never estimated from a snapshot; after it, this address's
-        # average and return are unknown for the day (it is not eligible) and every other address is scored as usual
+        # hourly) until the deadline, and the average is never estimated from a snapshot; after it, the day is
+        # measured from points an earlier read stored only when they reach past the day's end (recorded points are
+        # the same for every validator); otherwise this address's average and return are unknown for the day (it is
+        # not eligible), no equity row is written (so a first-time address is still backfilled once a read
+        # succeeds), and every other address is scored as usual
+        recorded = True
         try:
             windows = await hl.portfolio(address)
         except Exception as exc:
@@ -499,23 +503,26 @@ async def collect_and_score(
             if not past_deadline:
                 raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
             windows = []
-        store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
-        store.put_equity_points(
-            address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
-        )
-        origin = portfolio_origin(windows, params.equity_origin_window)
-        avg = daily_average_equity(
-            store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-            start_ms,
-            end_ms,
-            origin,
-            params.equity_min_points,
-        )
+            recorded = False
+        if recorded:
+            store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
+            store.put_equity_points(
+                address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
+            )
+            origin = portfolio_origin(windows, params.equity_origin_window)
+        else:
+            origin = store.last_origin(address)
+        stored = store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
+        history_known = recorded or any(t >= end_ms for t, _ in stored)
+        if history_known:
+            avg = daily_average_equity(stored, start_ms, end_ms, origin, params.equity_min_points)
+        else:
+            avg = EquityAverage(None, 0, "recorded history unavailable")
         store.put_equity_daily(address, day, avg.value, avg.points, origin, params.equity_window, avg.note)
         avg_equity[hk] = (avg.value, avg.points)
         if avg.value is None:
             store.put_error(day, hk, address, "average equity", avg.note)
-        if not store.equity_series(address, 1):
+        if recorded and not store.equity_series(address, 1):
             # first time this address is scored: the exchange's own history gives the returns from day one
             history = daily_equity_from_portfolio(windows)
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
@@ -632,7 +639,9 @@ async def collect_and_score(
                 updates = []
                 errors[hk] = f"ledger: {str(exc)[:160]}"
                 store.put_error(day, hk, address, "ledger", str(exc))
-            if change.known and change.value_end is not None and change.profit is not None:
+            if not history_known:
+                store.put_error(day, hk, address, "daily return", "recorded history unavailable")
+            elif change.known and change.value_end is not None and change.profit is not None:
                 # the return is the exchange's recorded profit; any other change in value is money moved
                 previous = store.equity_value(address, store.day_before(day))
                 base = previous if previous is not None else change.value_start or 0.0
