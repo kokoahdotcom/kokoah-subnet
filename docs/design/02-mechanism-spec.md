@@ -83,8 +83,8 @@ rate, and counts only once its **order is confirmed**: the address's own transac
 (`userDetails`) list every order it signed with its builder field and client order id, and a candidate counts when
 its client order id belongs to an order the address placed with Kokoah's builder (and was not modified afterwards,
 a modify carries no builder field), or, for a taker fill, when the transaction that placed and filled it
-(`txDetails` of the fill's hash) is such an order; such one-by-one lookups are made for at most 200 taker fills per
-address a day, fewer when many addresses are bound (6,000 a day for all of them, shared evenly, at least 20 each). Builder approvals are not used: the order's own builder field
+(`txDetails` of the fill's hash) is such an order; such one-by-one lookups are made for at most 100 taker fills per
+address a day (in the order of their transaction hashes). Builder approvals are not used: the order's own builder field
 decides, and it cannot be changed after the fact. Counterparties of history fills come from trade ids: the
 validator reads the day's fills of every bound address and of up to 25 linked accounts per address (its
 sub-accounts first, then its transfer partners by the amount moved, largest first), and a fill whose trade id

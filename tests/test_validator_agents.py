@@ -157,14 +157,6 @@ def test_withdrawn_harness_images_are_never_approved() -> None:
     assert not withdrawn & set(APPROVED_HARNESS_IMAGES)
 
 
-def test_the_day_s_one_by_one_lookups_are_shared_out_and_bounded() -> None:
-    from kokoah_subnet.validator.collect import DAY_TX_LOOKUPS, MAX_TX_LOOKUPS, MIN_TX_LOOKUPS, tx_lookup_cap
-
-    assert tx_lookup_cap(0) == tx_lookup_cap(1) == tx_lookup_cap(30) == MAX_TX_LOOKUPS  # few addresses: the full cap
-    assert tx_lookup_cap(100) == DAY_TX_LOOKUPS // 100
-    assert tx_lookup_cap(256) * 256 <= DAY_TX_LOOKUPS and tx_lookup_cap(10_000) == MIN_TX_LOOKUPS
-
-
 async def test_a_slow_name_lookup_counts_against_the_machine_s_own_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     async def slow(host: str) -> list[str]:
         await asyncio.sleep(30)

@@ -227,16 +227,9 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
     }
 
 
-MAX_TX_LOOKUPS = 200  # per address and day: taker fills beyond it are not confirmed one by one
-DAY_TX_LOOKUPS = 6000  # for every bound address together, shared out evenly
-MIN_TX_LOOKUPS = 20
-
-
-def tx_lookup_cap(addresses: int) -> int:
-    """Each address's share of the day's one-by-one lookups: at most MAX_TX_LOOKUPS and at least MIN_TX_LOOKUPS, so
-    however many addresses are bound and however many taker fills they make, a day's lookups stay bounded (every
-    validator sees the same bound addresses, so all use the same share)."""
-    return max(MIN_TX_LOOKUPS, min(MAX_TX_LOOKUPS, DAY_TX_LOOKUPS // max(1, addresses)))
+# per address and day: taker fills beyond it are not confirmed one by one. A constant, so every validator confirms
+# the same fills whenever it scores; it bounds what one address can cost a validator in lookups
+MAX_TX_LOOKUPS = 100
 
 
 async def confirmed_builder_orders(
@@ -421,7 +414,6 @@ async def collect_and_score(
 
     fills_by_address = by_user(fills)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
-    lookups = tx_lookup_cap(len(address_of_hotkey))
     # agent accounts: challenge every sealed machine and verify its attestation (the skill bonus)
     if agent_status is None:
         agent_bindings = {
@@ -596,7 +588,7 @@ async def collect_and_score(
             # Kokoah's builder (its own transactions on the explorer)
             takers = {f.hash for f in candidates if f.crossed and f.hash}
             try:
-                cloids, hashes, skipped = await confirmed_builder_orders(hl, address, builder, takers, lookups)
+                cloids, hashes, skipped = await confirmed_builder_orders(hl, address, builder, takers)
             except Exception as exc:
                 store.put_error(day, hk, address, "builder", f"orders unavailable: {exc}")
                 if not past_deadline:
