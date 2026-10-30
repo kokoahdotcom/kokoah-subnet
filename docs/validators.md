@@ -92,6 +92,7 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 | `--wallet`, `--wallet-hotkey`, `--wallet-path` | your wallet | The validator's hotkey. |
 | `--start-day` | `YYYY-MM-DD` | The first day this validator scores (section 10); default: the one its record remembers, else yesterday. |
 | `--hl-info-url` | default Hyperliquid's public API | Point it at your own Hyperliquid node or endpoint to avoid public rate limits. |
+| `--hl-budget` | default `1000` | Request weight a minute the validator uses on Hyperliquid (it allows 1,200 per IP address). Lower it when other validators or services share the address, so that each stays inside the limit. |
 | `--tao-usd-fallback` | a price | TAO/USD used only if the exchange lists no TAO perpetual. |
 | `--poll-seconds` | default `60` | How often the loop wakes up. |
 | `--watch` | | Score and record every day, never submit weights: to follow the subnet before or without a permit. |

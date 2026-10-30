@@ -206,6 +206,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="the first day scored, YYYY-MM-DD; default: the one the record remembers, else yesterday (UTC)",
     )
     vrun.add_argument("--hl-info-url", default=None)
+    vrun.add_argument(
+        "--hl-budget",
+        type=int,
+        default=1000,
+        help="Hyperliquid request weight a minute this validator uses (the exchange allows 1,200 per IP address: "
+        "lower it when other validators or services share the address)",
+    )
     vrun.add_argument("--builder-base-url", default=None)
     vrun.add_argument("--tao-usd-fallback", type=float, default=0.0, help="TAO/USD when no TAO perp is listed")
     vrun.add_argument("--poll-seconds", type=int, default=60)
@@ -367,6 +374,7 @@ def _validator(args: argparse.Namespace) -> int:
             wallet_path=args.wallet_path,
             start_day=args.start_day,
             hl_info_url=args.hl_info_url or MAINNET_INFO,
+            hl_budget=args.hl_budget,
             builder_base_url=args.builder_base_url or BASE_URL,
             tao_usd_fallback=args.tao_usd_fallback,
             poll_s=args.poll_seconds,

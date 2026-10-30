@@ -252,7 +252,7 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
         store.close()
         raise SystemExit(refused)
     cfg = replace(cfg, start_day=start_day_for(store, cfg.start_day))
-    hl = HyperliquidInfo(cfg.hl_info_url)
+    hl = HyperliquidInfo(cfg.hl_info_url, budget_per_minute=cfg.hl_budget)
     wallet = (
         bt.Wallet(name=cfg.wallet_name, hotkey=cfg.wallet_hotkey, path=cfg.wallet_path)
         if cfg.wallet_path
