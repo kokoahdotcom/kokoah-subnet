@@ -450,6 +450,17 @@ async def test_the_sdk_result_decides_whether_a_submission_counts(tmp_path: Path
     await hl.close()
 
 
+async def test_weights_go_out_after_the_chain_was_reset_below_the_recorded_blocks(tmp_path: Path) -> None:
+    """The record says weights were set (and once refused) at blocks the chain has not reached: a reset local chain
+    or a record moved to another network. Those blocks count as long ago, so weights still go out."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    store.set_meta("weights:block", str(chain._block + 50_000))
+    store.set_meta("weights:failed_block", str(chain._block + 50_000))
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=DAY_MS / 1000 + 86_400 + 600)
+    assert report["weights"]["ok"] is True and store.get_meta("weights:block") == str(chain._block)
+    await hl.close()
+
+
 async def test_an_unregistered_validator_does_not_submit(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     now = DAY_MS / 1000 + 86_400 + 600
@@ -1105,6 +1116,17 @@ async def test_a_hotkey_swap_is_detected_between_two_scored_days(tmp_path: Path)
     a2 = next(r for r in result.records if r.hotkey == "hkA2")
     assert a2.g == pytest.approx(0.7 * 0.4 + 0.3 * a2.skill_raw)  # the skill record follows the new hotkey
     assert a2.phi_hat == pytest.approx(0.3 * a2.credited.credit)  # the credit does not
+    await hl.close()
+
+
+async def test_a_retried_day_forgets_a_swap_its_first_attempt_saw(tmp_path: Path) -> None:
+    """A failed first attempt recorded a swap; by the retry the earlier metagraph shows a new registration instead,
+    so the retried day applies no swap."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    _swap_hotkey_a(store, chain, (100, 200))
+    store.put_swap(DAY, 1, HK_A, "hkA2", "ckA")  # what the failed first attempt recorded
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.swaps_through(DAY) == []
     await hl.close()
 
 

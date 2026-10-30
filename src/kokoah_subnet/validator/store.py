@@ -247,6 +247,10 @@ class Store:
                 )
             )
 
+    def clear_swaps(self, day: str) -> None:
+        with self._engine.begin() as c:
+            c.execute(delete(S.hotkey_swaps).where(S.hotkey_swaps.c.day == day))
+
     def swaps_through(self, day: str) -> list[tuple[str, str, str]]:
         """(day, old hotkey, new hotkey) of every recorded swap up to `day`, oldest first."""
         with self._engine.connect() as c:
@@ -750,12 +754,6 @@ class Store:
     def days_list(self) -> list[str]:
         with self._engine.connect() as c:
             return [str(r[0]) for r in c.execute(select(S.days.c.day).order_by(S.days.c.day)).all()]
-
-    def delete_day(self, day: str) -> None:
-        """Forget a scored day so it is scored again (its records are rewritten on the next pass)."""
-        with self._engine.begin() as c:
-            c.execute(delete(S.days).where(S.days.c.day == day))
-            c.execute(delete(S.meta).where(S.meta.c.key.in_([f"attempt:{day}", "weights:day", "weights:block"])))
 
     def put_agent_checks(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
         with self._engine.begin() as c:

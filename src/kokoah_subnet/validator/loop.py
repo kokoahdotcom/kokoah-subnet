@@ -164,9 +164,11 @@ async def submit_weights(
         return None
     last_block = int(store.get_meta("weights:block", "0") or 0)
     last_day = store.get_meta("weights:day", "")
-    due = snap.block - last_block >= cfg.weights_every_blocks or (last_day != latest[0] and caught_up)
+    # a block ahead of the chain (a reset local chain, or a record moved to another network) counts as long ago
+    since_last = snap.block - last_block
+    due = not 0 <= since_last < cfg.weights_every_blocks or (last_day != latest[0] and caught_up)
     failed_block = int(store.get_meta("weights:failed_block", "0") or 0)
-    if not due or (failed_block and snap.block - failed_block < cfg.weights_every_blocks):
+    if not due or (failed_block and 0 <= snap.block - failed_block < cfg.weights_every_blocks):
         return None
     fractions = json.loads(latest[2])["weights"]
     uids, values = weights_by_uid(fractions, snap.uid_of())

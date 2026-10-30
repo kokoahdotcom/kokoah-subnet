@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -159,10 +160,11 @@ async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, boo
         if _readable(data):
             return data, False
         log.warning("cached builder file %s is unreadable: downloading it again", path)
-        path.unlink()
+        path.unlink(missing_ok=True)  # another validator sharing the cache may have replaced it already
     data = await download(cfg.builder, day, cfg.builder_base_url)
-    partial = path.with_name(f".{path.name}.{os.getpid()}.part")
-    partial.write_bytes(data)
+    fd, partial = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".part", dir=cache)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
     os.replace(partial, path)
     return data, True
 
@@ -302,6 +304,7 @@ async def collect_and_score(
     # and applied when scoring). Compared with the metagraph of the previous scored day; a UID registered again
     # (a new registration block) is a new registration, not a swap
     swaps: list[tuple[str, str]] = []
+    store.clear_swaps(day)  # a retried day records only the swaps it sees now
     for n in snap.neurons:
         prev_n = previous.get(n.uid)
         same_registration = (
