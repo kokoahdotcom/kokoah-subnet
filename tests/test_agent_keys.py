@@ -397,7 +397,7 @@ def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dic
         "token": machine.attestation(digest)["token"],
     }
     refused = svc.put(f"/key-store/{by_hand.address}", json=body)
-    assert refused.status_code == 403 and "audience" in refused.json()["detail"].lower()
+    assert refused.status_code == 403 and "other nonces" in refused.json()["detail"]
     challenge = world["keys"].challenge(address)
     relayed = machine.attestation(restore_digest(address, challenge))["token"]
     assert svc.post(f"/key-store/{address}/restore", json={"token": relayed}).status_code == 403
@@ -513,3 +513,33 @@ def test_a_starting_machine_gets_past_a_passing_fault(world: dict[str, Any], mon
     bundle = Flaky(world["svc"], {"GET": [504]})
     plain, _ = fetch_code("http://svc", world["submission"], None, cast(httpx.Client, bundle))
     assert plain[:2] == b"PK" and bundle.calls == ["GET", "GET"]
+
+
+def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_files_nothing(
+    world: dict[str, Any],
+) -> None:
+    """Harness 1.1.0 asks for its key-store tokens with the default audience: its own store and restore are accepted
+    (exactly the one digest), while its public answer to the same digest is refused (two nonces)."""
+    svc: TestClient = world["svc"]
+    master, account = Account.create(), Account.create()
+    blob = encrypt_key(bytes(account.key), account.address, SECRET)
+    p = permit(world["submission"], master.address)
+    digest = store_digest(account.address, master.address, blob, ALICE.ss58_address, world["submission"], p)
+    body = {
+        "blob": base64.b64encode(blob).decode(),
+        "master": master.address,
+        "hotkey": ALICE.ss58_address,
+        "netuid": NETUID,
+        "submission": world["submission"],
+        "permit": p,
+    }
+    public = world["machine"].token([digest, "ab" * 32])  # how /attestation answers: the challenge and the binding
+    assert svc.put(f"/key-store/{account.address}", json={**body, "token": public}).status_code == 403
+    stored = svc.put(f"/key-store/{account.address}", json={**body, "token": world["machine"].token([digest])})
+    assert stored.status_code == 200, stored.text
+    address = account.address.lower()
+    challenge = world["keys"].challenge(address)
+    old_style = world["machine"].token([restore_digest(address, challenge)])
+    restored = svc.post(f"/key-store/{address}/restore", json={"token": old_style})
+    assert restored.status_code == 200
+    assert decrypt_key(base64.b64decode(restored.json()["blob"]), address, SECRET) == bytes(account.key)

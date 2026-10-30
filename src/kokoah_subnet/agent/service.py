@@ -380,15 +380,20 @@ def create_app(
         """Why the token is not a genuine sealed machine's answer to `nonce` (None when it is)."""
         if accept_unverified_machines:
             return None
-        from .attest import KEYSTORE_AUDIENCE, AttestationError, google_keys, verify_token
+        from .attest import AUDIENCE, KEYSTORE_AUDIENCE, AttestationError, google_keys, verify_token
 
         if key_source[0] is None:
             key_source[0] = google_keys()
-        try:
-            verify_token(token, key_source[0], list(images or []), [nonce], audience=KEYSTORE_AUDIENCE)
-        except AttestationError as exc:
-            return str(exc)
-        return None
+        errors = []
+        # exactly the one digest, never a public /attestation answer (which always carries two); harness 1.1.0 asks
+        # for its key-store tokens with the default audience, later ones with the key store's own
+        for audience in (KEYSTORE_AUDIENCE, AUDIENCE):
+            try:
+                verify_token(token, key_source[0], list(images or []), [nonce], audience=audience, exact_nonces=True)
+                return None
+            except AttestationError as exc:
+                errors.append(str(exc))
+        return next((e for e in errors if "audience" not in e.lower()), errors[0])
 
     def machine_proof(token: str, nonce: str) -> None:
         error = proof_error(token, nonce)

@@ -11,9 +11,10 @@ image is an approved harness, and that both nonces are present: the challenge (s
 binding digest (so the token speaks for exactly this subnet, hotkey, Hyperliquid address and code fingerprint).
 Nothing here trusts the operator or the miner.
 
-**At the key store**: the machine's tokens for storing and restoring its account key carry their own audience
-(`KEYSTORE_AUDIENCE`), which the public `/attestation` never asks for, so an answer to anyone's challenge can never
-stand in for a key-store token.
+**At the key store**: a token for storing or restoring an account key must carry exactly one nonce, the store or
+restore digest. The public `/attestation` always signs two (the caller's challenge and the binding digest), so an
+answer to anyone's challenge can never stand in for a key-store token, from any harness version. From harness 1.2.0
+the machine's key-store tokens also carry their own audience (`KEYSTORE_AUDIENCE`); harness 1.1.0's use the default.
 
 The binding digest is `sha256("kokoah-agent-1 netuid=<n> hotkey=<ss58> address=<0x..> code=<sha256>")`.
 """
@@ -129,8 +130,10 @@ def verify_token(
     issuer: str = ISSUER,
     hardware: Iterable[str] = CONFIDENTIAL_HARDWARE,
     now: float | None = None,
+    exact_nonces: bool = False,
 ) -> Verified:
-    """Every check a validator makes on a sealed machine's token; raises AttestationError on the first failure."""
+    """Every check a validator makes on a sealed machine's token; raises AttestationError on the first failure.
+    `exact_nonces`: the token must carry the expected nonces and no other (the key store's check)."""
     try:
         key = keys.get_signing_key_from_jwt(token)
         claims: dict[str, Any] = jwt.decode(
@@ -161,9 +164,12 @@ def verify_token(
     digest = str((submods.get("container") or {}).get("image_digest", ""))
     if digest not in set(approved_images):
         raise AttestationError(f"image {digest or '(none)'} is not an approved harness")
-    missing = set(expected_nonces) - _nonces(claims)
+    expected = set(expected_nonces)
+    missing = expected - _nonces(claims)
     if missing:
         raise AttestationError(f"token does not carry the expected nonces ({len(missing)} missing)")
+    if exact_nonces and _nonces(claims) != expected:
+        raise AttestationError("token carries other nonces than the expected ones")
     gce = submods.get("gce") or {}
     return Verified(digest, str(claims.get("hwmodel")), str(gce.get("instance_id", "")), claims)
 
