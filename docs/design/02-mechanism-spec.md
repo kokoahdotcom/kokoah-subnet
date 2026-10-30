@@ -369,8 +369,6 @@ after 60 days.
   is unknown; fills that needed a failed read go uncounted (§3). A coin whose minute candles the exchange refuses
   outright (a client error, or no answer) is settled at once the same way, so no trader can hold everyone's day with
   it. The other reads (account value, flows, positions, fee rates, stake) fall back. Every failure is recorded.
-- **Re-scoring.** Only the latest scored day can be scored again; it reads only the mirror reports of earlier days,
-  so with the same data it gives the result of its first scoring.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is

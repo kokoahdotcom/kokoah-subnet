@@ -771,6 +771,7 @@ async def test_a_truncated_cached_file_is_downloaded_again(tmp_path: Path, monke
     assert asked == [("0xbuilder", DAY)] and cached.read_bytes() == whole
     assert sum(r.fees.fills for r in result.records) == 30
     assert [p.name for p in cached.parent.iterdir()] == [cached.name]  # no partial file left behind
+    assert cached.stat().st_mode & 0o777 == 0o644  # readable by another validator sharing the cache
     await hl.close()
 
 

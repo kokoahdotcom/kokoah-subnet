@@ -181,9 +181,14 @@ async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, boo
         path.unlink(missing_ok=True)  # another validator sharing the cache may have replaced it already
     data = await download(cfg.builder, day, cfg.builder_base_url)
     fd, partial = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".part", dir=cache)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    os.replace(partial, path)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(partial, 0o644)  # readable by every validator sharing the cache, as a plain write would be
+        os.replace(partial, path)
+    except BaseException:
+        Path(partial).unlink(missing_ok=True)
+        raise
     return data, True
 
 
