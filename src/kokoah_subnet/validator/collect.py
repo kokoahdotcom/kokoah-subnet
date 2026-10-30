@@ -352,7 +352,8 @@ async def collect_and_score(
         own_unlink_http = agent_http is None
         unlink_http = agent_http or httpx.AsyncClient(timeout=20)
         try:
-            store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid))
+            kept = {(u.hotkey, u.address) for u in store.unlinks()}
+            store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid, kept))
         except Exception as exc:
             store.put_error(day, None, None, "unlinks", str(exc))
             if not past_deadline:

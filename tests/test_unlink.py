@@ -112,7 +112,8 @@ def test_the_service_files_an_unlink_only_when_the_address_signed_it_just_now(tm
     assert c.get("/unlinks/message", params={"hotkey": "nope", "address": owner.address}).status_code == 400
     listed = c.get("/unlinks", params={"address": owner.address}).json()["unlinks"]
     assert [u["hotkey"] for u in listed] == [H1] and c.get("/unlinks", params={"address": other.address}).json() == {
-        "unlinks": []
+        "unlinks": [],
+        "next": None,
     }
 
 
@@ -140,3 +141,78 @@ def test_a_validator_keeps_every_unlink_it_saw_and_the_first_per_pair(tmp_path: 
     store.put_unlinks("2026-10-24", [first])
     store.put_unlinks("2026-10-27", [later])
     assert store.unlinks() == [first]
+
+
+def test_only_a_link_a_binding_on_chain_named_can_be_unlinked_and_it_is_remembered(tmp_path: Path) -> None:
+    clock, owner, stranger = Clock(), Account.create(), Account.create()
+    links = {(H1, owner.address.lower())}
+    reads = []
+
+    def bound() -> set[tuple[str, str]]:
+        reads.append(clock.now)
+        return set(links)
+
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: hk == H1, clock=clock,
+                     netuid=NETUID, bound_pairs=bound)  # fmt: skip
+    c = TestClient(app)
+    t = int(clock.now * 1000)
+
+    def unlink(key: Any) -> int:
+        body = {"hotkey": H1, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
+        return int(c.post("/unlinks", json=body).status_code)
+
+    assert unlink(stranger) == 403  # a fresh address never linked to the hotkey: nothing to unlink
+    assert unlink(stranger) == 403 and len(reads) == 1  # the chain is read again only after a while
+    links.clear()  # the hotkey commits something else: the link it named before is remembered
+    clock.now += 60
+    assert unlink(owner) == 200 and c.get("/unlinks").json()["unlinks"][0]["address"] == owner.address.lower()
+
+
+def test_the_unlink_list_comes_in_pages_oldest_first(tmp_path: Path) -> None:
+    clock = Clock()
+    keys = [Account.create() for _ in range(5)]
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
+                     netuid=NETUID)  # fmt: skip
+    c = TestClient(app)
+    for key in keys:
+        t = int(clock.now * 1000)
+        body = {"hotkey": H1, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
+        assert c.post("/unlinks", json=body).status_code == 200
+        clock.now += 1
+    first = c.get("/unlinks", params={"limit": 2}).json()
+    assert len(first["unlinks"]) == 2 and first["next"] == first["unlinks"][-1]["received_at"]
+    rest = c.get("/unlinks", params={"since": first["next"], "limit": 10}).json()
+    assert len(rest["unlinks"]) == 4 and rest["next"] is None  # the boundary row again, then the rest
+    every = {u["address"] for u in first["unlinks"] + rest["unlinks"]}
+    assert every == {k.address.lower() for k in keys}
+
+
+async def test_a_validator_reads_every_page_and_checks_each_signature_once(monkeypatch: Any) -> None:
+    owners = [Account.create() for _ in range(3)]
+    rows = [signed(o, H1, ms("2026-10-24") + i) for i, o in enumerate(owners)]
+    asked: list[float] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        since = float(request.url.params.get("since", "0"))
+        asked.append(since)
+        page = [r for i, r in enumerate(rows) if i >= since][:2]
+        listed = [{"hotkey": u.hotkey, "address": u.address, "time_ms": u.time_ms, "signature": u.signature,
+                   "received_at": rows.index(u)} for u in page]  # fmt: skip
+        return httpx.Response(
+            200, json={"unlinks": listed, "next": listed[-1]["received_at"] if len(page) == 2 else None}
+        )
+
+    checked: list[str] = []
+    real = Unlink.signed_by_address
+
+    def counted(self: Unlink, netuid: int) -> bool:
+        checked.append(self.address)
+        return real(self, netuid)
+
+    monkeypatch.setattr(Unlink, "signed_by_address", counted)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        found = await fetch_unlinks(http, "http://svc", NETUID, known={(H1, rows[0].address)})
+    assert found == rows[1:] and asked == [0.0, 1.0, 2.0]
+    assert sorted(checked) == sorted(u.address for u in rows[1:])  # the kept one is never checked again

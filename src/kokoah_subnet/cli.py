@@ -640,7 +640,8 @@ def _agent(args: argparse.Namespace) -> int:
             return 1
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address
-        signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
+        signed_at = int(time.time() * 1000)
+        signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey, signed_at).encode())).hex()
         try:
             r = httpx.post(
                 f"{args.service.rstrip('/')}/agents",
@@ -650,6 +651,7 @@ def _agent(args: argparse.Namespace) -> int:
                     "x-kokoah-hotkey": hotkey,
                     "x-kokoah-bundle-sha256": sha256_hex(blob),
                     "x-kokoah-signature": signature,
+                    "x-kokoah-time": str(signed_at),
                 },
                 timeout=120,
             )
@@ -841,7 +843,7 @@ def _agent(args: argparse.Namespace) -> int:
 
         if args.dev_accept_any_machine:
             print("development mode: keys are accepted from any machine (never use this in production)")
-        from kokoah_subnet.chain import RegisteredHotkeys, registered_hotkeys
+        from kokoah_subnet.chain import RegisteredHotkeys, bound_links, registered_hotkeys
 
         network, netuid = args.network, args.netuid
         registered = RegisteredHotkeys(lambda: registered_hotkeys(network, netuid))
@@ -860,6 +862,7 @@ def _agent(args: argparse.Namespace) -> int:
             wrap_key=wrap_key,
             netuid=netuid,
             accept_unverified_machines=args.dev_accept_any_machine,
+            bound_pairs=lambda: asyncio.run(bound_links(network, netuid)),
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info", limit_concurrency=64)
         return 0

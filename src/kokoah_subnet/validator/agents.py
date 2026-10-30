@@ -194,19 +194,34 @@ async def _check_agent(
     )
 
 
-async def fetch_unlinks(http: httpx.AsyncClient, service: str, netuid: int) -> list[Unlink]:
-    """The unlinks the subnet's service published (`GET /unlinks`), keeping only those the address itself signed for
-    this subnet: the service cannot make one up."""
-    r = await http.get(f"{service.rstrip('/')}/unlinks", timeout=20)
-    r.raise_for_status()
-    out = []
-    for x in r.json()["unlinks"]:
-        try:
-            u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if u.signed_by_address(netuid):
-            out.append(u)
+UNLINK_PAGES = 1000  # the most pages read in one go
+
+
+async def fetch_unlinks(
+    http: httpx.AsyncClient, service: str, netuid: int, known: Iterable[tuple[str, str]] = ()
+) -> list[Unlink]:
+    """The unlinks the subnet's service published (`GET /unlinks`, page by page), keeping only those the address
+    itself signed for this subnet: the service cannot make one up. Pairs in `known` (hotkey, address: unlinks already
+    kept, of which only the first per pair counts) are skipped unchecked, so each signature is checked once."""
+    out: list[Unlink] = []
+    seen = set(known)
+    since = 0.0
+    for _ in range(UNLINK_PAGES):
+        r = await http.get(f"{service.rstrip('/')}/unlinks", params={"since": since}, timeout=20)
+        r.raise_for_status()
+        page = r.json()
+        for x in page["unlinks"]:
+            try:
+                u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (u.hotkey, u.address) not in seen and u.signed_by_address(netuid):
+                seen.add((u.hotkey, u.address))
+                out.append(u)
+        following = page.get("next")
+        if following is None or float(following) <= since:
+            break
+        since = float(following)
     return out
 
 

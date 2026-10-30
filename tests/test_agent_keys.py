@@ -18,12 +18,12 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
-from uploads import upload
+from uploads import signed_upload
 
 from kokoah_subnet.agent import service as service_module
 from kokoah_subnet.agent import supervisor as supervisor_module
 from kokoah_subnet.agent.attest import KEYSTORE_AUDIENCE, DevelopmentAttestor, StaticKeys, verify_token
-from kokoah_subnet.agent.bundle import package, sha256_hex
+from kokoah_subnet.agent.bundle import package
 from kokoah_subnet.agent.harness import Harness, HarnessConfig
 from kokoah_subnet.agent.keystore import (
     KeyService,
@@ -36,7 +36,7 @@ from kokoah_subnet.agent.keystore import (
     start_message,
     store_digest,
 )
-from kokoah_subnet.agent.service import create_app, submit_message
+from kokoah_subnet.agent.service import create_app
 from kokoah_subnet.agent.supervisor import account_key, address_setting, mainnet_setting
 from kokoah_subnet.binding import AgentRef, Binding
 from kokoah_subnet.chain import RegisteredHotkeys
@@ -54,8 +54,7 @@ def submit(svc: TestClient, hotkey: Any, tmp_path: Path) -> httpx.Response:
     d.mkdir(parents=True, exist_ok=True)
     (d / "entry.py").write_text("print('agent')\n")
     blob = package(d)
-    sig = bytes(hotkey.sign(submit_message(sha256_hex(blob), hotkey.ss58_address).encode())).hex()
-    response: httpx.Response = upload(svc, hotkey.ss58_address, blob, sig)
+    response: httpx.Response = signed_upload(svc, hotkey, blob)
     return response
 
 

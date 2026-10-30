@@ -31,13 +31,14 @@ def agent(tmp_path: Path, name: str) -> bytes:
     return package(d)
 
 
-def headers(hotkey: str, blob_id: str, size: int, signature: str = "ok") -> dict[str, str]:
+def headers(hotkey: str, blob_id: str, size: int, signature: str = "ok", clock: Clock | None = None) -> dict[str, str]:
     return {
         "content-type": "application/octet-stream",
         "content-length": str(size),
         "x-kokoah-hotkey": hotkey,
         "x-kokoah-bundle-sha256": blob_id,
         "x-kokoah-signature": signature,
+        "x-kokoah-time": str(int((clock or Clock()).now * 1000)),
     }
 
 
@@ -87,22 +88,84 @@ async def test_old_bundles_are_cleaned_up_unless_a_key_copy_names_them(
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://svc") as c:
         for i in range(4):
             blob = agent(tmp_path, f"v{i}")
-            r = await c.post("/agents", content=blob, headers=headers("h1", sha256_hex(blob), len(blob)))
+            r = await c.post("/agents", content=blob, headers=headers("h1", sha256_hex(blob), len(blob), clock=clock))
             assert r.status_code == 200
             ids.append(sha256_hex(blob))
-            if i == 0:  # an account's key copy was filed with the first bundle
-                from sqlalchemy import create_engine
-
-                engine = create_engine(f"sqlite:///{tmp_path / 'svc' / 'agents.sqlite'}")
-                with engine.begin() as conn:
-                    conn.execute(
-                        insert(service_module.key_events).values(
-                            address="0x" + "11" * 20,
-                            event="store",
-                            at=clock.now,
-                            detail=f"hotkey h1 submission {ids[0]}",
-                        )
-                    )
+            if i < 2:  # an account's key copy was filed with each of the first two bundles; the second was released
+                file_key_copy(tmp_path, f"0x{i + 1:040x}", ids[i], clock.now, released=i == 1)
             clock.now += 13 * 3600
     kept = {p.name for p in (tmp_path / "svc" / "bundles").iterdir()}
-    assert kept == {ids[0], ids[2], ids[3]}  # the newest two, and the one in use
+    assert kept == {ids[0], ids[2], ids[3]}  # the newest two, and the one an unreleased copy names
+
+
+def file_key_copy(tmp_path: Path, address: str, submission: str, at: float, released: bool = False) -> None:
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'svc' / 'agents.sqlite'}")
+    with engine.begin() as conn:
+        conn.execute(
+            insert(service_module.keys).values(
+                address=address, hotkey="h1", master="0x" + "22" * 20, blob="x", stored_at=at,
+                released_at=at if released else None,
+            )
+        )  # fmt: skip
+        conn.execute(
+            insert(service_module.key_events).values(
+                address=address, event="store", at=at, detail=f"hotkey h1 submission {submission}"
+            )
+        )
+
+
+async def test_every_upload_counts_refused_ones_too_and_bundles_are_checked_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    checked_on: list[str] = []
+    from kokoah_subnet.agent.bundle import check_zip as real
+
+    def check(plain: bytes) -> Any:
+        checked_on.append(threading.current_thread().name)
+        return real(plain)
+
+    monkeypatch.setattr("kokoah_subnet.agent.service.check_zip", check)
+    bad = b"PK not a zip"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app(tmp_path)), base_url="http://svc") as c:
+        codes = [
+            (await c.post("/agents", content=bad + bytes([i]), headers=headers("h1", sha256_hex(bad + bytes([i])),
+                                                                               len(bad) + 1))).status_code
+            for i in range(service_module.SUBMIT_ATTEMPTS_PER_HOUR + 1)
+        ]  # fmt: skip
+        other = agent(tmp_path, "a")
+        assert (
+            await c.post("/agents", content=other, headers=headers("h2", sha256_hex(other), len(other)))
+        ).status_code == 200
+    assert codes == [400] * service_module.SUBMIT_ATTEMPTS_PER_HOUR + [429]  # one hotkey's tries; others unaffected
+    assert checked_on and threading.main_thread().name not in checked_on
+
+
+async def test_bundles_of_a_hotkey_that_left_are_deleted_after_a_month_and_can_be_sent_again(tmp_path: Path) -> None:
+    clock = Clock()
+    registered = {"h1", "h2"}
+    application = create_app(tmp_path / "svc", verify=lambda m, s, h: s == "ok", clock=clock,
+                             is_registered=lambda hk: hk in registered)  # fmt: skip
+    blobs = {hk: agent(tmp_path, f"code-{hk}") for hk in ("h1", "h2", "h3")}
+    registered.add("h3")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://svc") as c:
+        for hk, blob in blobs.items():
+            r = await c.post("/agents", content=blob, headers=headers(hk, sha256_hex(blob), len(blob), clock=clock))
+            assert r.status_code == 200
+        file_key_copy(tmp_path, "0x" + "33" * 20, sha256_hex(blobs["h3"]), clock.now)  # h3's account is kept
+        registered -= {"h2", "h3"}  # h2 and h3 leave the subnet
+        clock.now += 29 * 86_400
+        assert application.state.prune_bundles() == 0  # not a month yet
+        clock.now += 2 * 86_400
+        assert application.state.prune_bundles() == 1
+        kept = {p.name for p in (tmp_path / "svc" / "bundles").iterdir()}
+        assert kept == {sha256_hex(blobs["h1"]), sha256_hex(blobs["h3"])}  # registered, or named by a kept copy
+        gone = sha256_hex(blobs["h2"])
+        assert (await c.get(f"/agents/{gone}/bundle")).status_code == 404
+        registered.add("h2")  # h2 comes back and sends the same code again
+        again = await c.post("/agents", content=blobs["h2"], headers=headers("h2", gone, len(blobs["h2"]), clock=clock))
+        assert again.status_code == 200 and again.json()["existing"]
+        assert (await c.get(f"/agents/{gone}/bundle")).content == blobs["h2"]  # kept again

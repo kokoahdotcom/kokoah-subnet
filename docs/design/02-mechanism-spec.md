@@ -340,7 +340,8 @@ after 60 days.
   address's own record, which stays with the address, as do its penalties.
 - **Unlinking.** The linked address ends its link with one signature, without the hotkey:
   `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
-  subnet's service, which accepts it only within 10 minutes of its time and publishes it (`GET /unlinks`). Every
+  subnet's service, which accepts it only within 10 minutes of its time and only for a link a binding on chain has
+  named (the service remembers every link the subnet's bindings name), and publishes it (`GET /unlinks`). Every
   validator checks each signature, keeps every unlink it has seen and applies it from the first UTC day after its
   time: the link ends (credit and qualification end with the identity, as when leaving), the address is free for
   another hotkey and the hotkey for another address, and this hotkey and this address are never accepted together
@@ -446,7 +447,8 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
 
 **Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
 packages it imports inside), encrypted by default with a key only the miner holds, and submits it to the owner's
-service signed by a registered hotkey (`agent submit`; one submission per hotkey per 12 hours). The machine fetches exactly
+service signed by a registered hotkey with the time (`agent submit`; within 5 minutes; one submission per hotkey per
+12 hours, and at most 6 uploads an hour, refused ones included). The machine fetches exactly
 that submission, checks its id, decrypts it inside, and computes the **code fingerprint** (sha256 of the zip).
 
 **Binding.** The machine signs the subnet binding line with the account's key; the miner publishes it with an

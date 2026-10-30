@@ -56,6 +56,22 @@ async def registered_hotkeys(network: str, netuid: int) -> set[str]:
     return {str(n.hotkey) for n in mg.neurons}
 
 
+async def bound_links(network: str, netuid: int) -> set[tuple[str, str]]:
+    """(hotkey, address) for every address the subnet's valid bindings on chain name now: the bound one, and on a
+    migration the one it moves from."""
+    from kokoah_subnet.binding.chain import read_bindings
+
+    async with bt.Subtensor(network) as client:
+        published = await read_bindings(client, netuid)
+    links = set()
+    for pb in published:
+        if pb.valid:
+            links.add((pb.hotkey, pb.binding.address))
+            if pb.binding.previous_address:
+                links.add((pb.hotkey, pb.binding.previous_address))
+    return links
+
+
 class RegisteredHotkeys:
     """`check(hotkey)`: whether the hotkey is registered on the subnet. The list is read again when it is older than
     `max_age_s`, or on an unknown hotkey once `refresh_s` has passed (a just-registered miner waits at most that)."""
