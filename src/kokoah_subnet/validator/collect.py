@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,7 +32,7 @@ from kokoah_subnet.mechanism import (
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
-from kokoah_subnet.mechanism.eligibility import daily_average_equity, day_change, fresh_identity
+from kokoah_subnet.mechanism.eligibility import EquityAverage, daily_average_equity, day_change, fresh_identity
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 from kokoah_subnet.mechanism.fills import (
     BUILDER_CSV_HEADER,
@@ -90,6 +91,9 @@ class ValidatorConfig:
     fills_cache: Path | None = None  # where downloaded builder files are kept, per builder (default: data_dir/fills)
     db_url: str = ""  # the record; empty = SQLite file in data_dir
     agent_images: tuple[str, ...] = APPROVED_HARNESS_IMAGES  # approved sealed-machine harness images
+    # failed reads are waited for until the file deadline, and never less than this long after this validator's first
+    # attempt at the day, so a validator that comes back after an outage still retries before it scores without them
+    retry_grace_hours: float = 3.0
     agent_service: str = ""  # the owner's agent service (its released list); empty: no account counts as an agent
     extra: dict[str, str] = field(default_factory=dict)
 
@@ -144,6 +148,32 @@ def _readable(data: bytes) -> bool:
     return ",".join(h.strip() for h in first.split(",")) == BUILDER_CSV_HEADER
 
 
+def retry_deadline(
+    store: Store, day: str, clock: float, end_ms: int, params: Params, grace_hours: float, away_s: float = 7200
+) -> float:
+    """When this validator stops waiting for failed reads of `day`: the file deadline, and never sooner than
+    `grace_hours` after its first attempt at the day. A day that was already over when the day before it was first
+    attempted (a backlog after an outage) takes that day's first attempt, so a backlog has one grace window, not one
+    per day; and a validator that was away from a day for longer than `away_s` (twice its retry pace) starts the day's
+    window again when it comes back, once per day at most, so the window always ends."""
+    key, last_key, again_key = f"first_attempt:{day}", f"last_attempt:{day}", f"window_restarted:{day}"
+    stored, last = store.get_meta(key), store.get_meta(last_key)
+    if stored is None:
+        first = clock
+        before = store.get_meta(f"first_attempt:{store.day_before(day)}")
+        if before is not None and float(before) * 1000 >= end_ms:
+            first = min(first, float(before))
+        store.set_meta(key, repr(first))
+    else:
+        first = float(stored)
+        if last is not None and clock - float(last) > away_s and store.get_meta(again_key) is None:
+            first = clock
+            store.set_meta(key, repr(first))
+            store.set_meta(again_key, "1")
+    store.set_meta(last_key, repr(clock))
+    return max(end_ms / 1000 + params.file_deadline_hours * 3600, first + grace_hours * 3600)
+
+
 async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, bool]:
     """The day's builder file, from the local cache or downloaded (and cached); the flag says it was downloaded.
     The cache is kept per builder and written whole (a temporary file renamed into place); a cached file that does
@@ -156,11 +186,17 @@ async def fetch_builder_file(cfg: ValidatorConfig, day: str) -> tuple[bytes, boo
         if _readable(data):
             return data, False
         log.warning("cached builder file %s is unreadable: downloading it again", path)
-        path.unlink()
+        path.unlink(missing_ok=True)  # another validator sharing the cache may have replaced it already
     data = await download(cfg.builder, day, cfg.builder_base_url)
-    partial = path.with_name(f".{path.name}.{os.getpid()}.part")
-    partial.write_bytes(data)
-    os.replace(partial, path)
+    fd, partial = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".part", dir=cache)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(partial, 0o644)  # readable by every validator sharing the cache, as a plain write would be
+        os.replace(partial, path)
+    except BaseException:
+        Path(partial).unlink(missing_ok=True)
+        raise
     return data, True
 
 
@@ -231,7 +267,8 @@ async def collect_and_score(
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
-    past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
+    away_s = 2 * max(cfg.retry_missing_s, cfg.poll_s)
+    past_deadline = clock >= retry_deadline(store, day, clock, end_ms, params, cfg.retry_grace_hours, away_s)
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
     except NotPublished:
@@ -294,6 +331,7 @@ async def collect_and_score(
     # and applied when scoring). Compared with the metagraph of the previous scored day; a UID registered again
     # (a new registration block) is a new registration, not a swap
     swaps: list[tuple[str, str]] = []
+    store.clear_swaps(day)  # a retried day records only the swaps it sees now
     for n in snap.neurons:
         prev_n = previous.get(n.uid)
         same_registration = (
@@ -315,7 +353,7 @@ async def collect_and_score(
             store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid))
         except Exception as exc:
             store.put_error(day, None, None, "unlinks", str(exc))
-            if clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
+            if not past_deadline:
                 raise RuntimeError(f"unlinks unavailable: {exc}") from exc
         finally:
             if own_unlink_http:
@@ -426,55 +464,81 @@ async def collect_and_score(
 
     marks_cache: dict[str, dict[int, float] | None] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
+    listings: dict[str, set[str] | None] = {}
+    listing_locks: dict[str, asyncio.Lock] = {}
+
+    async def listed(coin: str) -> bool | None:
+        """Whether the exchange lists the coin (None when its list cannot be read): the same answer for every
+        validator. One read per exchange, shared by its coins."""
+        dex = coin.split(":", 1)[0] if ":" in coin else ""
+        async with listing_locks.setdefault(dex, asyncio.Lock()):
+            if dex not in listings:
+                try:
+                    listings[dex] = await hl.perp_names(dex)
+                except Exception:  # noqa: BLE001 - unknown, so the read is waited for as usual
+                    listings[dex] = None
+        names = listings[dex]
+        return None if names is None else coin in names
 
     async def marks_for(coin: str) -> dict[int, float] | None:
         """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
         first address to ask reads them, the others wait for that answer), so every address is clipped against the
         same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
-        after it, None: the coin's builder fills go uncounted and the day's return of an address that traded the
-        coin is unknown."""
+        after it, or at once for a coin the exchange does not list (it answers such a coin with an error, so it would
+        otherwise hold everyone's day), None: the coin's builder fills go uncounted and the day's return of an address
+        that traded the coin is unknown."""
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
                     marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
                 except Exception as exc:  # noqa: BLE001
                     store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
-                    if not past_deadline:
+                    if not past_deadline and await listed(coin) is not False:
                         raise RuntimeError(f"minute candles of {coin} unavailable: {exc}") from exc
                     marks_cache[coin] = None
         return marks_cache[coin]
 
     async def one(hk: str, address: str) -> None:
-        """Everything for one bound address. A failed read of the account's recorded history fails the day (it is
-        retried within the hour). A failed read of the fill history, the explorer, the minute candles or a linked
-        account fails the day until the deadline; after it, only what needed the failed read goes uncounted. The
-        other reads (account state, ledger, fee rates, stake) fall back. Every failure is recorded."""
+        """Everything for one bound address. A failed read of the account's recorded history, the fill history, the
+        explorer, the minute candles or a linked account fails the day (retried within the hour) until the deadline;
+        after it, only what needed the failed read is lost. The other reads (account state, ledger, fee rates, stake)
+        fall back. Every failure is recorded."""
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
         # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
-        # hourly) instead of costing the trader the day, and the average is never estimated from a snapshot.
+        # hourly) until the deadline, and the average is never estimated from a snapshot; after it, the day is
+        # measured from points an earlier read stored only when they reach past the day's end (recorded points are
+        # the same for every validator); otherwise this address's average and return are unknown for the day (it is
+        # not eligible), no equity row is written (so a first-time address is still backfilled once a read
+        # succeeds), and every other address is scored as usual
+        recorded = True
         try:
             windows = await hl.portfolio(address)
         except Exception as exc:
             store.put_error(day, hk, address, "portfolio", str(exc))
-            raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
-        store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
-        store.put_equity_points(
-            address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
-        )
-        origin = portfolio_origin(windows, params.equity_origin_window)
-        avg = daily_average_equity(
-            store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-            start_ms,
-            end_ms,
-            origin,
-            params.equity_min_points,
-        )
+            if not past_deadline:
+                raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
+            windows = []
+            recorded = False
+        if recorded:
+            store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
+            store.put_equity_points(
+                address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
+            )
+            origin = portfolio_origin(windows, params.equity_origin_window)
+        else:
+            origin = store.last_origin(address)
+        stored = store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
+        history_known = recorded or any(t >= end_ms for t, _ in stored)
+        if history_known:
+            avg = daily_average_equity(stored, start_ms, end_ms, origin, params.equity_min_points)
+        else:
+            avg = EquityAverage(None, 0, "recorded history unavailable")
         store.put_equity_daily(address, day, avg.value, avg.points, origin, params.equity_window, avg.note)
         avg_equity[hk] = (avg.value, avg.points)
         if avg.value is None:
             store.put_error(day, hk, address, "average equity", avg.note)
-        if not store.equity_series(address, 1):
+        if recorded and not store.equity_series(address, 1):
             # first time this address is scored: the exchange's own history gives the returns from day one
             history = daily_equity_from_portfolio(windows)
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
@@ -485,6 +549,7 @@ async def collect_and_score(
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
         # fills beyond the file go unconfirmed, and every other address is scored as usual
         gaps: list[int] = []
+        history_read = True
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms, gaps)
         except Exception as exc:
@@ -492,6 +557,7 @@ async def collect_and_score(
             if not past_deadline:
                 raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
             public = []
+            history_read = False  # off-market fills cannot be checked, so the day's return is unknown
         if gaps:
             store.put_note(
                 day,
@@ -556,7 +622,7 @@ async def collect_and_score(
             if mark:
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
         # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
-        return_known = not any(f.coin in unmarked for f in public)
+        return_known = history_read and not any(f.coin in unmarked for f in public)
         if unmarked:
             store.put_note(
                 day,
@@ -578,7 +644,7 @@ async def collect_and_score(
             end_ms,
         )
         if change.value_start is not None and change.value_end is None:
-            if clock < end_ms / 1000 + params.file_deadline_hours * 3600:
+            if not past_deadline:
                 raise RuntimeError(f"the recorded history of {address} does not reach the end of {day} yet")
         try:
             state = await hl.account_state(address)
@@ -589,7 +655,9 @@ async def collect_and_score(
                 updates = []
                 errors[hk] = f"ledger: {str(exc)[:160]}"
                 store.put_error(day, hk, address, "ledger", str(exc))
-            if change.known and change.value_end is not None and change.profit is not None:
+            if not history_known:
+                store.put_error(day, hk, address, "daily return", "recorded history unavailable")
+            elif change.known and change.value_end is not None and change.profit is not None:
                 # the return is the exchange's recorded profit; any other change in value is money moved
                 previous = store.equity_value(address, store.day_before(day))
                 base = previous if previous is not None else change.value_start or 0.0

@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.1)
+# Kokoah subnet incentive mechanism: complete specification (v6.2)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -294,7 +294,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; copy rule: correlation > 0.9 over ≥ 30 common days; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
-| mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, zero > 50% |
+| mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 12 h after the day: scored from the histories |
 | migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero |
@@ -361,18 +361,24 @@ after 60 days.
 
 ### 14b. Robustness rules
 
-- An exchange API failure never costs a trader the day's fee credit by itself. The account's recorded history
-  behind the equity floor (§9a) is always needed: a failed read fails the day's scoring, which is retried within
-  the hour, so a trader is never made ineligible by an API failure. A failed read of the fill history, the explorer,
-  a linked account, the minute candles or the unlinks fails the day's scoring until the file deadline; after it, the
-  day is scored and only what depends on the failed read goes uncounted (§3). The other reads (account value, flows, positions, fee
-  rates, stake) fall back. Every failure is recorded.
+- A failed read of the account's recorded history (§9a), the fill history, the explorer, a linked account, the minute
+  candles or the unlinks fails the day's scoring, which is retried within the hour, until the deadline: the file
+  deadline, and never sooner than `retry_grace_hours` (3) after this validator's first attempt at the day. The days of
+  a backlog (days already over when the day before them was first attempted, as after an outage) share the first one's
+  window, so a validator back from an outage retries for 3 hours in all, and a validator that was away from a day it
+  had started (for more than twice its retry pace) starts that day's window again once on its return; after that a
+  failed read is final for that day on that validator. Past the deadline the day is scored and only what depends on
+  the failed read is lost: without the recorded history the day is measured from points an earlier read stored if they
+  reach past the day's end, otherwise the account's average is unknown and it is not eligible that day; without the
+  fill history its return is unknown; fills that needed a failed read go uncounted (§3). The minute candles of a coin
+  the exchange does not list are settled at once the same way, so no trader can hold everyone's day with it. The other
+  reads (account value, flows, positions, fee rates, stake) fall back. Every failure is recorded.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
   recorded and flagged, the scored file stands.
 - **Late or missing files.** The exchange writes a day's file about an hour after the day ends, and none when the
-  part of the day it covers had no fills. The validator scores every unscored day in order, oldest first, waits
+  part of the day it covers had no fills. The validator scores the days after its latest scored day in order, waits
   for the file until 12 hours after the day ends (`file_deadline_hours`), and then scores the day from the bound
   addresses' histories alone (recorded as an error, so the health check shows it). A file published later is
   fetched by the re-check and its hash recorded; the scored day stands. `kokoah-subnet validator skip-day` remains
@@ -398,8 +404,9 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   the owner's service, which accepts it only with the machine's attestation. **Restore:** a new sealed machine
   started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
   service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
-  and the account stays an agent account. The key store accepts only tokens made for its own audience, which the
-  machine's public `/attestation` never asks for, so no answer to a validator's challenge can stand in for one. **Release:** the miner can take the copy themselves with a request
+  and the account stays an agent account. The key store accepts only tokens that carry exactly the store or
+  restore digest; the machine's public `/attestation` always signs two nonces, so no answer to anyone's challenge can
+  stand in for one. **Release:** the miner can take the copy themselves with a request
   signed by the machine's master address (`agent release`); the service records it publicly (`GET /key-store/released`),
   and from then on the account never earns the agent bonus again, whatever its machine says. The operator cannot
   read the copy (it lacks the secret); the miner cannot get it without a public release. **The secret** is 32 bytes

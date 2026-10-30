@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +14,14 @@ from eth_account import Account
 
 from kokoah_subnet.binding import AcceptedBinding, Binding, encode_binding, sign_binding, sign_unlink
 from kokoah_subnet.mechanism import DEFAULT, MinerState
-from kokoah_subnet.validator.collect import ValidatorConfig, collect_and_score, day_index, day_strings
-from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
+from kokoah_subnet.validator.collect import (
+    ValidatorConfig,
+    collect_and_score,
+    day_index,
+    day_strings,
+    retry_deadline,
+)
+from kokoah_subnet.validator.hyperliquid import HyperliquidInfo, day_bounds_ms
 from kokoah_subnet.validator.loop import step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
@@ -38,6 +44,7 @@ FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
 FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
+EARLY = DAY_MS / 1000 + 86_400 + 3600  # an hour after the day ended: before the deadline
 
 
 @dataclass
@@ -274,6 +281,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         burn_hotkey=BURN,
         weights_every_blocks=360,
         retry_missing_s=3600,
+        retry_grace_hours=0.0,  # the tests set the time of each attempt themselves
     )
     cache = tmp_path / "fills" / "0xbuilder"
     cache.mkdir(parents=True)
@@ -448,6 +456,17 @@ async def test_the_sdk_result_decides_whether_a_submission_counts(tmp_path: Path
     await hl.close()
 
 
+async def test_weights_go_out_after_the_chain_was_reset_below_the_recorded_blocks(tmp_path: Path) -> None:
+    """The record says weights were set (and once refused) at blocks the chain has not reached: a reset local chain
+    or a record moved to another network. Those blocks count as long ago, so weights still go out."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    store.set_meta("weights:block", str(chain._block + 50_000))
+    store.set_meta("weights:failed_block", str(chain._block + 50_000))
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=DAY_MS / 1000 + 86_400 + 600)
+    assert report["weights"]["ok"] is True and store.get_meta("weights:block") == str(chain._block)
+    await hl.close()
+
+
 async def test_an_unregistered_validator_does_not_submit(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     now = DAY_MS / 1000 + 86_400 + 600
@@ -569,8 +588,67 @@ async def test_a_failed_history_read_fails_the_day_instead_of_zeroing_the_trader
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     PORTFOLIO_FAILS.add(addr_a)
     with pytest.raises(RuntimeError, match="portfolio history"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
     assert store.day(DAY) is None  # not scored: the loop retries within the hour
+    await hl.close()
+
+
+async def test_after_the_deadline_a_failed_history_read_costs_that_address_the_day_only(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)  # long past the deadline
+    records = {r.hotkey: r for r in result.records}
+    assert not records[HK_A].eligible and records[HK_A].pay_alpha == 0.0
+    assert records[HK_B].eligible and records[HK_B].pay_alpha > 0
+    assert store.execute_sql(f"select stage from errors where day = '{DAY}' and stage = 'portfolio'")
+    # unknown, not $0; and no equity row, so the address's history is still backfilled once a read succeeds
+    daily = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
+    assert daily == [{"avg_equity_usd": None, "note": "recorded history unavailable"}]
+    assert store.equity_series(addr_a, 5) == []
+    await hl.close()
+
+
+async def test_past_the_deadline_a_failed_own_fill_history_leaves_only_that_return_unknown(tmp_path: Path) -> None:
+    """A's own fill history cannot be read, past the deadline: its off-market fills cannot be checked, so A's return
+    for the day is unknown; B is scored as usual."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    FILLS_FAIL.add(addr_a)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)  # long past the deadline
+    known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
+    assert {r["address"]: bool(r["return_known"]) for r in known} == {addr_a: False, addr_b: True}
+    assert {r.hotkey: r for r in result.records}[HK_B].pay_alpha > 0
+    await hl.close()
+
+
+async def test_points_an_earlier_attempt_stored_still_measure_the_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first attempt read A's recorded history (past the day's end) and then failed on its fill history; by the
+    retry past the deadline the history read fails. The stored points still give the same average for every
+    validator, and the copy rule still sees where A's history begins, not the scored day."""
+    from kokoah_subnet.mechanism.day import score_day as real
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    FILLS_FAIL.add(addr_a)
+    with pytest.raises(RuntimeError, match="fill history"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+    first = store.execute_sql(f"select avg_equity_usd, origin_ms from equity_daily where address = '{addr_a}'")[0]
+    FILLS_FAIL.clear()
+    PORTFOLIO_FAILS.add(addr_a)
+    seen: list[Any] = []
+
+    def spy(inputs: Any, *a: Any, **kw: Any) -> Any:
+        seen.append(inputs)
+        return real(inputs, *a, **kw)
+
+    monkeypatch.setattr("kokoah_subnet.validator.collect.score_day", spy)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert {r.hotkey: r for r in result.records}[HK_A].eligible
+    a = next(m for m in seen[0].miners if m.hotkey == HK_A)
+    origin_day = datetime.fromtimestamp(first["origin_ms"] / 1000, tz=UTC).strftime("%Y-%m-%d")
+    assert a.record_start == origin_day != DAY
+    again = store.execute_sql(f"select avg_equity_usd from equity_daily where address = '{addr_a}'")
+    assert again == [{"avg_equity_usd": first["avg_equity_usd"]}]
     await hl.close()
 
 
@@ -578,7 +656,7 @@ async def test_a_retried_day_keeps_its_binding_events(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     PORTFOLIO_FAILS.add(addr_a)
     with pytest.raises(RuntimeError, match="portfolio history"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
     assert store.bindings() == {}  # nothing accepted on a day that was not scored
     PORTFOLIO_FAILS.clear()
     await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
@@ -607,7 +685,7 @@ async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path) -> None:
 
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(slow_b))
     with pytest.raises(RuntimeError, match="portfolio history"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
     assert cancelled == [addr_b] and store.equity_series(addr_b, 5) == []
     await hl.close()
 
@@ -657,6 +735,35 @@ async def test_failed_minute_candles_wait_for_the_deadline_then_leave_the_coin_u
     await hl.close()
 
 
+@pytest.mark.parametrize("listed", [False, True])
+async def test_a_coin_the_exchange_does_not_list_never_holds_the_day(tmp_path: Path, listed: bool) -> None:
+    """BTC's minute candles fail the way the exchange answers a coin it does not list (an error and `null`). Unlisted,
+    waiting cannot help: the day is scored at once, with the BTC builder fills uncounted. Listed, the read is waited
+    for until the deadline as usual."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+
+    def btc_unknown(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "meta":
+            names = ["ETH", "TAO", *(["BTC"] if listed else [])]
+            return httpx.Response(200, json={"universe": [{"name": n} for n in names]})
+        if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m" and body["req"]["coin"] == "BTC":
+            return httpx.Response(500, content=b"null")
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_unknown))
+    if listed:
+        with pytest.raises(RuntimeError, match="minute candles of BTC"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+    else:
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+        records = {r.hotkey: r for r in result.records}
+        assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10
+        excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+        assert excluded == [{"excluded": "no_mark"}]
+    await hl.close()
+
+
 async def test_a_truncated_cached_file_is_downloaded_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from kokoah_subnet.validator import collect
 
@@ -675,6 +782,7 @@ async def test_a_truncated_cached_file_is_downloaded_again(tmp_path: Path, monke
     assert asked == [("0xbuilder", DAY)] and cached.read_bytes() == whole
     assert sum(r.fees.fills for r in result.records) == 30
     assert [p.name for p in cached.parent.iterdir()] == [cached.name]  # no partial file left behind
+    assert cached.stat().st_mode & 0o777 == 0o644  # readable by another validator sharing the cache
     await hl.close()
 
 
@@ -1023,6 +1131,58 @@ async def test_a_validator_waits_for_the_unlink_list_until_the_deadline(tmp_path
     await hl.close()
 
 
+async def test_a_validator_back_after_the_deadline_still_retries_a_failed_read_for_a_while(tmp_path: Path) -> None:
+    """Back from an outage two days later, a validator's first attempt at a day is already past the file deadline: a
+    failed read still fails the attempt for the grace period after that first attempt, then the day is scored."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "agent_service": "https://svc.example", "retry_grace_hours": 3.0})
+    back = DAY_MS / 1000 + 3 * 86_400  # two days after the day ended
+    async with _unlinks_service([], fail=True) as http:
+        with pytest.raises(RuntimeError, match="unlinks unavailable"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back)
+        with pytest.raises(RuntimeError, match="unlinks unavailable"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back + 2 * 3600)
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back + 4 * 3600)
+    assert {r.hotkey for r in result.records} == {HK_A, HK_B}
+    await hl.close()
+
+
+def test_a_backlog_after_an_outage_shares_one_grace_window(tmp_path: Path) -> None:
+    """On time, a day waits until its file deadline. Back from a week away, the first pending day gets the grace from
+    that first attempt, and every later day of the backlog shares it instead of waiting another grace each."""
+    store = Store(tmp_path / "g.sqlite")
+    hour = 3600.0
+
+    def end(day: str) -> int:
+        return day_bounds_ms(day)[1]
+
+    on_time = end("2026-10-01") / 1000 + 600
+    assert (
+        retry_deadline(store, "2026-10-01", on_time, end("2026-10-01"), DEFAULT, 3.0)
+        == end("2026-10-01") / 1000 + 12 * hour
+    )
+    nxt = end("2026-10-02") / 1000 + 600  # the next day, attempted on time too: its own file deadline
+    assert (
+        retry_deadline(store, "2026-10-02", nxt, end("2026-10-02"), DEFAULT, 3.0)
+        == end("2026-10-02") / 1000 + 12 * hour
+    )
+    back = end("2026-10-09") / 1000 + 5 * hour  # away from 10-03 to 10-09
+    assert retry_deadline(store, "2026-10-03", back, end("2026-10-03"), DEFAULT, 3.0) == back + 3 * hour
+    later = back + 3.5 * hour  # 10-03 was scored after its grace; 10-04 is first attempted now
+    assert retry_deadline(store, "2026-10-04", later, end("2026-10-04"), DEFAULT, 3.0) == back + 3 * hour  # shared
+    assert retry_deadline(store, "2026-10-04", later + hour, end("2026-10-04"), DEFAULT, 3.0) == back + 3 * hour
+    # tried just after the day ended, then away until the evening: the day's window starts again on return
+    first = end("2026-10-20") / 1000 + 300
+    assert retry_deadline(store, "2026-10-20", first, end("2026-10-20"), DEFAULT, 3.0) == first - 300 + 12 * hour
+    evening = first + 20 * hour
+    assert retry_deadline(store, "2026-10-20", evening, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
+    assert retry_deadline(store, "2026-10-20", evening + hour, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
+    # attempts that are always more than two hours apart restart the window once, then it ends
+    t = evening + 3 * hour
+    assert retry_deadline(store, "2026-10-20", t, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
+    assert retry_deadline(store, "2026-10-20", t + 3 * hour, end("2026-10-20"), DEFAULT, 3.0) < t + 3 * hour
+
+
 def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int]) -> None:
     """The day before, uid 1 was hotkey A (registered at `registered[0]`), with a smoothed skill of 0.4; today uid 1
     on the same coldkey is hotkey A2 (registered at `registered[1]`), bound to the same account."""
@@ -1052,6 +1212,17 @@ async def test_a_hotkey_swap_is_detected_between_two_scored_days(tmp_path: Path)
     a2 = next(r for r in result.records if r.hotkey == "hkA2")
     assert a2.g == pytest.approx(0.7 * 0.4 + 0.3 * a2.skill_raw)  # the skill record follows the new hotkey
     assert a2.phi_hat == pytest.approx(0.3 * a2.credited.credit)  # the credit does not
+    await hl.close()
+
+
+async def test_a_retried_day_forgets_a_swap_its_first_attempt_saw(tmp_path: Path) -> None:
+    """A failed first attempt recorded a swap; by the retry the earlier metagraph shows a new registration instead,
+    so the retried day applies no swap."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    _swap_hotkey_a(store, chain, (100, 200))
+    store.put_swap(DAY, 1, HK_A, "hkA2", "ckA")  # what the failed first attempt recorded
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.swaps_through(DAY) == []
     await hl.close()
 
 

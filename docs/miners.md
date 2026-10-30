@@ -121,7 +121,7 @@ reward measures.
 
 - fills without Kokoah's builder code (trades placed on other front ends);
 - spot trades (recorded, never scored);
-- trades against yourself or against accounts linked to you (sub-accounts, accounts funded from the same source or
+- trades against yourself or against accounts linked to you (hotkeys on the same coldkey, sub-accounts, accounts
   moving money between each other);
 - trades against other miners' linked accounts: the subnet does not pay for volume between its own miners;
 - the part of a fill's price more than 0.5% away from the market price: such a fill is valued at the market price,
@@ -195,9 +195,9 @@ registration. Your pay history, skill record and any penalty stay with you whate
 | Change | Fee credit and qualification | Skill record, pay history, penalties |
 |---|---|---|
 | **New Hyperliquid address** (allowed once per 60 days) | start again | carry over |
-| **Hotkey swap on chain** (same UID and coldkey) | start again | carry over |
+| **Hotkey swap on chain** (same UID, coldkey and registration) | start again | carry over |
 | **Deregistered, same hotkey registers again** | start again | carry over |
-| **A new hotkey links an address** | start from zero | start from zero (penalties follow the address) |
+| **A new hotkey links an address** | start from zero | smoothed skill and pay history from zero; the address's own record, gates and penalties stay with the address |
 
 **Moving to a new address.** Get the line for the new address (`miner message ... --address <new>`), sign it with
 the new address *and* with the old address, then publish both:

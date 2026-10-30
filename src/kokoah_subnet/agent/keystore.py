@@ -9,8 +9,9 @@
 - **Restore.** A new sealed machine started with the same secret gets the ciphertext back after proving, with a
   fresh attestation token, that it is a genuine sealed machine of an approved image; it decrypts the key inside.
   No person ever holds the key, so the account stays an agent account.
-- Both tokens carry the key store's own audience, which the machine's public `/attestation` never uses: only the
-  machine's supervisor asks for them, for the key it created or restores itself.
+- Both tokens carry exactly one nonce, the store or restore digest; the machine's public `/attestation` always signs
+  two (the caller's challenge and the binding digest), so its answer never stands in for one. From harness 1.2.0 they
+  also carry the key store's own audience; harness 1.1.0's carry the default one, accepted from that image only.
 - **Release.** The miner can take the ciphertext themselves, with a request signed by their own address (the
   machine's master). Then the miner holds the key and can trade the account by hand, so the release is public and
   the account never earns the agent bonus again.
@@ -77,6 +78,7 @@ def checked_address(address: str) -> str:
     """A Hyperliquid (EVM) address as typed by the miner, lowercase; raises ValueError when it is not one, or when
     its mixed case does not match its EIP-55 checksum (a typo)."""
     a = address.strip()
+    a = "0x" + a[2:] if a.startswith("0X") else a
     if len(a) != 42 or not a.startswith("0x") or any(ch not in "0123456789abcdefABCDEF" for ch in a[2:]):
         raise ValueError(f"{address!r} is not an address (0x and 40 hex characters)")
     if a[2:] != a[2:].lower() and a[2:] != a[2:].upper() and not is_checksum_address(a):

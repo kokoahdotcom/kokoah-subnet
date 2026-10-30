@@ -173,7 +173,16 @@ class HyperliquidInfo:
             "type": "candleSnapshot",
             "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
         }
-        return [dict(c) for c in await self.post(body)]
+        answer = await self.post(body)
+        if not isinstance(answer, list):
+            raise RuntimeError(f"no candles for {coin}: {str(answer)[:80]}")
+        return [dict(c) for c in answer]
+
+    async def perp_names(self, dex: str = "") -> set[str]:
+        """The names of the exchange's perpetuals, delisted ones included (`meta`; a builder-deployed exchange's own
+        with `dex`, its names written `dex:COIN`)."""
+        body: dict[str, Any] = {"type": "meta", "dex": dex} if dex else {"type": "meta"}
+        return {str(asset["name"]) for asset in (await self.post(body))["universe"]}
 
     async def portfolio(self, user: str) -> list[Any]:
         """The exchange's account-value and PnL history windows for an address (`portfolio`)."""

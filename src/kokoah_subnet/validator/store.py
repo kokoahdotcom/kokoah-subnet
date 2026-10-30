@@ -238,6 +238,17 @@ class Store:
                 )
             )
 
+    def last_origin(self, address: str) -> int | None:
+        """When the address's recorded history begins, as its latest scored day read it (None if never read)."""
+        with self._engine.connect() as c:
+            v = c.execute(
+                select(S.equity_daily.c.origin_ms)
+                .where(S.equity_daily.c.address == address.lower(), S.equity_daily.c.origin_ms.is_not(None))
+                .order_by(S.equity_daily.c.day.desc())
+                .limit(1)
+            ).scalar()
+        return int(v) if v is not None else None
+
     def put_swap(self, day: str, uid: int, old_hotkey: str, new_hotkey: str, coldkey: str | None) -> None:
         with self._engine.begin() as c:
             c.execute(delete(S.hotkey_swaps).where(S.hotkey_swaps.c.day == day, S.hotkey_swaps.c.uid == uid))
@@ -246,6 +257,10 @@ class Store:
                     day=day, uid=uid, old_hotkey=old_hotkey, new_hotkey=new_hotkey, coldkey=coldkey
                 )
             )
+
+    def clear_swaps(self, day: str) -> None:
+        with self._engine.begin() as c:
+            c.execute(delete(S.hotkey_swaps).where(S.hotkey_swaps.c.day == day))
 
     def swaps_through(self, day: str) -> list[tuple[str, str, str]]:
         """(day, old hotkey, new hotkey) of every recorded swap up to `day`, oldest first."""
@@ -750,12 +765,6 @@ class Store:
     def days_list(self) -> list[str]:
         with self._engine.connect() as c:
             return [str(r[0]) for r in c.execute(select(S.days.c.day).order_by(S.days.c.day)).all()]
-
-    def delete_day(self, day: str) -> None:
-        """Forget a scored day so it is scored again (its records are rewritten on the next pass)."""
-        with self._engine.begin() as c:
-            c.execute(delete(S.days).where(S.days.c.day == day))
-            c.execute(delete(S.meta).where(S.meta.c.key.in_([f"attempt:{day}", "weights:day", "weights:block"])))
 
     def put_agent_checks(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
         with self._engine.begin() as c:

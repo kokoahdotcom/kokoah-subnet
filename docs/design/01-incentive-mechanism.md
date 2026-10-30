@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.1)
+# Incentive mechanism in plain words (v6.2)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -43,9 +43,9 @@ Nothing is capped and nothing is burned (only a day with nobody to pay would go 
 ## Fair play
 
 Trades with yourself or your linked accounts never count, and neither do trades between two of the subnet's own
-miners. Linked accounts of two miners that keep opposite positions for weeks lose their credit and leave the skill
-reward. The
-skill reward needs a real edge, proven over 90 days.
+miners. When two miners' accounts keep opposite positions for weeks and the mirrored volume is more than a quarter
+of an account's volume, that mirrored part earns no credit; above half, both accounts also leave the skill reward for
+30 days. The skill reward needs a real edge, proven over 90 days.
 
 ## Agents
 
@@ -75,5 +75,5 @@ losses (gain-to-pain over 30 days)? Only a record that holds up over 90 days pas
 
 Come back with the same hotkey and your records resume, but as a new registration you qualify again with three
 trades. Moving to a new address, or swapping the hotkey, keeps your track record, your pay history and any penalty,
-but your fee credit and your qualification start again. A new identity has to pass the 90-day test again from its
-own record.
+but your fee credit and your qualification start again. The 90-day test always reads the account's own record,
+whatever hotkey it is linked to.

@@ -51,9 +51,11 @@ uv run kokoah-subnet agent submit --service https://api.kokoah.com/miners --bund
 ```
 
 The same files always give the same fingerprint. Version-control and cache folders (`.git`, `__pycache__`) are left
-out, and the tool refuses to package a file that looks like a key or a secret, whatever its case (`.env`, `*.key`,
-`*.pem`, `secret.hex`, `key.txt`, a Bittensor wallet's `coldkey`, `coldkeypub.txt` or `hotkeys` folder, a `wallets`
-folder, an Ethereum `UTC--` keystore file): keep those outside the agent directory. The code is encrypted so that
+out, and the tool refuses to package a file that looks like a key or a secret: by its name, whatever its case
+(`.env`, `*.key`, `*.ppk`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, SSH `id_*` keys and `.ssh` folders, `secret.hex`,
+`key.txt`, a Bittensor wallet's `coldkey`, `coldkeypub.txt` or `hotkeys` folder, a `wallets` folder, an Ethereum
+`UTC--` keystore file), or by its content, whatever its name (a PEM or PGP private key, an Ethereum keystore or a
+Bittensor key file). Certificate files are fine. Keep keys outside the agent directory. The code is encrypted so that
 only your sealed machine can read it; `--public` publishes it unencrypted instead, and then anyone can download it
 from the service. One submission per hotkey per 12 hours, and only from a hotkey that is registered on the subnet
 (the service also stores key copies only for registered hotkeys; getting an account back or taking its key out works
@@ -97,8 +99,7 @@ under your hotkey, and nobody can use up anything of yours. A restore does not n
 
 On your own Google Cloud project (you pay for the machine; Kokoah runs nothing for you). The harness image is
 published as `docker.io/kokoahdotcom/kokoah-subnet-agent`; start from the newest approved image
-(`src/kokoah_subnet/agent/images.py`): an older approved digest still passes the daily checks, but the key store accepts
-copies only from harness 1.2.0 or later, so a new machine on an older image stops at its first key copy. The machine runs as a service account with the Confidential Computing Workload
+(`src/kokoah_subnet/agent/images.py`). The machine runs as a service account with the Confidential Computing Workload
 User role (the default compute account lacks it, and without it the machine cannot get its proof).
 
 The image is reproducible: `deploy/agent/build.sh <commit>` (the commit listed next to the digest in `images.py`)

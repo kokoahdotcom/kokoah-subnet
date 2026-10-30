@@ -16,7 +16,9 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import io
+import json
 import os
+import re
 import stat
 import zipfile
 from pathlib import Path
@@ -32,25 +34,124 @@ LEFT_OUT = frozenset({".git", ".hg", ".svn", "__pycache__"})  # folders that are
 SECRET_FILES = (
     ".env",
     ".env.*",
-    "*.pem",
     "*.key",
     "*.mnemonic",
     "*.seed",
+    "*.p12",
+    "*.ppk",
+    "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
     "secret.hex",
     "key.txt",
     "coldkey",  # a Bittensor wallet copied without its wallets folder
     "coldkeypub.txt",
     "utc--*",  # an Ethereum keystore file
 )
-SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys"})  # a wallet's hotkeys are not encrypted by default
+SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys", ".ssh"})  # a wallet's hotkeys are not encrypted
+# a private key in PEM or PGP armor, whatever its kind: the header, then the key's body. Past blanks, armor header
+# lines (`Name: value`) and string quoting, the body is chunks of base64 of 16 characters or more (64 or more in all,
+# not all of them hex digits); in a JSON or code string the escaped line breaks and slashes are undone first. A
+# library that only names the header in its code is followed by code, not by such chunks, so it is packaged.
+PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----")
+KEY_CHUNK = re.compile(rb"[A-Za-z0-9+/]{16,}={0,2}")
+NOT_HEX = re.compile(rb"[g-zG-Z+/]")
+ARMOR_LINE = re.compile(rb"[A-Za-z][A-Za-z0-9-]*: .*")
+ALNUM = re.compile(rb"[A-Za-z0-9]")  # a token without one is an operator or a comment mark, not part of a key
+QUOTE_START = re.compile(rb"^(?:[bBrRuUfF]{0,2}[\"'])+")
+# comment marks, operators and quotes before a line's text; `+` and `/` (also base64) only with a blank or quote after
+LEAD = re.compile(rb"^(?:[\s\"'.&,;#>*()\[\]{}|]|[+/]+(?=[\s\"']))+")
+EDGES = b"\\\"',;()"
+ESCAPES = ((b"\\r\\n", b"\n"), (b"\\n", b"\n"), (b"\\r", b"\n"), (b"\\/", b"/"), (b"\\u002B", b"+"), (b"\\u002b", b"+"),
+           (b"\\u002F", b"/"), (b"\\u002f", b"/"), (b"\\u000a", b"\n"), (b"\\u000A", b"\n"), (b"\\t", b" "),
+           (b"\r", b"\n"))  # fmt: skip
+KEY_WINDOW = 8192
+KEY_FILE_MAX = 64 * 1024  # an encrypted key file is small JSON
 
 
-def looks_secret(relative: Path) -> bool:
-    """A wallet, a key or a secret by its name, in any case: the bundle may be published, and the code has no use for
-    one."""
+def _key_follows(window: bytes) -> bool:
+    cut = window.find(b"-----")  # a key's body ends at its END line: nothing after it is read
+    if cut >= 0:
+        window = window[: cut + 5]
+    for escaped, plain in ESCAPES:
+        window = window.replace(escaped, plain)
+    text, not_hex, started = 0, False, False
+    for raw in window.split(b"\n", 256):
+        line = raw.strip()
+        for _ in range(3):  # `" + "`, `# `, `// "` and the like, in any order
+            stripped = QUOTE_START.sub(b"", LEAD.sub(b"", line))
+            if stripped == line:
+                break
+            line = stripped
+        if not started and not line.strip(EDGES):
+            continue
+        body, dashes, _ = line.partition(b"-----")
+        tokens = [t for t in body.split() if ALNUM.search(t)]  # joined strings (`+`, `.`), comment marks
+        if not started and ARMOR_LINE.fullmatch(line):
+            # an armor header line is skipped, unless the whole key is on it too (a key flattened onto one line)
+            run, run_not_hex = 0, False
+            for token in tokens:
+                token = token.strip(EDGES)
+                if KEY_CHUNK.fullmatch(token):
+                    run, run_not_hex = run + len(token), run_not_hex or NOT_HEX.search(token) is not None
+                    if run >= 64 and run_not_hex:
+                        return True
+                else:
+                    run, run_not_hex = 0, False
+            if dashes:
+                return False
+            continue
+        for token in tokens:
+            token = token.strip(EDGES)
+            if not KEY_CHUNK.fullmatch(token):
+                return False
+            text, not_hex, started = text + len(token), not_hex or NOT_HEX.search(token) is not None, True
+            if text >= 64 and not_hex:
+                return True
+        if dashes:
+            return False
+    return False
+
+
+def holds_private_key(content: bytes) -> bool:
+    return any(
+        _key_follows(content[header.end() : header.end() + KEY_WINDOW])
+        for header in PRIVATE_KEY_HEADER.finditer(content)
+    )
+
+
+def holds_key_file(content: bytes) -> bool:
+    """An Ethereum keystore (`crypto` with `ciphertext` and `kdf`) or a Bittensor key file (`secretPhrase` or
+    `secretSeed`), whatever its name: judged by its JSON, so code that only names those fields is packaged."""
+    content = content.removeprefix(b"\xef\xbb\xbf")  # a UTF-8 byte-order mark
+    if len(content) > KEY_FILE_MAX or content.lstrip()[:1] != b"{":
+        return False
+    try:
+        data = json.loads(content)
+    except (ValueError, RecursionError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    crypto = data.get("crypto", data.get("Crypto"))
+    return (isinstance(crypto, dict) and "ciphertext" in crypto and "kdf" in crypto) or bool(
+        {"secretPhrase", "secretSeed"} & set(data)
+    )
+
+
+def looks_secret(relative: Path, content: bytes = b"") -> bool:
+    """A wallet, a key or a secret by its name, in any case, or a file holding a private key or an encrypted key
+    file: the bundle may be published, and the code has no use for one. Certificate files (a vendored package's
+    `cacert.pem`) are fine."""
     name = relative.name.lower()
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES) or bool(
-        SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]}
+    return (
+        any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES)
+        or bool(SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]})
+        or holds_private_key(content)
+        or holds_key_file(content)
     )
 
 
@@ -63,7 +164,7 @@ def package(directory: Path) -> bytes:
     if not (root / "entry.py").is_file():
         raise ValueError("the agent directory needs an entry.py")
     paths = sorted(p for p in root.rglob("*") if p.is_file() and not LEFT_OUT & set(p.relative_to(root).parts))
-    secrets = [p.relative_to(root).as_posix() for p in paths if looks_secret(p.relative_to(root))]
+    secrets = [p.relative_to(root).as_posix() for p in paths if looks_secret(p.relative_to(root), p.read_bytes())]
     if secrets:
         raise ValueError(f"these look like keys or secrets, move them out of the agent directory: {', '.join(secrets)}")
     buf = io.BytesIO()

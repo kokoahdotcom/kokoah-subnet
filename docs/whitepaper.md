@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.1, October 2026. Mechanism specification v6.1.
+Whitepaper, version 3.1, October 2026. Mechanism specification v6.2.
 
 ### Summary
 
@@ -168,7 +168,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.1; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.2; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -231,8 +231,8 @@ dollar is worth the same to everyone. Splitting and merging accounts change noth
 fees, and every fee paid funds the buyback.
 
 **The skill reward pays only for a proven edge.** An account without a real edge almost never passes the 90-day test.
-A copy of another miner's strategy earns nothing; splitting a large account gains nothing; a fresh identity has to pass the
-test again from its own record.
+A copy of another miner's strategy earns nothing; splitting a large account gains nothing; the test always reads the
+account's own record, whatever hotkey it is linked to.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
@@ -475,8 +475,9 @@ would keep its weight of 0.8, and the total paid to A's strategy would not chang
    other linked accounts and the related accounts; check off-market fills against the exchange's minute candles;
    read account value and ledger for returns and flows, positions, the fee schedule, sub-accounts and transfer
    partners for clusters; read the account's recorded value history for the day's average; read the day's stake and
-   the pool rate from the chain at blocks anchored to the day. A failed read of the fill history, the explorer or the
-   value history delays the day's scoring instead of costing a miner a fill or eligibility.
+   the pool rate from the chain at blocks anchored to the day. A failed read delays the day's scoring until the file
+   deadline (and for a few hours after a validator's first attempt at the day); after it, only what depended on the
+   failed read goes uncounted.
 5. Compute eligibility and qualification, the smoothed credit, the skill score, the entry test, the skill weights with
    the copy rule and the agent bonus, and both rewards.
 6. Write everything to the record; publish the per-miner artifact; set weights every tempo until the next run.

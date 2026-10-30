@@ -385,8 +385,9 @@ class Harness:
 
 
 def trigger_fired(is_buy: bool, tpsl: str, trigger_px: float, price: float) -> bool:
-    """Whether a trigger order fires at this price, as the exchange decides: a stop buys at or above its trigger and
-    sells at or below it; a take-profit buys at or below and sells at or above."""
+    """Whether a trigger order would fire at this price, by the exchange's rule: a stop buys at or above its trigger
+    and sells at or below it; a take-profit buys at or below and sells at or above. The harness asks with the mid;
+    the exchange triggers on the mark price, which near the trigger can differ by a fraction of a percent."""
     if tpsl == "sl":
         return price >= trigger_px if is_buy else price <= trigger_px
     return price <= trigger_px if is_buy else price >= trigger_px

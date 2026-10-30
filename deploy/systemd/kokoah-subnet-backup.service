@@ -8,6 +8,8 @@ Type=oneshot
 # root: the dump is taken with `docker exec` in the database container
 Environment=HOME=%h
 Environment=KOKOAH_SUBNET_BACKUP_DIR=/var/backups/kokoah-subnet
+# optional: KOKOAH_SUBNET_AGENT_DATA=<the agent service's data directory> on the host that runs the agent service
+EnvironmentFile=-/etc/kokoah-subnet/backup.env
 ExecStart=/opt/kokoah-subnet/scripts/backup.sh
 TimeoutStartSec=1h
 Nice=10
