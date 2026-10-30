@@ -317,3 +317,46 @@ def test_the_agent_guide_lists_exactly_the_info_requests_answered() -> None:
     row = next(line for line in guide.splitlines() if line.startswith("| `POST /info"))
     listed = set(re.findall(r"`([A-Za-z0-9]+)`", row))
     assert listed == harness_module.PUBLIC_INFO | harness_module.ACCOUNT_INFO
+
+
+def test_the_machine_talks_only_to_the_key_service_its_image_names() -> None:
+    """Whoever starts a machine cannot point it at a relay: a production image uses its own https service whatever
+    the environment says, and refuses to start without one; only a development image in development mode takes a
+    local service."""
+    from kokoah_subnet.agent.supervisor import ImageSettings, service_url
+
+    image = ImageSettings("0x" + "43" * 20, 25, service="https://api.kokoah.com/miners")
+    relay = {"KOKOAH_AGENT_SERVICE": "https://relay.example"}
+    assert service_url(image, False, relay) == "https://api.kokoah.com/miners"
+    assert service_url(image, True, relay) == "https://api.kokoah.com/miners"  # a release image, even told "dev"
+    for bare in (ImageSettings("0x" + "43" * 20, 25), ImageSettings("0x" + "43" * 20, 25, service="http://svc")):
+        with pytest.raises(SystemExit, match="https key service"):
+            service_url(bare, False, {})
+    dev = ImageSettings("0x" + "43" * 20, 25, development=True)
+    assert service_url(dev, True, {"KOKOAH_AGENT_SERVICE": "http://127.0.0.1:48131"}) == "http://127.0.0.1:48131"
+    with pytest.raises(SystemExit, match="set KOKOAH_AGENT_SERVICE"):
+        service_url(dev, True, {})
+
+
+def test_the_release_image_names_the_key_service_and_the_miner_cannot_override_it() -> None:
+    """The launch policy lets exactly these start settings in, and no command, mount or capability override: so no
+    key service, proxy, certificate or development setting can reach a release machine."""
+    import re
+    from pathlib import Path
+
+    from kokoah_subnet.agent.supervisor import ImageSettings, development_mode
+
+    root = Path(__file__).resolve().parents[1]
+    image = ImageSettings.load(root / "deploy" / "agent" / "image.json")
+    assert image.service == "https://api.kokoah.com/miners" and image.development is False
+    assert not development_mode(image, {"KOKOAH_AGENT_DEV": "1"})
+    dockerfile = (root / "deploy" / "agent" / "Dockerfile").read_text()
+    labels = dict(re.findall(r'^LABEL "tee\.launch_policy\.([a-z_]+)"="([^"]*)"$', dockerfile, flags=re.M))
+    assert set(labels) == {"allow_env_override", "log_redirect", "monitoring_memory_allow"}
+    assert set(labels["allow_env_override"].split(",")) == {
+        f"KOKOAH_AGENT_{name}"
+        for name in ("SUBMISSION", "BUNDLE_KEY", "NETUID", "HOTKEY", "MASTER", "SECRET", "PERMIT", "RESTORE", "NETWORK")
+    }
+    assert labels["log_redirect"] == "debugonly"
+    dev = ImageSettings.load(root / "deploy" / "agent" / "image.dev.json")
+    assert dev.development and development_mode(dev, {"KOKOAH_AGENT_DEV": "1"}) and not development_mode(dev, {})

@@ -517,14 +517,9 @@ def test_a_starting_machine_gets_past_a_passing_fault(world: dict[str, Any], mon
     assert plain[:2] == b"PK" and bundle.calls == ["GET", "GET"]
 
 
-def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_files_nothing(
-    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Harness 1.1.0 asks for its key-store tokens with the default audience: from that image only, its own store and
-    restore are accepted (exactly the one digest), while its public answer to the same digest is refused (two nonces).
-    Another image's default-audience token is refused."""
-    from kokoah_subnet.agent import images
-
+def test_a_key_store_token_needs_the_key_stores_audience_and_exactly_its_digest(world: dict[str, Any]) -> None:
+    """Only the key store's own audience with exactly the store digest files a copy: a default-audience token (as
+    the retired harness 1.1.0 made) and a public answer with two nonces are refused."""
     svc: TestClient = world["svc"]
     master, account = Account.create(), Account.create()
     blob = encrypt_key(bytes(account.key), account.address, SECRET)
@@ -538,20 +533,50 @@ def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_
         "submission": world["submission"],
         "permit": p,
     }
-    own = world["machine"].token([digest])
-    refused = svc.put(f"/key-store/{account.address}", json={**body, "token": own})
-    assert refused.status_code == 403 and "only from harness 1.1.0" in refused.json()["detail"]  # not 1.1.0
-    unapproved = DevelopmentAttestor(world["machine_key"], "sha256:" + "0d" * 32).token([digest])
-    refused = svc.put(f"/key-store/{account.address}", json={**body, "token": unapproved})
-    assert refused.status_code == 403 and "not an approved harness" in refused.json()["detail"]
-    monkeypatch.setattr(images, "DEFAULT_AUDIENCE_KEYSTORE_IMAGES", (IMAGE,))  # the test image stands in for 1.1.0
-    public = world["machine"].token([digest, "ab" * 32])  # how /attestation answers: the challenge and the binding
-    assert svc.put(f"/key-store/{account.address}", json={**body, "token": public}).status_code == 403
-    stored = svc.put(f"/key-store/{account.address}", json={**body, "token": own})
+    unapproved = DevelopmentAttestor(world["machine_key"], "sha256:" + "0d" * 32).token([digest], KEYSTORE_AUDIENCE)
+    for token in (
+        world["machine"].token([digest]),  # the default audience
+        world["machine"].token([digest, "ab" * 32], KEYSTORE_AUDIENCE),  # two nonces
+        unapproved,  # an image that is not approved
+    ):
+        refused = svc.put(f"/key-store/{account.address}", json={**body, "token": token})
+        assert refused.status_code == 403
+    stored = svc.put(
+        f"/key-store/{account.address}", json={**body, "token": world["machine"].token([digest], KEYSTORE_AUDIENCE)}
+    )
     assert stored.status_code == 200, stored.text
-    address = account.address.lower()
-    challenge = world["keys"].challenge(address)
-    old_style = world["machine"].token([restore_digest(address, challenge)])
-    restored = svc.post(f"/key-store/{address}/restore", json={"token": old_style})
-    assert restored.status_code == 200
-    assert decrypt_key(base64.b64decode(restored.json()["blob"]), address, SECRET) == bytes(account.key)
+
+
+def test_a_restore_resumes_the_account_only_for_the_master_and_hotkey_it_was_filed_for(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Someone holding only the miner's secret starts a genuine machine to restore the account with their own address
+    as master (where withdrawals would go): the machine refuses, and the key is never used."""
+    ticks = iter(range(10**6))
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + next(ticks))  # each machine's token is its own
+    master = Account.create()
+    key = start(world, master)
+    address = Account.from_key(key).address.lower()
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_MASTER"):
+        start(world, Account.create(), address)
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_HOTKEY"):
+        start(world, master, address, hotkey=BOB)
+    assert start(world, master, address) == key  # the right settings restore it
+
+
+def test_an_answer_that_does_not_name_the_owner_resumes_nothing() -> None:
+    """A key service that returns the copy without its master and hotkey (an older one) does not get the account
+    resumed: the machine stops before using the key."""
+    from kokoah_subnet.agent.keystore import Restored
+
+    class OldService:
+        def challenge(self, address: str) -> str:
+            return "00" * 32
+
+        def restore(self, address: str, token: str) -> Restored:
+            return Restored(b"copy", "", "")
+
+    machine = DevelopmentAttestor(rsa.generate_private_key(public_exponent=65537, key_size=2048), IMAGE)
+    with pytest.raises(SystemExit, match="did not say whom"):
+        account_key(OldService(), machine, SECRET, "0x" + "11" * 20, ALICE.ss58_address, "0x" + "22" * 20)  # type: ignore[arg-type]

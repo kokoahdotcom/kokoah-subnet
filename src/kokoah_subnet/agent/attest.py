@@ -14,7 +14,7 @@ Nothing here trusts the operator or the miner.
 **At the key store**: a token for storing or restoring an account key must carry exactly one nonce, the store or
 restore digest. The public `/attestation` always signs two (the caller's challenge and the binding digest), so an
 answer to anyone's challenge can never stand in for a key-store token, from any harness version. From harness 1.2.0
-the machine's key-store tokens also carry their own audience (`KEYSTORE_AUDIENCE`); harness 1.1.0's use the default.
+the machine's key-store tokens also carry their own audience (`KEYSTORE_AUDIENCE`), the only one the key store takes.
 
 The binding digest is `sha256("kokoah-agent-1 netuid=<n> hotkey=<ss58> address=<0x..> code=<sha256>")`.
 """

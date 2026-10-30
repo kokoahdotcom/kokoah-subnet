@@ -113,7 +113,6 @@ gcloud compute instances create kokoah-agent \
   --image-project=confidential-space-images --image-family=confidential-space --tags=kokoah-agent \
   --service-account=<service account with the Confidential Computing Workload User role> --scopes=cloud-platform \
   --metadata="^~^tee-image-reference=docker.io/kokoahdotcom/kokoah-subnet-agent@sha256:<approved digest>\
-~tee-env-KOKOAH_AGENT_SERVICE=https://api.kokoah.com/miners\
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
 ~tee-env-KOKOAH_AGENT_NETUID=385\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
@@ -127,7 +126,8 @@ gcloud compute firewall-rules create kokoah-agent-8080 --allow=tcp:8080 --target
 ```
 
 Use the production `confidential-space` image family, never `confidential-space-debug`: a debug machine is refused
-by every validator.
+by every validator. The machine talks only to Kokoah's key service, `https://api.kokoah.com/miners`, which is part of
+the image (its certificate is checked), so nobody starting a machine can send its key copy anywhere else.
 
 `KOKOAH_AGENT_NETWORK` chooses the exchange: `mainnet` (the default), where the subnet's trading counts, or
 `testnet`, to try an agent on Hyperliquid's test exchange, where nothing it trades counts. Any other value stops the
@@ -151,8 +151,9 @@ old, a bundle key that does not open the submission), then start a new machine.
 **If the machine stops.** The machine stores a copy of the account key encrypted with your secret (Kokoah cannot
 read it). Start a new machine from the newest approved image (its digest in `tee-image-reference`), with the same
 settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it proves to the service that it is a genuine sealed
-machine, gets the copy back, and the same account carries on as an agent. Keep your password (or the generated file)
-safe: without it the copy cannot be opened, and nobody can recover it for you.
+machine, gets the copy back, and the same account carries on as an agent. It resumes the account only for the master
+address and hotkey the copy was filed for: a machine started with others stops before using the key. Keep your
+password (or the generated file) safe: without it the copy cannot be opened, and nobody can recover it for you.
 
 **Taking the key out yourself** (for example to trade the account by hand) ends the agent bonus for that account for
 good, and the release is public:

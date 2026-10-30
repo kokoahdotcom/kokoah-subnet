@@ -380,29 +380,19 @@ def create_app(
         """Why the token is not a genuine sealed machine's answer to `nonce` (None when it is)."""
         if accept_unverified_machines:
             return None
-        from .attest import AUDIENCE, KEYSTORE_AUDIENCE, AttestationError, google_keys, verify_token
+        from .attest import KEYSTORE_AUDIENCE, AttestationError, google_keys, verify_token
 
         if key_source[0] is None:
             key_source[0] = google_keys()
-        from .images import DEFAULT_AUDIENCE_KEYSTORE_IMAGES
-
-        # exactly the one digest, never a public /attestation answer (which always carries two); harness 1.1.0 asks
-        # for its key-store tokens with the default audience, later ones with the key store's own
-        approved = list(images or [])
+        # the key store's own audience and exactly the one digest, never a public /attestation answer (which always
+        # carries two nonces and the default audience)
         try:
-            verify_token(token, key_source[0], approved, [nonce], audience=KEYSTORE_AUDIENCE, exact_nonces=True)
-            return None
-        except AttestationError as exc:
-            own_audience_error = str(exc)
-        if "audience" not in own_audience_error.lower():
-            return own_audience_error
-        try:
-            verified = verify_token(token, key_source[0], approved, [nonce], audience=AUDIENCE, exact_nonces=True)
+            verify_token(
+                token, key_source[0], list(images or []), [nonce], audience=KEYSTORE_AUDIENCE, exact_nonces=True
+            )
         except AttestationError as exc:
             return str(exc)
-        if verified.image_digest in DEFAULT_AUDIENCE_KEYSTORE_IMAGES:
-            return None
-        return "a key-store token without the key store's audience is accepted only from harness 1.1.0"
+        return None
 
     def machine_proof(token: str, nonce: str) -> None:
         error = proof_error(token, nonce)
@@ -517,7 +507,9 @@ def create_app(
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
             blob = opened(row)  # before anything is recorded: a copy the service cannot open changes nothing
             event(c, a, "restore", used)
-        return {"address": a, "blob": blob}
+        # the record's master and hotkey: the machine resumes the account only for those, never for start settings
+        # that name someone else (a secret alone must not let anyone redirect the account's withdrawals)
+        return {"address": a, "blob": blob, "master": row["master"], "hotkey": row["hotkey"]}
 
     @app.post("/key-store/{address}/release")
     def release(address: str, body: Release) -> dict[str, Any]:

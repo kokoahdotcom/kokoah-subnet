@@ -2,10 +2,12 @@
 
 Image settings (`/etc/kokoah-agent/image.json`, part of the image and so of its attested digest; never taken
 from the environment, because changing them would change what the guarantees mean): Kokoah's builder address and
-fee, and whether this is a development image (development images are never approved by validators).
+fee, the owner's key service (an https URL, its certificate checked), and whether this is a development image
+(development images are never approved by validators). The key service is part of the image because whoever
+starts the machine must not be able to put a relay in its place: the stored copy is encrypted with the miner's own
+secret, and a restore hands a copy back.
 
 Start settings (environment, passed by the miner when they start the machine):
-  KOKOAH_AGENT_SERVICE      the owner's agent service URL
   KOKOAH_AGENT_SUBMISSION   the submission id (sha256 of the stored bundle bytes)
   KOKOAH_AGENT_BUNDLE_KEY   hex AES key for a private (encrypted) bundle
   KOKOAH_AGENT_NETUID, KOKOAH_AGENT_HOTKEY   the subnet and hotkey the account is bound to
@@ -39,7 +41,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,7 @@ from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
 from .keystore import (
     KeyService,
+    Restored,
     check_secret,
     checked_address,
     decrypt_key,
@@ -76,6 +79,7 @@ class ImageSettings:
     builder: str
     builder_fee_tenths_bps: int
     development: bool = False
+    service: str = ""  # the owner's key service
 
     @staticmethod
     def load(path: Path = IMAGE_SETTINGS) -> ImageSettings:
@@ -84,7 +88,26 @@ class ImageSettings:
             builder=str(raw["builder"]).lower(),
             builder_fee_tenths_bps=int(raw.get("builder_fee_tenths_bps", 25)),
             development=bool(raw.get("development", False)),
+            service=str(raw.get("service", "")),
         )
+
+
+def service_url(image: ImageSettings, dev: bool, environ: Mapping[str, str]) -> str:
+    """The key service this machine talks to: the image's own, over https. Only a development image run in
+    development mode takes another (`KOKOAH_AGENT_SERVICE`, a local service for tests)."""
+    dev = dev and image.development  # a release image never takes another service, whatever the caller says
+    if dev and environ.get("KOKOAH_AGENT_SERVICE"):
+        return environ["KOKOAH_AGENT_SERVICE"]
+    if not image.service.startswith("https://"):
+        if dev:
+            raise SystemExit("set KOKOAH_AGENT_SERVICE to the local key service for a development run")
+        raise SystemExit("the image names no https key service")
+    return image.service
+
+
+def development_mode(image: ImageSettings, environ: Mapping[str, str]) -> bool:
+    """A development image asked to run as one (`KOKOAH_AGENT_DEV=1`); a release image never is, whatever is set."""
+    return image.development and environ.get("KOKOAH_AGENT_DEV") == "1"
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -278,12 +301,21 @@ def account_key(
     if restore:
         address = restore.lower()
 
-        def restored() -> bytes:  # a fresh token for every try: a token is accepted once
+        def restored() -> Restored:  # a fresh token for every try: a token is accepted once
             challenge = keys.challenge(address)
             return keys.restore(address, attestor.token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE))
 
-        blob = retried("restoring the key copy", restored)
-        key = decrypt_key(blob, address, secret)
+        copy = retried("restoring the key copy", restored)
+        # the account resumes only for the master and hotkey it was filed for: a secret alone must not let anyone
+        # restart it with withdrawals going to their own address
+        if not copy.master or not copy.hotkey:
+            raise SystemExit("the key service did not say whom the copy was filed for: the account is not resumed")
+        if copy.master != master.lower() or copy.hotkey != hotkey:
+            raise SystemExit(
+                f"the account {address} was filed for master {copy.master} and hotkey {copy.hotkey}: start the machine "
+                "with KOKOAH_AGENT_MASTER and KOKOAH_AGENT_HOTKEY set to those"
+            )
+        key = decrypt_key(copy.blob, address, secret)
         log.info("restored account %s", address)
         return key
     if not permit:
@@ -317,9 +349,11 @@ def account_key(
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     image = ImageSettings.load()
-    dev = image.development and os.environ.get("KOKOAH_AGENT_DEV") == "1"
-    http = httpx.Client(timeout=60)
-    service = env("KOKOAH_AGENT_SERVICE")
+    dev = development_mode(image, os.environ)
+    # certificates are checked and no proxy or certificate setting from the environment is read: the service is
+    # reached as itself or not at all
+    http = httpx.Client(timeout=60, trust_env=False)
+    service = service_url(image, dev, os.environ)
     submission = env("KOKOAH_AGENT_SUBMISSION")
     plain, code = fetch_code(service, submission, os.environ.get("KOKOAH_AGENT_BUNDLE_KEY"), http)
     uid: int | None
@@ -387,7 +421,9 @@ def main() -> int:
         },
     )
     writes = not (dev and os.environ.get("KOKOAH_AGENT_NO_WRITES") == "1")
-    harness = Harness(config, key, attestor, http=httpx.Client(timeout=20), on_stop=runner.stop, allow_writes=writes)
+    harness = Harness(
+        config, key, attestor, http=httpx.Client(timeout=20, trust_env=False), on_stop=runner.stop, allow_writes=writes
+    )
     del key
     log.info("account %s, code %s, harness for netuid %d", harness.address, code, config.netuid)
     if writes:
