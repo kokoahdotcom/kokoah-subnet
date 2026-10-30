@@ -23,6 +23,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import random
 import re
 import secrets
 import socket
@@ -76,12 +77,13 @@ async def public_address(host: str) -> str:
 
 
 async def fetch_answer(http: httpx.AsyncClient, agent: AgentRef, challenge: str) -> dict[str, Any]:
-    """The machine's answer to a challenge: a JSON object of at most MAX_ANSWER_BYTES, read within ANSWER_TIMEOUT_S."""
-    address = await public_address(agent.host)
-    host = f"[{address}]" if ":" in address else address
-    headers = {} if address == agent.host else {"Host": f"{agent.host}:{agent.port}"}
+    """The machine's answer to a challenge: a JSON object of at most MAX_ANSWER_BYTES, read within ANSWER_TIMEOUT_S
+    (the host name's lookup included)."""
 
     async def read() -> bytes:
+        address = await public_address(agent.host)
+        host = f"[{address}]" if ":" in address else address
+        headers = {} if address == agent.host else {"Host": f"{agent.host}:{agent.port}"}
         async with http.stream(
             "GET",
             f"http://{host}:{agent.port}/attestation",
@@ -289,7 +291,9 @@ async def check_agents(
         async with gate:
             return await check_agent(hk, b, netuid, keys, approved, http, extra_agents)
 
-    tasks = {hk: asyncio.create_task(bounded(hk, b)) for hk, b in sorted(agents.items())}
+    order = sorted(agents.items())
+    random.SystemRandom().shuffle(order)  # no account is always last in line when the batch deadline comes
+    tasks = {hk: asyncio.create_task(bounded(hk, b)) for hk, b in order}
     done, pending = await asyncio.wait(tasks.values(), timeout=BATCH_TIMEOUT_S)
     for task in pending:
         task.cancel()
