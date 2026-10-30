@@ -61,28 +61,38 @@ PRIVATE_KEY_HEADER = re.compile(rb"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOC
 KEY_CHUNK = re.compile(rb"[A-Za-z0-9+/]{16,}={0,2}")
 NOT_HEX = re.compile(rb"[g-zG-Z+/]")
 ARMOR_LINE = re.compile(rb"[A-Za-z][A-Za-z0-9-]*: .*")
+ALNUM = re.compile(rb"[A-Za-z0-9]")  # a token without one is an operator or a comment mark, not part of a key
 QUOTE_START = re.compile(rb"^(?:[bBrRuUfF]{0,2}[\"'])+")
+LEAD = re.compile(rb"^[\s\"'+.&,;#/>*()\[\]{}|]+")  # comment marks, operators and quotes before a line's text
 EDGES = b"\\\"',;()"
 ESCAPES = ((b"\\r\\n", b"\n"), (b"\\n", b"\n"), (b"\\r", b"\n"), (b"\\/", b"/"), (b"\\u002B", b"+"), (b"\\u002b", b"+"),
-           (b"\\u002F", b"/"), (b"\\u002f", b"/"), (b"\r", b"\n"))  # fmt: skip
+           (b"\\u002F", b"/"), (b"\\u002f", b"/"), (b"\\u000a", b"\n"), (b"\\u000A", b"\n"), (b"\\t", b" "),
+           (b"\r", b"\n"))  # fmt: skip
 KEY_WINDOW = 8192
 KEY_FILE_MAX = 64 * 1024  # an encrypted key file is small JSON
 
 
 def _key_follows(window: bytes) -> bool:
+    cut = window.find(b"-----")  # a key's body ends at its END line: nothing after it is read
+    if cut >= 0:
+        window = window[: cut + 5]
     for escaped, plain in ESCAPES:
         window = window.replace(escaped, plain)
     text, not_hex, started = 0, False, False
     for raw in window.split(b"\n", 256):
-        line = QUOTE_START.sub(b"", raw.strip()).strip()
+        line = raw.strip()
+        for _ in range(3):  # `" + "`, `# `, `// "` and the like, in any order
+            line = QUOTE_START.sub(b"", LEAD.sub(b"", line))
         if not started and not line.strip(EDGES):
             continue
         body, dashes, _ = line.partition(b"-----")
-        tokens = body.split()
+        tokens = [t for t in body.split() if ALNUM.search(t)]  # joined strings (`+`, `.`), comment marks
         if not started and ARMOR_LINE.fullmatch(line):
-            # armor header lines are skipped; on one line with the key, its chunks start after them
-            first = next((k for k, t in enumerate(tokens) if KEY_CHUNK.fullmatch(t.strip(EDGES))), None)
-            if first is None:
+            # armor header lines are skipped; on one line with the key, the key is the run of chunks at its end
+            first = len(tokens)
+            while first and KEY_CHUNK.fullmatch(tokens[first - 1].strip(EDGES)):
+                first -= 1
+            if first == len(tokens):
                 continue
             tokens = tokens[first:]
         for token in tokens:

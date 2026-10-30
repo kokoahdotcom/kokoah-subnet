@@ -106,6 +106,31 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
         ("deploy/php.json", f'{{"key": "-----BEGIN PRIVATE KEY-----\\n{escaped}\\n-----END PRIVATE KEY-----"}}'),
         ("deploy/key.env", f"KEY=-----BEGIN RSA PRIVATE KEY----- {BODY} {BODY} -----END RSA PRIVATE KEY-----\n"),
         ("deploy/bom.json", '\ufeff{"crypto": {"ciphertext": "ab", "kdf": "scrypt"}}'),
+        ("web/key.js", "".join(f'"{ln}\\n" +\n' for ln in ("-----BEGIN PRIVATE KEY-----", BODY, BODY)) + '"-----END"'),
+        ("web/key.php", "".join(f'"{ln}\\n" .\n' for ln in ("-----BEGIN PRIVATE KEY-----", BODY, BODY)) + '"-----END"'),
+        ("notes/key.md", "".join(f"# {ln}\n" for ln in ("-----BEGIN PRIVATE KEY-----", BODY, BODY, "-----END"))),
+        ("notes/key.c", "".join(f"// {ln}\n" for ln in ("-----BEGIN PRIVATE KEY-----", BODY, BODY, "-----END"))),
+        (
+            "notes/enc.md",
+            "".join(
+                f"# {ln}\n"
+                for ln in (
+                    "-----BEGIN RSA PRIVATE KEY-----",
+                    "Proc-Type: 4,ENCRYPTED",
+                    "DEK-Info: AES-128-CBC,0A1B",
+                    "",
+                    BODY,
+                    BODY,
+                    "-----END RSA PRIVATE KEY-----",
+                )
+            ),  # fmt: skip
+        ),
+        ("deploy/net.json", f'"-----BEGIN PRIVATE KEY-----\\u000a{BODY}\\u000a{BODY}\\u000a-----END"'),
+        (
+            "lib/armored.asc",
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\nComment: Exported-from-the-keychain-app by me\n\n"
+            f"{BODY}\n-----END PGP PRIVATE KEY BLOCK-----\n",
+        ),
         ("deploy/twice.json", f'"-----BEGIN PRIVATE KEY-----\\\\n{BODY}\\\\n-----END PRIVATE KEY-----"'),
         (
             "deploy/narrow.pem",
@@ -117,6 +142,7 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
             f"{BODY} -----END",
         ),
     ):
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
         (d / name).write_text(text)
         with pytest.raises(ValueError, match=name):
             package(d)
