@@ -40,8 +40,10 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
         "secret.hex",
         "key.txt",
         "my-agent.bundle.key",
-        "lib/hot.pem",
         "wallets/miner/coldkey",
+        "deploy/id_ed25519",
+        ".SSH/config",
+        "certs/client.p12",
         "backup/Wallets/miner/notes.txt",  # folders in any case
         "miner/coldkey",  # a wallet copied without its wallets folder
         "miner/coldkeypub.txt",
@@ -54,6 +56,18 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
             package(d)
         (d / name).unlink()
     assert package(d) == clean
+    # a PEM file is refused when it holds a private key, by its content and whatever its name
+    (d / "lib" / "hot.pem").write_text("-----BEGIN EC PRIVATE KEY-----\nMHc=\n-----END EC PRIVATE KEY-----\n")
+    (d / "lib" / "notes.txt").write_text("-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n")
+    with pytest.raises(ValueError, match="lib/hot.pem") as refused:
+        package(d)
+    assert "lib/notes.txt" in str(refused.value)
+    (d / "lib" / "hot.pem").unlink()
+    (d / "lib" / "notes.txt").unlink()
+    # a vendored package's certificate bundle is packaged
+    (d / "certifi").mkdir()
+    (d / "certifi" / "cacert.pem").write_text("-----BEGIN CERTIFICATE-----\nMIID\n-----END CERTIFICATE-----\n")
+    assert "certifi/cacert.pem" in zipfile.ZipFile(io.BytesIO(package(d))).namelist()
 
 
 def test_private_code_round_trips_and_needs_the_key(tmp_path: Path) -> None:

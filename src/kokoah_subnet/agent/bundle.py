@@ -32,25 +32,35 @@ LEFT_OUT = frozenset({".git", ".hg", ".svn", "__pycache__"})  # folders that are
 SECRET_FILES = (
     ".env",
     ".env.*",
-    "*.pem",
     "*.key",
     "*.mnemonic",
     "*.seed",
+    "*.p12",
+    "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
     "secret.hex",
     "key.txt",
     "coldkey",  # a Bittensor wallet copied without its wallets folder
     "coldkeypub.txt",
     "utc--*",  # an Ethereum keystore file
 )
-SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys"})  # a wallet's hotkeys are not encrypted by default
+SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys", ".ssh"})  # a wallet's hotkeys are not encrypted
+PRIVATE_KEY = b"PRIVATE KEY-----"  # the end of a PEM private key's header line, whatever its kind
 
 
-def looks_secret(relative: Path) -> bool:
-    """A wallet, a key or a secret by its name, in any case: the bundle may be published, and the code has no use for
-    one."""
+def looks_secret(relative: Path, content: bytes = b"") -> bool:
+    """A wallet, a key or a secret by its name, in any case, or a file holding a PEM private key: the bundle may be
+    published, and the code has no use for one. Certificate files (a vendored package's `cacert.pem`) are fine."""
     name = relative.name.lower()
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES) or bool(
-        SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]}
+    return (
+        any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES)
+        or bool(SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]})
+        or PRIVATE_KEY in content
     )
 
 
@@ -63,7 +73,7 @@ def package(directory: Path) -> bytes:
     if not (root / "entry.py").is_file():
         raise ValueError("the agent directory needs an entry.py")
     paths = sorted(p for p in root.rglob("*") if p.is_file() and not LEFT_OUT & set(p.relative_to(root).parts))
-    secrets = [p.relative_to(root).as_posix() for p in paths if looks_secret(p.relative_to(root))]
+    secrets = [p.relative_to(root).as_posix() for p in paths if looks_secret(p.relative_to(root), p.read_bytes())]
     if secrets:
         raise ValueError(f"these look like keys or secrets, move them out of the agent directory: {', '.join(secrets)}")
     buf = io.BytesIO()
