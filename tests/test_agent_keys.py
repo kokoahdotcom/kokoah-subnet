@@ -533,7 +533,12 @@ def test_a_key_store_token_needs_the_key_stores_audience_and_exactly_its_digest(
         "submission": world["submission"],
         "permit": p,
     }
-    for token in (world["machine"].token([digest]), world["machine"].token([digest, "ab" * 32], KEYSTORE_AUDIENCE)):
+    unapproved = DevelopmentAttestor(world["machine_key"], "sha256:" + "0d" * 32).token([digest], KEYSTORE_AUDIENCE)
+    for token in (
+        world["machine"].token([digest]),  # the default audience
+        world["machine"].token([digest, "ab" * 32], KEYSTORE_AUDIENCE),  # two nonces
+        unapproved,  # an image that is not approved
+    ):
         refused = svc.put(f"/key-store/{account.address}", json={**body, "token": token})
         assert refused.status_code == 403
     stored = svc.put(
@@ -558,3 +563,20 @@ def test_a_restore_resumes_the_account_only_for_the_master_and_hotkey_it_was_fil
     with pytest.raises(SystemExit, match="KOKOAH_AGENT_HOTKEY"):
         start(world, master, address, hotkey=BOB)
     assert start(world, master, address) == key  # the right settings restore it
+
+
+def test_an_answer_that_does_not_name_the_owner_resumes_nothing() -> None:
+    """A key service that returns the copy without its master and hotkey (an older one) does not get the account
+    resumed: the machine stops before using the key."""
+    from kokoah_subnet.agent.keystore import Restored
+
+    class OldService:
+        def challenge(self, address: str) -> str:
+            return "00" * 32
+
+        def restore(self, address: str, token: str) -> Restored:
+            return Restored(b"copy", "", "")
+
+    machine = DevelopmentAttestor(rsa.generate_private_key(public_exponent=65537, key_size=2048), IMAGE)
+    with pytest.raises(SystemExit, match="did not say whom"):
+        account_key(OldService(), machine, SECRET, "0x" + "11" * 20, ALICE.ss58_address, "0x" + "22" * 20)  # type: ignore[arg-type]

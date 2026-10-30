@@ -308,6 +308,8 @@ def account_key(
         copy = retried("restoring the key copy", restored)
         # the account resumes only for the master and hotkey it was filed for: a secret alone must not let anyone
         # restart it with withdrawals going to their own address
+        if not copy.master or not copy.hotkey:
+            raise SystemExit("the key service did not say whom the copy was filed for: the account is not resumed")
         if copy.master != master.lower() or copy.hotkey != hotkey:
             raise SystemExit(
                 f"the account {address} was filed for master {copy.master} and hotkey {copy.hotkey}: start the machine "
