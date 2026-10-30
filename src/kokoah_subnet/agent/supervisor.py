@@ -95,6 +95,7 @@ class ImageSettings:
 def service_url(image: ImageSettings, dev: bool, environ: Mapping[str, str]) -> str:
     """The key service this machine talks to: the image's own, over https. Only a development image run in
     development mode takes another (`KOKOAH_AGENT_SERVICE`, a local service for tests)."""
+    dev = dev and image.development  # a release image never takes another service, whatever the caller says
     if dev and environ.get("KOKOAH_AGENT_SERVICE"):
         return environ["KOKOAH_AGENT_SERVICE"]
     if not image.service.startswith("https://"):

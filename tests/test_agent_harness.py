@@ -328,6 +328,7 @@ def test_the_machine_talks_only_to_the_key_service_its_image_names() -> None:
     image = ImageSettings("0x" + "43" * 20, 25, service="https://api.kokoah.com/miners")
     relay = {"KOKOAH_AGENT_SERVICE": "https://relay.example"}
     assert service_url(image, False, relay) == "https://api.kokoah.com/miners"
+    assert service_url(image, True, relay) == "https://api.kokoah.com/miners"  # a release image, even told "dev"
     for bare in (ImageSettings("0x" + "43" * 20, 25), ImageSettings("0x" + "43" * 20, 25, service="http://svc")):
         with pytest.raises(SystemExit, match="https key service"):
             service_url(bare, False, {})
