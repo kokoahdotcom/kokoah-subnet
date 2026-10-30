@@ -148,13 +148,16 @@ def _readable(data: bytes) -> bool:
     return ",".join(h.strip() for h in first.split(",")) == BUILDER_CSV_HEADER
 
 
-def retry_deadline(store: Store, day: str, clock: float, end_ms: int, params: Params, grace_hours: float) -> float:
+def retry_deadline(
+    store: Store, day: str, clock: float, end_ms: int, params: Params, grace_hours: float, away_s: float = 7200
+) -> float:
     """When this validator stops waiting for failed reads of `day`: the file deadline, and never sooner than
     `grace_hours` after its first attempt at the day. A day that was already over when the day before it was first
     attempted (a backlog after an outage) takes that day's first attempt, so a backlog has one grace window, not one
-    per day."""
-    key = f"first_attempt:{day}"
-    stored = store.get_meta(key)
+    per day; and a validator that was away from a day for longer than `away_s` (it retries hourly) starts the day's
+    window again when it comes back."""
+    key, last_key = f"first_attempt:{day}", f"last_attempt:{day}"
+    stored, last = store.get_meta(key), store.get_meta(last_key)
     if stored is None:
         first = clock
         before = store.get_meta(f"first_attempt:{store.day_before(day)}")
@@ -163,6 +166,10 @@ def retry_deadline(store: Store, day: str, clock: float, end_ms: int, params: Pa
         store.set_meta(key, repr(first))
     else:
         first = float(stored)
+        if last is not None and clock - float(last) > away_s:
+            first = clock
+            store.set_meta(key, repr(first))
+    store.set_meta(last_key, repr(clock))
     return max(end_ms / 1000 + params.file_deadline_hours * 3600, first + grace_hours * 3600)
 
 
@@ -259,7 +266,8 @@ async def collect_and_score(
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
-    past_deadline = clock >= retry_deadline(store, day, clock, end_ms, params, cfg.retry_grace_hours)
+    away_s = 2 * cfg.retry_missing_s
+    past_deadline = clock >= retry_deadline(store, day, clock, end_ms, params, cfg.retry_grace_hours, away_s)
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
     except NotPublished:

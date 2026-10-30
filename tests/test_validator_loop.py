@@ -1171,6 +1171,12 @@ def test_a_backlog_after_an_outage_shares_one_grace_window(tmp_path: Path) -> No
     later = back + 3.5 * hour  # 10-03 was scored after its grace; 10-04 is first attempted now
     assert retry_deadline(store, "2026-10-04", later, end("2026-10-04"), DEFAULT, 3.0) == back + 3 * hour  # shared
     assert retry_deadline(store, "2026-10-04", later + hour, end("2026-10-04"), DEFAULT, 3.0) == back + 3 * hour
+    # tried just after the day ended, then away until the evening: the day's window starts again on return
+    first = end("2026-10-20") / 1000 + 300
+    assert retry_deadline(store, "2026-10-20", first, end("2026-10-20"), DEFAULT, 3.0) == first - 300 + 12 * hour
+    evening = first + 20 * hour
+    assert retry_deadline(store, "2026-10-20", evening, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
+    assert retry_deadline(store, "2026-10-20", evening + hour, end("2026-10-20"), DEFAULT, 3.0) == evening + 3 * hour
 
 
 def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int]) -> None:
