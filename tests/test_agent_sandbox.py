@@ -168,7 +168,7 @@ def test_nothing_in_the_bundle_runs_before_the_sandbox_is_in_place(tmp_path: Pat
     )  # fmt: skip
     proc = supervisor.AgentRunner(command, bundle)
     started = proc.start()
-    assert started.wait(timeout=60) == 0
+    assert started is not None and started.wait(timeout=60) == 0
     ran = record.read_text().split("\n")[:-1]
     assert ran == ["sitecustomize 2"]  # only the agent's own start-up found the bundle, already filtered
 
@@ -291,6 +291,8 @@ def _alive(pid: int) -> bool:
 
 
 def test_what_the_agent_forked_ends_with_it(tmp_path: Path) -> None:
+    import threading
+
     from kokoah_subnet.agent import supervisor
 
     note = tmp_path / "child"
@@ -298,14 +300,19 @@ def test_what_the_agent_forked_ends_with_it(tmp_path: Path) -> None:
         supervisor.agent_command(1024, None, None, program=[sys.executable, "-c", LEAVE_CHILD, str(note), "stay"]),
         tmp_path,
     )
-    assert runner.start().wait(timeout=30) == 0
+    thread = threading.Thread(target=runner.run, daemon=True)
+    thread.start()
+    for _ in range(100):  # the agent forks a child and exits; the runner ends the child with it
+        if note.exists() and note.read_text():
+            break
+        time.sleep(0.05)
     child = int(note.read_text())
-    assert _alive(child)  # the agent exited; what it forked is still there
-    runner.stop()
-    for _ in range(50):
+    for _ in range(100):
         if not _alive(child):
             break
         time.sleep(0.05)
+    runner.stop()
+    thread.join(timeout=10)
     assert not _alive(child)
 
 
@@ -328,13 +335,59 @@ def test_every_process_of_the_agent_user_ends_even_one_that_left_its_group() -> 
     )
     runner = supervisor.AgentRunner(command, home, uid=uid)
     try:
-        assert runner.start().wait(timeout=30) == 0
+        first = runner.start()
+        assert first is not None and first.wait(timeout=30) == 0
         child = int(note.read_text())
         assert _alive(child) and supervisor.processes_of(uid) == [child]
-        runner.start().wait(timeout=30)  # the next start ends the leftover first
+        again = runner.start()  # the next start ends the leftover first
+        assert again is not None and again.wait(timeout=30) == 0
         assert child not in supervisor.processes_of(uid)
         runner.stop()
         assert supervisor.processes_of(uid) == []
+        assert runner.start() is None  # stopped: nothing starts again
     finally:
         runner.stop()
         shutil.rmtree(request_cleanup, ignore_errors=True)
+
+
+def test_a_process_name_the_agent_chose_does_not_stop_the_cleanup(tmp_path: Path) -> None:
+    """The agent can rename its processes to bytes that are not text: the scan reads them as bytes."""
+    from kokoah_subnet.agent import supervisor
+
+    code = "import os, time\nopen('/proc/self/comm', 'wb').write(b'\\xff\\xfe')\ntime.sleep(30)\n"
+    proc = subprocess.Popen([sys.executable, "-c", code])
+    try:
+        time.sleep(0.3)
+        assert proc.pid in supervisor.processes_of(os.getuid())
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@needs_root_and_namespaces
+def test_a_stop_while_the_sandbox_is_still_root_ends_the_agent() -> None:
+    import shutil
+    import tempfile
+
+    from kokoah_subnet.agent import supervisor
+
+    uid = 61235
+    if supervisor.processes_of(uid):
+        pytest.skip(f"uid {uid} is in use here")
+    home = Path(tempfile.mkdtemp(dir="/tmp"))
+    os.chmod(home, 0o777)
+    runner = supervisor.AgentRunner(
+        supervisor.agent_command(1024, uid, uid, program=["/usr/bin/python3", "-c", "import time; time.sleep(120)"]),
+        home,
+        uid=uid,
+    )
+    try:
+        proc = runner.start()
+        assert proc is not None
+        runner.stop()  # at once: the sandbox may not have dropped to the agent's user yet
+        assert proc.poll() is not None
+        time.sleep(0.5)
+        assert supervisor.processes_of(uid) == []
+    finally:
+        runner.stop()
+        shutil.rmtree(home, ignore_errors=True)

@@ -246,73 +246,123 @@ def visible_to_agent(directories: list[str], uid: int | None, gid: int | None) -
 
 
 def processes_of(uid: int) -> list[int]:
-    """The live (not yet exited) processes whose real user is `uid`."""
+    """The live (not yet exited) processes whose real user is `uid` (read as bytes: a process names itself)."""
     found = []
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit():
             continue
         try:
-            status = Path(f"/proc/{entry.name}/status").read_text()
+            status = Path(f"/proc/{entry.name}/status").read_bytes()
         except OSError:
             continue
-        fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
-        uids = fields.get("Uid", "").split()
-        if uids and int(uids[0]) == uid and not fields.get("State", "").strip().startswith(("Z", "X")):
+        fields = dict(line.split(b":", 1) for line in status.splitlines() if line.startswith((b"Uid:", b"State:")))
+        uids = fields.get(b"Uid", b"").split()
+        try:
+            real = int(uids[0]) if uids else None
+        except ValueError:
+            continue
+        if real == uid and not fields.get(b"State", b"").strip().startswith((b"Z", b"X")):
             found.append(int(entry.name))
     return found
+
+
+# Run as the agent's user: signals every process of that user (but itself) until none is left; a process that forks
+# meanwhile is caught on the next round. The shell's own kill: nothing the agent's user cannot run.
+_KILL_ALL = "i=0; while kill -9 -1 2>/dev/null && [ $i -lt 10000 ]; do i=$((i+1)); done"
+
+
+def kill_user_processes(uid: int, gid: int | None) -> None:
+    """Every process of the agent's user ends, whatever it names itself or whichever group it moved to."""
+    subprocess.run(
+        ["/bin/sh", "-c", _KILL_ALL],
+        user=uid,
+        group=gid if gid is not None else uid,
+        extra_groups=[],
+        env=LAUNCHER_ENV,
+        cwd="/",
+        timeout=60,
+        check=False,
+    )
 
 
 class AgentRunner:
     """Runs the agent in the sandbox and restarts it (with a growing pause) until stopped. The sandbox starts from
     `LAUNCHER_ENV` in the agent's directory; the command carries the agent's own environment (`agent_command`).
-    Whatever the agent started ends with it: before every start, after every exit and on stop, every process of the
-    agent's user is killed (without a user of its own, a development run: its process group), so nothing it forked
-    keeps trading through the harness socket or is left behind when the next one starts."""
+    Whatever the agent started ends with it: before every start, after every exit and on stop, the sandbox itself is
+    killed while it runs (it is root until it drops to the agent's user) and every process of the agent's user is
+    killed (without a user of its own, a development run: the agent's process group), so nothing it forked keeps
+    trading through the harness socket or is left behind when the next one starts. Exited orphans (the supervisor is
+    the container's first process) are collected every `reap_s`."""
 
-    def __init__(self, command: list[str], home: Path | None = None, uid: int | None = None) -> None:
+    def __init__(
+        self, command: list[str], home: Path | None = None, uid: int | None = None, gid: int | None = None
+    ) -> None:
         self.command = command
         self.home = home or AGENT_HOME
-        self.uid = uid
+        self.uid, self.gid = uid, gid
         self.stopped = threading.Event()
         self.proc: subprocess.Popen[bytes] | None = None
+        self._lock = threading.Lock()  # starting, stopping and collecting orphans never overlap
+
+    def _end_all(self) -> None:
+        proc = self.proc
+        if proc is not None and proc.poll() is None:  # not collected yet: its id (and group) is still its own
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        if self.uid is not None:
+            kill_user_processes(self.uid, self.gid)
+        reap_orphans()
 
     def end_all(self) -> None:
-        if self.uid is None:
-            if self.proc is not None:
-                try:
-                    os.killpg(self.proc.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            return
-        for _ in range(100):  # a process can fork while the others are killed: until none is left
-            pids = processes_of(self.uid)
-            if not pids:
-                break
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            time.sleep(0.02)
-        reap_orphans(self.proc.pid if self.proc else None)
+        with self._lock:
+            self._end_all()
 
     def stop(self) -> None:
         self.stopped.set()
         self.end_all()
 
-    def start(self) -> subprocess.Popen[bytes]:
-        self.end_all()
-        self.proc = subprocess.Popen(
-            self.command, env=LAUNCHER_ENV, cwd=str(self.home), close_fds=True, start_new_session=True
-        )
-        return self.proc
+    def start(self) -> subprocess.Popen[bytes] | None:
+        """A fresh agent, or None once stopped."""
+        with self._lock:
+            if self.stopped.is_set():
+                return None
+            self._end_all()
+            self.proc = subprocess.Popen(
+                self.command, env=LAUNCHER_ENV, cwd=str(self.home), close_fds=True, start_new_session=True
+            )
+            return self.proc
+
+    def _exited(self, proc: subprocess.Popen[bytes]) -> None:
+        """Right after the agent was collected: its group ends at once (a development run), before its id can be
+        given to anything else; then everything of the agent's user."""
+        with self._lock:
+            if self.uid is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            self._end_all()
+
+    def reap_loop(self, every_s: float = 30.0) -> None:
+        while not self.stopped.wait(every_s):
+            with self._lock:
+                if self.proc is not None:
+                    self.proc.poll()  # the agent is collected by its own Popen, never as an orphan
+                reap_orphans()
 
     def run(self) -> None:
+        threading.Thread(target=self.reap_loop, daemon=True).start()
         pause = 5.0
         while not self.stopped.is_set():
             started = time.time()
-            code = self.start().wait()
-            self.end_all()
+            proc = self.start()
+            if proc is None:
+                break
+            code = proc.wait()
+            self._exited(proc)
             if self.stopped.is_set():
                 break
             pause = 5.0 if time.time() - started > 600 else min(pause * 2, 300.0)
@@ -320,15 +370,16 @@ class AgentRunner:
             self.stopped.wait(pause)
 
 
-def reap_orphans(keep: int | None) -> None:
+def reap_orphans() -> None:
     """In the sealed machine the supervisor is the container's first process, so the agent's orphans become its
-    children: collect the ones that exited (never `keep`, the agent process `Popen` waits for itself)."""
+    children: collect the ones that exited. Called only under the runner's lock, once the agent itself was collected
+    by its own Popen (`wait` or `poll`), so no child anything waits for is taken by mistake."""
     while True:
         try:
             exited = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
         except ChildProcessError:
             return
-        if exited is None or exited.si_pid == keep:
+        if exited is None:
             return
         try:
             os.waitpid(exited.si_pid, os.WNOHANG)
@@ -498,7 +549,7 @@ def main() -> int:
         builder_fee_tenths_bps=image.builder_fee_tenths_bps,
         mainnet=mainnet,
     )
-    runner = AgentRunner(agent_command(1024, uid, gid, hidden, environment=agent_environment()), uid=uid)
+    runner = AgentRunner(agent_command(1024, uid, gid, hidden, environment=agent_environment()), uid=uid, gid=gid)
     writes = not (dev and os.environ.get("KOKOAH_AGENT_NO_WRITES") == "1")
     harness = Harness(
         config, key, attestor, http=httpx.Client(timeout=20, trust_env=False), on_stop=runner.stop, allow_writes=writes
