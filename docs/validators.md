@@ -170,7 +170,8 @@ so a validator back from an outage retries for 3 hours in all (a day it had alre
 its return). After that the day is scored and only what needed the failed read is lost: without the recorded account
 values the account is not eligible that day (unless points an earlier read stored cover the whole day), and fills that
 needed a failed read go uncounted (without a coin's candles or the fill history, also the day's return). The candles
-of a coin the exchange does not list are settled at once the same way. Other reads (positions, fee rates, stake) fall
+of a coin the exchange does not list, or of a day older than the exchange keeps (about three and a half days), are
+settled at once the same way. Other reads (positions, fee rates, stake) fall
 back. Every failure is recorded.
 
 ## 8. The public interface
@@ -210,9 +211,11 @@ request limit. Publishing lets miners and other validators compare figures with 
 
 ## 10. Choosing the start day
 
-Set `--start-day` to a day within the last seven days: the daily average account value is read from the exchange's
-recent record of each account. From that day on, the validator scores every day in order and builds its record day
-by day; each account's earlier daily values are backfilled from the exchange when the account is first scored.
+Set `--start-day` to a day within the last three days: the exchange keeps minute prices for about three and a half
+days, and a day scored later has its perpetual builder fills uncounted on this validator's record. The same holds
+after an outage, so keep the validator running and let it catch up within three days. From the start day on, the
+validator scores every day in order and builds its record day by day; each account's earlier daily values are
+backfilled from the exchange when the account is first scored.
 
 ## 11. Upgrades
 
