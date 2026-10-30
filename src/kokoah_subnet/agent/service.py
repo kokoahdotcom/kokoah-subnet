@@ -76,7 +76,8 @@ from .keystore import PERMIT_DAYS, parse_permit, release_message, restore_digest
 log = logging.getLogger("kokoah_subnet.agent.service")
 SUBMIT_COOLDOWN_S = 12 * 3600
 SUBMIT_ATTEMPTS_PER_HOUR = 6  # uploads one hotkey may send, accepted or refused (each one is read and checked)
-UPLOADS_AT_ONCE = 4  # bodies received at the same time; more are told to try again
+UPLOADS_AT_ONCE = 8  # bodies received at the same time (one per hotkey); more are told to try again
+UPLOAD_DEADLINE_S = 60.0  # the whole body; a slower one is cut off
 KEEP_BUNDLES_PER_HOTKEY = 5  # older bundles are deleted unless an unreleased key copy names them
 KEEP_LEFT_BUNDLES_S = 30 * 86_400  # a bundle of a hotkey no longer registered, after this long
 PRUNE_EVERY_S = 6 * 3600
@@ -255,13 +256,17 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         async def upkeep() -> None:
+            due = {prune_bundles: 0.0, poll_links: 0.0}  # each job's next run (monotonic)
+            every = {prune_bundles: PRUNE_EVERY_S, poll_links: BINDINGS_POLL_S}
             while True:
-                for job in (prune_bundles, poll_links):
-                    try:
-                        await anyio.to_thread.run_sync(job)
-                    except Exception:  # noqa: BLE001 - tried again next round
-                        log.exception("%s failed", job.__name__)
-                await asyncio.sleep(min(PRUNE_EVERY_S, BINDINGS_POLL_S))
+                for job in due:
+                    if time.monotonic() >= due[job]:
+                        due[job] = time.monotonic() + every[job]
+                        try:
+                            await anyio.to_thread.run_sync(job)
+                        except Exception:  # noqa: BLE001 - tried again next round
+                            log.exception("%s failed", job.__name__)
+                await asyncio.sleep(max(1.0, min(due.values()) - time.monotonic()))
 
         task = asyncio.create_task(upkeep())
         try:
@@ -283,6 +288,7 @@ def create_app(
 
     submit_lock = asyncio.Lock()
     uploading = asyncio.Semaphore(UPLOADS_AT_ONCE)
+    receiving: set[str] = set()  # hotkeys whose body is being received
     checking = anyio.CapacityLimiter(2)  # bundle checks run off the event loop, two at a time
     attempts: dict[str, list[float]] = {}  # hotkey -> its upload times within the last hour
     attempts_lock = threading.Lock()
@@ -317,10 +323,25 @@ def create_app(
             if old not in needed:
                 (data_dir / "bundles" / old).unlink(missing_ok=True)
 
+    left_since: dict[str, float] = {}  # hotkey -> when pruning first found it unregistered (since the service started)
+
+    def gone_long_enough(hotkey: str, now: float) -> bool:
+        if is_registered is None:
+            return False
+        try:
+            registered = is_registered(hotkey)
+        except Exception:  # noqa: BLE001 - the chain cannot be read now: keep everything
+            return False
+        if registered:
+            left_since.pop(hotkey, None)
+            return False
+        return now - left_since.setdefault(hotkey, now) > KEEP_LEFT_BUNDLES_S
+
     def prune_bundles() -> int:
         """Delete the bundles nobody can run any more: beyond a hotkey's newest KEEP_BUNDLES_PER_HOTKEY, and those of
-        a hotkey no longer registered once KEEP_LEFT_BUNDLES_S have passed; never one an unreleased key copy names.
-        Their records stay. Returns how many files were deleted."""
+        a hotkey that left the subnet KEEP_LEFT_BUNDLES_S ago (counted from when pruning first found it gone); never
+        one an unreleased key copy names. Their records stay, and the hotkey can send the same bundle again.
+        Returns how many files were deleted."""
         now, gone = clock(), 0
         with engine.connect() as c:
             needed = in_use(c)
@@ -330,17 +351,12 @@ def create_app(
                 )
             ).all()
         rank: dict[str, int] = {}
-        for blob_id, hotkey, submitted_at in rows:
+        for blob_id, hotkey, _ in rows:
             rank[hotkey] = rank.get(hotkey, 0) + 1
             path = data_dir / "bundles" / blob_id
             if blob_id in needed or not path.exists():
                 continue
-            drop = rank[hotkey] > KEEP_BUNDLES_PER_HOTKEY
-            if not drop and is_registered is not None and now - float(submitted_at) > KEEP_LEFT_BUNDLES_S:
-                try:
-                    drop = not is_registered(hotkey)
-                except Exception:  # noqa: BLE001 - the chain cannot be read now: keep it
-                    drop = False
+            drop = rank[hotkey] > KEEP_BUNDLES_PER_HOTKEY or gone_long_enough(hotkey, now)
             if drop:
                 path.unlink(missing_ok=True)
                 gone += 1
@@ -393,11 +409,20 @@ def create_app(
             }
         if last is not None and clock() - float(last) < SUBMIT_COOLDOWN_S:
             raise HTTPException(status_code=429, detail="one submission per hotkey per 12 hours")
-        count_attempt(hotkey)
+        if hotkey in receiving:
+            raise HTTPException(status_code=409, detail="an upload from this hotkey is already in progress")
         if uploading.locked():
             raise HTTPException(status_code=503, detail="the service is receiving other bundles: try again shortly")
         async with uploading:
-            return await receive(request, hotkey, blob_id, size)
+            receiving.add(hotkey)
+            try:
+                count_attempt(hotkey)  # once it has a slot: a busy service costs nobody a try
+                async with asyncio.timeout(UPLOAD_DEADLINE_S):
+                    return await receive(request, hotkey, blob_id, size)
+            except TimeoutError:
+                raise HTTPException(status_code=408, detail="the bundle took too long to arrive") from None
+            finally:
+                receiving.discard(hotkey)
 
     async def receive(request: Request, hotkey: str, blob_id: str, size: int) -> dict[str, Any]:
         incoming = data_dir / "bundles" / f".incoming-{secrets.token_hex(8)}"
@@ -424,9 +449,14 @@ def create_app(
                 code = blob_id
             async with submit_lock:  # the cooldown check and the insert together
                 with engine.begin() as c:
-                    if c.execute(select(submissions.c.id).where(submissions.c.id == blob_id)).first():
+                    owner = c.execute(select(submissions.c.hotkey).where(submissions.c.id == blob_id)).scalar()
+                    if owner is not None:
                         target = data_dir / "bundles" / blob_id
-                        if not target.exists():  # a deleted bundle sent again: kept again, as submitted now
+                        if not target.exists():  # a deleted bundle sent again by its own hotkey: a new submission
+                            if owner != hotkey:
+                                raise HTTPException(
+                                    status_code=409, detail="this bundle is another hotkey's submission"
+                                )
                             incoming.replace(target)
                             c.execute(
                                 submissions.update().where(submissions.c.id == blob_id).values(submitted_at=clock())
@@ -671,8 +701,8 @@ def create_app(
     def read_links() -> None:
         """The links the chain's bindings name now, added to those remembered."""
         assert bound_pairs is not None
+        links_read[0] = clock()  # a failed read waits its turn too
         current = {(str(hk), str(a).lower()) for hk, a in bound_pairs()}
-        links_read[0] = clock()
         with engine.begin() as c:
             seen = {(hk, a) for hk, a in c.execute(select(linked.c.hotkey, linked.c.address)).all()}
             new = [{"hotkey": hk, "address": a, "seen_at": clock()} for hk, a in sorted(current - seen)]
@@ -696,12 +726,13 @@ def create_app(
 
         if known():
             return True
-        with links_lock:
-            if clock() - links_read[0] >= BINDINGS_REFRESH_S:
-                try:
-                    read_links()
-                except Exception as exc:  # noqa: BLE001 - the chain could not be read
-                    raise HTTPException(status_code=503, detail="the subnet's bindings cannot be read now") from exc
+        if clock() - links_read[0] >= BINDINGS_REFRESH_S and links_lock.acquire(blocking=False):
+            try:  # one reader at a time; everyone else answers from what is remembered meanwhile
+                read_links()
+            except Exception as exc:  # noqa: BLE001 - the chain could not be read
+                raise HTTPException(status_code=503, detail="the subnet's bindings cannot be read now") from exc
+            finally:
+                links_lock.release()
         return known()
 
     def require_link(hotkey: str, address: str) -> None:

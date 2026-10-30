@@ -75,7 +75,8 @@ async def test_one_hotkey_cannot_slip_two_uploads_past_the_cooldown(tmp_path: Pa
         results = await asyncio.gather(
             *(c.post("/agents", content=b, headers=headers("h1", sha256_hex(b), len(b))) for b in (first, second))
         )
-    assert sorted(r.status_code for r in results) == [200, 429]
+    codes = sorted(r.status_code for r in results)
+    assert codes[0] == 200 and codes[1] in (409, 429)  # the other one waits its turn or meets the cooldown
 
 
 async def test_old_bundles_are_cleaned_up_unless_a_key_copy_names_them(
@@ -156,7 +157,10 @@ async def test_bundles_of_a_hotkey_that_left_are_deleted_after_a_month_and_can_b
             r = await c.post("/agents", content=blob, headers=headers(hk, sha256_hex(blob), len(blob), clock=clock))
             assert r.status_code == 200
         file_key_copy(tmp_path, "0x" + "33" * 20, sha256_hex(blobs["h3"]), clock.now)  # h3's account is kept
+        clock.now += 60 * 86_400  # the bundles are old, but their hotkeys are still here
+        assert application.state.prune_bundles() == 0
         registered -= {"h2", "h3"}  # h2 and h3 leave the subnet
+        assert application.state.prune_bundles() == 0  # just left: the month starts now
         clock.now += 29 * 86_400
         assert application.state.prune_bundles() == 0  # not a month yet
         clock.now += 2 * 86_400
@@ -169,3 +173,45 @@ async def test_bundles_of_a_hotkey_that_left_are_deleted_after_a_month_and_can_b
         again = await c.post("/agents", content=blobs["h2"], headers=headers("h2", gone, len(blobs["h2"]), clock=clock))
         assert again.status_code == 200 and again.json()["existing"]
         assert (await c.get(f"/agents/{gone}/bundle")).content == blobs["h2"]  # kept again
+
+
+async def test_another_hotkey_cannot_bring_back_a_deleted_bundle_or_hold_the_upload_slots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = Clock()
+    registered = {"h1", "h2", "h3"}
+    application = create_app(tmp_path / "svc", verify=lambda m, s, h: s == "ok", clock=clock,
+                             is_registered=lambda hk: hk in registered)  # fmt: skip
+    blob = agent(tmp_path, "mine")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://svc") as c:
+        r = await c.post("/agents", content=blob, headers=headers("h1", sha256_hex(blob), len(blob), clock=clock))
+        assert r.status_code == 200
+        registered.discard("h1")
+        application.state.prune_bundles()
+        clock.now += 40 * 86_400
+        assert application.state.prune_bundles() == 1
+        registered.add("h1")  # h1 is back: its cooldown must be its own business
+        clock.now += 13 * 3600
+        r = await c.post("/agents", content=blob, headers=headers("h2", sha256_hex(blob), len(blob), clock=clock))
+        assert r.status_code == 409  # h2 replays h1's old bundle: refused, nothing changes for h1
+        mine = agent(tmp_path, "new")
+        r = await c.post("/agents", content=mine, headers=headers("h1", sha256_hex(mine), len(mine), clock=clock))
+        assert r.status_code == 200
+
+        # a slow body is cut off at the deadline, and a hotkey holds at most one slot at a time
+        monkeypatch.setattr(service_module, "UPLOAD_DEADLINE_S", 0.3)
+        clock.now += 13 * 3600
+
+        async def slow() -> AsyncIterator[bytes]:
+            yield b"PK"
+            await asyncio.sleep(5)
+            yield b"x"
+
+        other = agent(tmp_path, "third")
+        first = asyncio.create_task(c.post("/agents", content=slow(), headers=headers("h3", "ab" * 32, 3, clock=clock)))
+        await asyncio.sleep(0.05)
+        second = await c.post(
+            "/agents", content=other, headers=headers("h3", sha256_hex(other), len(other), clock=clock)
+        )
+        assert second.status_code == 409  # one upload at a time per hotkey
+        assert (await first).status_code == 408

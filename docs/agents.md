@@ -61,7 +61,8 @@ from the service. One submission per hotkey per 12 hours (and at most 6 uploads 
 and only from a hotkey that is registered on the subnet (the service also stores key copies only for registered
 hotkeys; getting an account back or taking its key out works even after the hotkey lost its registration). The
 service keeps a hotkey's newest five bundles, and a month after a hotkey leaves the subnet it deletes its bundles,
-except any a kept key copy names; the same bundle can be submitted again.
+except the one a kept key copy was filed with; the same hotkey can submit a deleted bundle again (a new submission,
+under the 12-hour rule), for instance before restarting a machine on it.
 
 Kokoah's agent service is `https://api.kokoah.com/miners`: `/agents` (submissions and their code), `/images` (the
 approved harness images), `/key-store/<account>` (the machines' encrypted key copies) and `/key-store/released`

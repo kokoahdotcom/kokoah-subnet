@@ -216,3 +216,22 @@ async def test_a_validator_reads_every_page_and_checks_each_signature_once(monke
         found = await fetch_unlinks(http, "http://svc", NETUID, known={(H1, rows[0].address)})
     assert found == rows[1:] and asked == [0.0, 1.0, 2.0]
     assert sorted(checked) == sorted(u.address for u in rows[1:])  # the kept one is never checked again
+
+
+def test_a_chain_that_cannot_be_read_is_not_asked_again_on_every_request(tmp_path: Path) -> None:
+    clock, owner = Clock(), Account.create()
+    reads = []
+
+    def down() -> set[tuple[str, str]]:
+        reads.append(clock.now)
+        raise RuntimeError("chain down")
+
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: hk == H1, clock=clock,
+                     netuid=NETUID, bound_pairs=down)  # fmt: skip
+    c = TestClient(app)
+    ask = {"hotkey": H1, "address": owner.address}
+    assert c.get("/unlinks/message", params=ask).status_code == 503
+    assert [c.get("/unlinks/message", params=ask).status_code for _ in range(5)] == [403] * 5  # not read again yet
+    assert len(reads) == 1
+    clock.now += 31
+    assert c.get("/unlinks/message", params=ask).status_code == 503 and len(reads) == 2
