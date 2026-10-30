@@ -437,21 +437,34 @@ async def collect_and_score(
 
     marks_cache: dict[str, dict[int, float] | None] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
+    listings: dict[str, set[str] | None] = {}
+
+    async def listed(coin: str) -> bool | None:
+        """Whether the exchange lists the coin (None when its list cannot be read): the same answer for every
+        validator."""
+        dex = coin.split(":", 1)[0] if ":" in coin else ""
+        if dex not in listings:
+            try:
+                listings[dex] = await hl.perp_names(dex)
+            except Exception:  # noqa: BLE001 - unknown, so the read is waited for as usual
+                listings[dex] = None
+        names = listings[dex]
+        return None if names is None else coin in names
 
     async def marks_for(coin: str) -> dict[int, float] | None:
         """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
         first address to ask reads them, the others wait for that answer), so every address is clipped against the
-        same marks. The clip is an anti-wash rule, so a read that may succeed later (rate limit, server error, no
-        answer) is recorded and fails the day until the deadline; after it, or at once when the exchange refuses the
-        coin outright (so no trader can hold everyone's day with a coin that has no candles), None: the coin's
-        builder fills go uncounted and the day's return of an address that traded the coin is unknown."""
+        same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
+        after it, or at once for a coin the exchange does not list (it answers such a coin with an error, so it would
+        otherwise hold everyone's day), None: the coin's builder fills go uncounted and the day's return of an address
+        that traded the coin is unknown."""
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
                     marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
                 except Exception as exc:  # noqa: BLE001
                     store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
-                    if not past_deadline and not getattr(exc, "lasting", False):
+                    if not past_deadline and await listed(coin) is not False:
                         raise RuntimeError(f"minute candles of {coin} unavailable: {exc}") from exc
                     marks_cache[coin] = None
         return marks_cache[coin]

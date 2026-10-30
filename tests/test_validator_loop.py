@@ -681,27 +681,32 @@ async def test_failed_minute_candles_wait_for_the_deadline_then_leave_the_coin_u
     await hl.close()
 
 
-@pytest.mark.parametrize(
-    "answer", [httpx.Response(422, json={"error": "unknown coin"}), httpx.Response(200, content=b"null")]
-)
-async def test_a_coin_the_exchange_refuses_never_holds_the_day(tmp_path: Path, answer: httpx.Response) -> None:
-    """The exchange refuses BTC's minute candles outright (a client error, or no answer at all): waiting cannot help,
-    so the day is scored at once, with the BTC builder fills uncounted, instead of holding every miner's day."""
+@pytest.mark.parametrize("listed", [False, True])
+async def test_a_coin_the_exchange_does_not_list_never_holds_the_day(tmp_path: Path, listed: bool) -> None:
+    """BTC's minute candles fail the way the exchange answers a coin it does not list (an error and `null`). Unlisted,
+    waiting cannot help: the day is scored at once, with the BTC builder fills uncounted. Listed, the read is waited
+    for until the deadline as usual."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
 
-    def btc_refused(request: httpx.Request) -> httpx.Response:
+    def btc_unknown(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
+        if body["type"] == "meta":
+            names = ["ETH", "TAO", *(["BTC"] if listed else [])]
+            return httpx.Response(200, json={"universe": [{"name": n} for n in names]})
         if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m" and body["req"]["coin"] == "BTC":
-            return httpx.Response(answer.status_code, content=answer.content, headers=answer.headers)
+            return httpx.Response(500, content=b"null")
         return _info_handler(request)
 
-    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_refused))
-    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
-    records = {r.hotkey: r for r in result.records}
-    assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10
-    assert store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'") == [
-        {"excluded": "no_mark"}
-    ]
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_unknown))
+    if listed:
+        with pytest.raises(RuntimeError, match="minute candles of BTC"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+    else:
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+        records = {r.hotkey: r for r in result.records}
+        assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10
+        excluded = store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'")
+        assert excluded == [{"excluded": "no_mark"}]
     await hl.close()
 
 
