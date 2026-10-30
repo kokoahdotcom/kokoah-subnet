@@ -401,7 +401,9 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
 - **Creates the account's key inside the machine** and never exports it. Nobody else can sign for the account, so
   no person can trade it by hand: every action on it comes from the machine. The key lives in memory; before the
   account is used, the machine stores a copy encrypted with a secret only the miner holds (given at start) with
-  the owner's service, which accepts it only with the machine's attestation. **Restore:** a new sealed machine
+  the owner's service, which accepts it only with the machine's attestation. The service's address is an image
+  setting (https, certificate checked), never a start setting, so whoever starts a machine cannot put a relay in
+  its place and read what it stores or gets back. **Restore:** a new sealed machine
   started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
   service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
   and the account stays an agent account. The key store accepts only tokens that carry exactly the store or
