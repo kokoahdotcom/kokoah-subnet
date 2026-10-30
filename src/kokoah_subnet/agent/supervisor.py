@@ -2,10 +2,12 @@
 
 Image settings (`/etc/kokoah-agent/image.json`, part of the image and so of its attested digest; never taken
 from the environment, because changing them would change what the guarantees mean): Kokoah's builder address and
-fee, and whether this is a development image (development images are never approved by validators).
+fee, the owner's key service (an https URL, its certificate checked), and whether this is a development image
+(development images are never approved by validators). The key service is part of the image because whoever
+starts the machine must not be able to put a relay in its place: the stored copy is encrypted with the miner's own
+secret, and a restore hands a copy back.
 
 Start settings (environment, passed by the miner when they start the machine):
-  KOKOAH_AGENT_SERVICE      the owner's agent service URL
   KOKOAH_AGENT_SUBMISSION   the submission id (sha256 of the stored bundle bytes)
   KOKOAH_AGENT_BUNDLE_KEY   hex AES key for a private (encrypted) bundle
   KOKOAH_AGENT_NETUID, KOKOAH_AGENT_HOTKEY   the subnet and hotkey the account is bound to
@@ -39,7 +41,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -76,6 +78,7 @@ class ImageSettings:
     builder: str
     builder_fee_tenths_bps: int
     development: bool = False
+    service: str = ""  # the owner's key service
 
     @staticmethod
     def load(path: Path = IMAGE_SETTINGS) -> ImageSettings:
@@ -84,7 +87,18 @@ class ImageSettings:
             builder=str(raw["builder"]).lower(),
             builder_fee_tenths_bps=int(raw.get("builder_fee_tenths_bps", 25)),
             development=bool(raw.get("development", False)),
+            service=str(raw.get("service", "")),
         )
+
+
+def service_url(image: ImageSettings, dev: bool, environ: Mapping[str, str]) -> str:
+    """The key service this machine talks to: the image's own, over https. Only a development image run in
+    development mode takes another (`KOKOAH_AGENT_SERVICE`, a local service for tests)."""
+    if dev and environ.get("KOKOAH_AGENT_SERVICE"):
+        return environ["KOKOAH_AGENT_SERVICE"]
+    if not image.service.startswith("https://"):
+        raise SystemExit("the image names no https key service")
+    return image.service
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -318,8 +332,8 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     image = ImageSettings.load()
     dev = image.development and os.environ.get("KOKOAH_AGENT_DEV") == "1"
-    http = httpx.Client(timeout=60)
-    service = env("KOKOAH_AGENT_SERVICE")
+    http = httpx.Client(timeout=60)  # certificates are checked: the service is reached as itself or not at all
+    service = service_url(image, dev, os.environ)
     submission = env("KOKOAH_AGENT_SUBMISSION")
     plain, code = fetch_code(service, submission, os.environ.get("KOKOAH_AGENT_BUNDLE_KEY"), http)
     uid: int | None
