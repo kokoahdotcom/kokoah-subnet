@@ -400,7 +400,7 @@ def test_a_flood_of_attestations_holds_only_their_own_threads(setup: Any, monkey
     import threading
 
     h, _, _, _ = setup
-    monkeypatch.setattr(harness_module, "ATTESTATIONS_PER_MINUTE", (100, 100))
+    monkeypatch.setattr(harness_module, "ATTESTATIONS_PER_MINUTE", 100)
     release, lock = threading.Event(), threading.Lock()
     inside = [0, 0]  # now, most at once
 
@@ -431,3 +431,21 @@ def test_a_flood_of_attestations_holds_only_their_own_threads(setup: Any, monkey
     agent_code, codes = asyncio.run(flood())
     assert agent_code == 200 and codes == [200] * 30
     assert inside[1] == harness_module.ATTESTATION_WORKERS  # 30 waiting, only 4 threads held
+
+
+def test_nobody_s_requests_use_up_another_caller_s(setup: Any) -> None:
+    """Many callers sending bad signed requests or attestations: the miner's own stop and a validator's attestation
+    are still answered (there is no overall bucket for anyone to empty)."""
+    h, _, master, _ = setup
+    app = public_app(h)
+    for i in range(50):
+        noisy = TestClient(app, client=(f"198.51.100.{i}", 5000))
+        for _ in range(12):
+            noisy.post("/withdraw", json={"time_ms": 1, "signature": "0x00", "amount_usd": "1"})
+            noisy.get("/attestation", params={"challenge": "zz"})
+    t = int(time.time() * 1000)
+    sig = "0x" + bytes(master.sign_message(encode_defunct(text=stop_message(h.address, t))).signature).hex()
+    miner = TestClient(app, client=("203.0.113.50", 5000))
+    assert miner.post("/stop", json={"time_ms": t, "signature": sig}).json()["ok"] is True
+    validator = TestClient(app, client=("203.0.113.51", 5000))
+    assert validator.get("/attestation", params={"challenge": "ab" * 32}).status_code == 200

@@ -146,8 +146,9 @@ curl http://<machine>:8080/status
 curl "http://<machine>:8080/attestation?challenge=$(openssl rand -hex 32)"   # a token: the machine proves itself
 ```
 
-`/attestation` answers 6 requests a minute from one address (and 120 from everyone), `/withdraw` and `/stop` 10
-(and 60), then "429 too many requests" for the rest of the minute; `/status` and `/binding` are never limited.
+`/attestation` answers 6 requests a minute from one address, `/withdraw` and `/stop` 10, then "429 too many
+requests" to that address for the rest of the minute (others are not affected); `/status` and `/binding` are never
+limited.
 
 If `/status` does not answer a few minutes after the start, the machine stopped. Check every setting (an address
 with a typo, an unknown network, a missing or weak secret, a start permission that was used or is more than 7 days

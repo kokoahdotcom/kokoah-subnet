@@ -19,8 +19,8 @@ To the world (TCP, `public_app`):
   GET /status, GET /binding (the subnet binding line signed by the account), GET /attestation?challenge=<64 hex>
   (a fresh token with the challenge and the binding digest as nonces, the validators' 32 random bytes), POST
   /withdraw and POST /stop (both signed by the miner's own address; withdrawals go only to that address).
-  Attestations and signed requests are rate limited per caller and overall, and run on threads of their own, so a
-  flood of them never holds up the agent's calls.
+  Attestations and signed requests are rate limited per caller (never overall: nobody's requests use up anyone
+  else's), and run on threads of their own, so a flood of them never holds up the agent's calls.
 """
 
 from __future__ import annotations
@@ -80,9 +80,9 @@ AGENT_METHODS = frozenset(
     {"order", "cancel", "cancel_by_cloid", "update_leverage", "update_isolated_margin", "schedule_cancel"}
 )
 SIGNED_REQUEST_WINDOW_MS = 300_000
-# the public interface: requests a minute (from one caller, from everyone), and the threads its slow work may hold
-ATTESTATIONS_PER_MINUTE = (6, 120)  # validators ask once per check; each answer is a call to the launcher
-SIGNED_PER_MINUTE = (10, 60)  # /withdraw and /stop: the miner's own requests
+# the public interface: requests a minute from one caller, and the threads its slow work may hold
+ATTESTATIONS_PER_MINUTE = 6  # validators ask once per check; each answer is a call to the launcher
+SIGNED_PER_MINUTE = 10  # /withdraw and /stop: the miner's own requests
 ATTESTATION_WORKERS = 4
 SIGNED_WORKERS = 2
 
@@ -459,14 +459,14 @@ def agent_app(h: Harness) -> FastAPI:
 
 
 class Throttle:
-    """Token buckets: at most `per_caller` requests a minute from one caller and `overall` from everyone (bursts up to
-    the same numbers). A request over either is refused before any work; idle callers are forgotten."""
+    """Token buckets: at most `per_caller` requests a minute from one caller (bursts up to the same number), and, when
+    `overall` is set, from everyone. A request over either is refused before any work; idle callers are forgotten."""
 
-    def __init__(self, per_caller: int, overall: int, max_callers: int = 4096) -> None:
+    def __init__(self, per_caller: int, overall: int | None = None, max_callers: int = 4096) -> None:
         self.per_caller, self.overall, self.max_callers = per_caller, overall, max_callers
         self._lock = threading.Lock()
         self._callers: dict[str, tuple[float, float]] = {}  # caller -> (tokens, when)
-        self._everyone = (float(overall), time.monotonic())
+        self._everyone = (float(overall or 0), time.monotonic())
 
     @staticmethod
     def _take(bucket: tuple[float, float], per_minute: int, now: float) -> tuple[float, float] | None:
@@ -477,8 +477,12 @@ class Throttle:
         now = time.monotonic() if now is None else now
         with self._lock:
             mine = self._take(self._callers.get(caller, (float(self.per_caller), now)), self.per_caller, now)
-            everyone = self._take(self._everyone, self.overall, now) if mine else None
-            if mine is None or everyone is None:
+            everyone = self._everyone
+            if mine is not None and self.overall is not None:
+                taken = self._take(self._everyone, self.overall, now)
+                mine = mine if taken is not None else None
+                everyone = taken or everyone
+            if mine is None:
                 return False
             if caller not in self._callers and len(self._callers) >= self.max_callers:
                 idle = [c for c, (_, when) in self._callers.items() if now - when >= 60]  # full again: forgettable
@@ -501,7 +505,7 @@ def caller(request: Request) -> str:
 
 def public_app(h: Harness) -> FastAPI:
     app = FastAPI(title="Kokoah agent harness", docs_url=None, redoc_url=None)
-    attestations, signed = Throttle(*ATTESTATIONS_PER_MINUTE), Throttle(*SIGNED_PER_MINUTE)
+    attestations, signed = Throttle(ATTESTATIONS_PER_MINUTE), Throttle(SIGNED_PER_MINUTE)
     # threads of their own (the agent's calls use the default ones), so these never hold up the agent
     attesting, checking = anyio.CapacityLimiter(ATTESTATION_WORKERS), anyio.CapacityLimiter(SIGNED_WORKERS)
 
