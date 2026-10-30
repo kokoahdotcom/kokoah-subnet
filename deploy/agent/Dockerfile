@@ -3,7 +3,8 @@
 # gives the same digest and anyone can rebuild an approved image and compare. Its digest is what validators approve
 # (src/kokoah_subnet/agent/images.py, which is left out of the image so that approving an image does not change it).
 # Everything that affects the guarantees is in the image: the code, the pinned packages, and image.json (builder,
-# fee). Only the start settings listed in the launch policy below can be passed in.
+# fee, the owner's key service, whether it is a development image). Only the start settings listed in the launch
+# policy below can be passed in.
 FROM python@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1

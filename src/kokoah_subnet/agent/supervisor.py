@@ -98,8 +98,15 @@ def service_url(image: ImageSettings, dev: bool, environ: Mapping[str, str]) -> 
     if dev and environ.get("KOKOAH_AGENT_SERVICE"):
         return environ["KOKOAH_AGENT_SERVICE"]
     if not image.service.startswith("https://"):
+        if dev:
+            raise SystemExit("set KOKOAH_AGENT_SERVICE to the local key service for a development run")
         raise SystemExit("the image names no https key service")
     return image.service
+
+
+def development_mode(image: ImageSettings, environ: Mapping[str, str]) -> bool:
+    """A development image asked to run as one (`KOKOAH_AGENT_DEV=1`); a release image never is, whatever is set."""
+    return image.development and environ.get("KOKOAH_AGENT_DEV") == "1"
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -339,7 +346,7 @@ def account_key(
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     image = ImageSettings.load()
-    dev = image.development and os.environ.get("KOKOAH_AGENT_DEV") == "1"
+    dev = development_mode(image, os.environ)
     # certificates are checked and no proxy or certificate setting from the environment is read: the service is
     # reached as itself or not at all
     http = httpx.Client(timeout=60, trust_env=False)

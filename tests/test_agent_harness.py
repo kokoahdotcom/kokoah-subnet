@@ -333,13 +333,29 @@ def test_the_machine_talks_only_to_the_key_service_its_image_names() -> None:
             service_url(bare, False, {})
     dev = ImageSettings("0x" + "43" * 20, 25, development=True)
     assert service_url(dev, True, {"KOKOAH_AGENT_SERVICE": "http://127.0.0.1:48131"}) == "http://127.0.0.1:48131"
+    with pytest.raises(SystemExit, match="set KOKOAH_AGENT_SERVICE"):
+        service_url(dev, True, {})
 
 
 def test_the_release_image_names_the_key_service_and_the_miner_cannot_override_it() -> None:
+    """The launch policy lets exactly these start settings in, and no command, mount or capability override: so no
+    key service, proxy, certificate or development setting can reach a release machine."""
+    import re
     from pathlib import Path
 
+    from kokoah_subnet.agent.supervisor import ImageSettings, development_mode
+
     root = Path(__file__).resolve().parents[1]
-    settings = json.loads((root / "deploy" / "agent" / "image.json").read_text())
-    assert settings["service"] == "https://api.kokoah.com/miners" and settings["development"] is False
-    policy = (root / "deploy" / "agent" / "Dockerfile").read_text()
-    assert "KOKOAH_AGENT_SERVICE" not in policy  # not a start setting the launch policy lets through
+    image = ImageSettings.load(root / "deploy" / "agent" / "image.json")
+    assert image.service == "https://api.kokoah.com/miners" and image.development is False
+    assert not development_mode(image, {"KOKOAH_AGENT_DEV": "1"})
+    dockerfile = (root / "deploy" / "agent" / "Dockerfile").read_text()
+    labels = dict(re.findall(r'^LABEL "tee\.launch_policy\.([a-z_]+)"="([^"]*)"$', dockerfile, flags=re.M))
+    assert set(labels) == {"allow_env_override", "log_redirect", "monitoring_memory_allow"}
+    assert set(labels["allow_env_override"].split(",")) == {
+        f"KOKOAH_AGENT_{name}"
+        for name in ("SUBMISSION", "BUNDLE_KEY", "NETUID", "HOTKEY", "MASTER", "SECRET", "PERMIT", "RESTORE", "NETWORK")
+    }
+    assert labels["log_redirect"] == "debugonly"
+    dev = ImageSettings.load(root / "deploy" / "agent" / "image.dev.json")
+    assert dev.development and development_mode(dev, {"KOKOAH_AGENT_DEV": "1"}) and not development_mode(dev, {})
