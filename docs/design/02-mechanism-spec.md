@@ -402,8 +402,9 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   the owner's service, which accepts it only with the machine's attestation. **Restore:** a new sealed machine
   started with the same secret gets the copy back after proving with a fresh attestation (an answer to the
   service's challenge) that it is a genuine sealed machine of an approved image; the key stays out of human hands
-  and the account stays an agent account. The key store accepts only tokens made for its own audience, which the
-  machine's public `/attestation` never asks for, so no answer to a validator's challenge can stand in for one. **Release:** the miner can take the copy themselves with a request
+  and the account stays an agent account. The key store accepts only tokens that carry exactly the store or
+  restore digest; the machine's public `/attestation` always signs two nonces, so no answer to anyone's challenge can
+  stand in for one. **Release:** the miner can take the copy themselves with a request
   signed by the machine's master address (`agent release`); the service records it publicly (`GET /key-store/released`),
   and from then on the account never earns the agent bonus again, whatever its machine says. The operator cannot
   read the copy (it lacks the secret); the miner cannot get it without a public release. **The secret** is 32 bytes

@@ -375,8 +375,8 @@ def test_a_restore_token_works_once_in_every_spelling(world: dict[str, Any]) -> 
 
 def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dict[str, Any]) -> None:
     """A genuine machine answers anyone's challenge at `/attestation`. Asked for a store or restore digest, its answer
-    is still refused by the key store: a key made by hand can never be filed as a machine's own, and a copy is never
-    handed to someone relaying the answer."""
+    (two nonces) is still refused by the key store: it never files a key made by hand as a machine's own, and never
+    hands a copy to someone relaying that answer."""
     svc: TestClient = world["svc"]
     master = Account.create()
     key = start(world, master)
@@ -397,7 +397,8 @@ def test_a_machines_public_attestation_never_stores_or_restores_a_key(world: dic
         "token": machine.attestation(digest)["token"],
     }
     refused = svc.put(f"/key-store/{by_hand.address}", json=body)
-    assert refused.status_code == 403 and "other nonces" in refused.json()["detail"]
+    assert refused.status_code == 403
+    assert any(why in refused.json()["detail"].lower() for why in ("audience", "other nonces"))
     challenge = world["keys"].challenge(address)
     relayed = machine.attestation(restore_digest(address, challenge))["token"]
     assert svc.post(f"/key-store/{address}/restore", json={"token": relayed}).status_code == 403
@@ -517,10 +518,13 @@ def test_a_starting_machine_gets_past_a_passing_fault(world: dict[str, Any], mon
 
 
 def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_files_nothing(
-    world: dict[str, Any],
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Harness 1.1.0 asks for its key-store tokens with the default audience: its own store and restore are accepted
-    (exactly the one digest), while its public answer to the same digest is refused (two nonces)."""
+    """Harness 1.1.0 asks for its key-store tokens with the default audience: from that image only, its own store and
+    restore are accepted (exactly the one digest), while its public answer to the same digest is refused (two nonces).
+    Another image's default-audience token is refused."""
+    from kokoah_subnet.agent import images
+
     svc: TestClient = world["svc"]
     master, account = Account.create(), Account.create()
     blob = encrypt_key(bytes(account.key), account.address, SECRET)
@@ -534,9 +538,12 @@ def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_
         "submission": world["submission"],
         "permit": p,
     }
+    own = world["machine"].token([digest])
+    assert svc.put(f"/key-store/{account.address}", json={**body, "token": own}).status_code == 403  # not 1.1.0
+    monkeypatch.setattr(images, "DEFAULT_AUDIENCE_KEYSTORE_IMAGES", (IMAGE,))  # the test image stands in for 1.1.0
     public = world["machine"].token([digest, "ab" * 32])  # how /attestation answers: the challenge and the binding
     assert svc.put(f"/key-store/{account.address}", json={**body, "token": public}).status_code == 403
-    stored = svc.put(f"/key-store/{account.address}", json={**body, "token": world["machine"].token([digest])})
+    stored = svc.put(f"/key-store/{account.address}", json={**body, "token": own})
     assert stored.status_code == 200, stored.text
     address = account.address.lower()
     challenge = world["keys"].challenge(address)

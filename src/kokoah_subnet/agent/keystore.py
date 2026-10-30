@@ -9,8 +9,9 @@
 - **Restore.** A new sealed machine started with the same secret gets the ciphertext back after proving, with a
   fresh attestation token, that it is a genuine sealed machine of an approved image; it decrypts the key inside.
   No person ever holds the key, so the account stays an agent account.
-- Both tokens carry the key store's own audience, which the machine's public `/attestation` never uses: only the
-  machine's supervisor asks for them, for the key it created or restores itself.
+- Both tokens carry exactly one nonce, the store or restore digest; the machine's public `/attestation` always signs
+  two (the caller's challenge and the binding digest), so its answer never stands in for one. From harness 1.2.0 they
+  also carry the key store's own audience; harness 1.1.0's carry the default one, accepted from that image only.
 - **Release.** The miner can take the ciphertext themselves, with a request signed by their own address (the
   machine's master). Then the miner holds the key and can trade the account by hand, so the release is public and
   the account never earns the agent bonus again.
