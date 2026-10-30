@@ -6,6 +6,7 @@ import platform
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -267,3 +268,73 @@ def test_the_harness_starts_the_agent_only_once_a_probe_sees_nothing(
     assert supervisor.visible_to_agent([str(launcher), missing], 65534, 65534)  # the view failed: refuse
     monkeypatch.setattr(sys, "executable", "/nonexistent/python")
     assert supervisor.visible_to_agent([str(launcher)], 65534, 65534)  # the sandbox did not start: refuse
+
+
+LEAVE_CHILD = (
+    "import os, sys, time\n"
+    "pid = os.fork()\n"
+    "if pid == 0:\n"
+    "    if sys.argv[2] == 'setsid':\n"
+    "        os.setsid()  # its own session: out of the agent's process group\n"
+    "    time.sleep(120)\n"
+    "    os._exit(0)\n"
+    "open(sys.argv[1], 'w').write(str(pid))\n"
+)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/status").read_text()
+    except OSError:
+        return False
+    return "\nState:\tZ" not in state and "\nState:\tX" not in state
+
+
+def test_what_the_agent_forked_ends_with_it(tmp_path: Path) -> None:
+    from kokoah_subnet.agent import supervisor
+
+    note = tmp_path / "child"
+    runner = supervisor.AgentRunner(
+        supervisor.agent_command(1024, None, None, program=[sys.executable, "-c", LEAVE_CHILD, str(note), "stay"]),
+        tmp_path,
+    )
+    assert runner.start().wait(timeout=30) == 0
+    child = int(note.read_text())
+    assert _alive(child)  # the agent exited; what it forked is still there
+    runner.stop()
+    for _ in range(50):
+        if not _alive(child):
+            break
+        time.sleep(0.05)
+    assert not _alive(child)
+
+
+@needs_root_and_namespaces
+def test_every_process_of_the_agent_user_ends_even_one_that_left_its_group() -> None:
+    import shutil
+    import tempfile
+
+    from kokoah_subnet.agent import supervisor
+
+    uid = 61234  # a user nothing else on this machine runs as
+    if supervisor.processes_of(uid):
+        pytest.skip(f"uid {uid} is in use here")
+    home = Path(tempfile.mkdtemp(dir="/tmp"))  # a folder the agent's user can reach (pytest's is root's alone)
+    os.chmod(home, 0o777)
+    request_cleanup = home
+    note = home / "child"
+    command = supervisor.agent_command(
+        1024, uid, uid, program=["/usr/bin/python3", "-c", LEAVE_CHILD, str(note), "setsid"]
+    )
+    runner = supervisor.AgentRunner(command, home, uid=uid)
+    try:
+        assert runner.start().wait(timeout=30) == 0
+        child = int(note.read_text())
+        assert _alive(child) and supervisor.processes_of(uid) == [child]
+        runner.start().wait(timeout=30)  # the next start ends the leftover first
+        assert child not in supervisor.processes_of(uid)
+        runner.stop()
+        assert supervisor.processes_of(uid) == []
+    finally:
+        runner.stop()
+        shutil.rmtree(request_cleanup, ignore_errors=True)

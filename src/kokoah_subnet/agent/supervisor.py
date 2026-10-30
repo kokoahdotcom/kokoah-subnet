@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import pwd
+import signal
 import subprocess
 import sys
 import threading
@@ -244,23 +245,66 @@ def visible_to_agent(directories: list[str], uid: int | None, gid: int | None) -
     return [line for line in out.stdout.splitlines() if line]
 
 
+def processes_of(uid: int) -> list[int]:
+    """The live (not yet exited) processes whose real user is `uid`."""
+    found = []
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = Path(f"/proc/{entry.name}/status").read_text()
+        except OSError:
+            continue
+        fields = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+        uids = fields.get("Uid", "").split()
+        if uids and int(uids[0]) == uid and not fields.get("State", "").strip().startswith(("Z", "X")):
+            found.append(int(entry.name))
+    return found
+
+
 class AgentRunner:
     """Runs the agent in the sandbox and restarts it (with a growing pause) until stopped. The sandbox starts from
-    `LAUNCHER_ENV` in the agent's directory; the command carries the agent's own environment (`agent_command`)."""
+    `LAUNCHER_ENV` in the agent's directory; the command carries the agent's own environment (`agent_command`).
+    Whatever the agent started ends with it: before every start, after every exit and on stop, every process of the
+    agent's user is killed (without a user of its own, a development run: its process group), so nothing it forked
+    keeps trading through the harness socket or is left behind when the next one starts."""
 
-    def __init__(self, command: list[str], home: Path | None = None) -> None:
+    def __init__(self, command: list[str], home: Path | None = None, uid: int | None = None) -> None:
         self.command = command
         self.home = home or AGENT_HOME
+        self.uid = uid
         self.stopped = threading.Event()
         self.proc: subprocess.Popen[bytes] | None = None
 
+    def end_all(self) -> None:
+        if self.uid is None:
+            if self.proc is not None:
+                try:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            return
+        for _ in range(100):  # a process can fork while the others are killed: until none is left
+            pids = processes_of(self.uid)
+            if not pids:
+                break
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            time.sleep(0.02)
+        reap_orphans(self.proc.pid if self.proc else None)
+
     def stop(self) -> None:
         self.stopped.set()
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
+        self.end_all()
 
     def start(self) -> subprocess.Popen[bytes]:
-        self.proc = subprocess.Popen(self.command, env=LAUNCHER_ENV, cwd=str(self.home), close_fds=True)
+        self.end_all()
+        self.proc = subprocess.Popen(
+            self.command, env=LAUNCHER_ENV, cwd=str(self.home), close_fds=True, start_new_session=True
+        )
         return self.proc
 
     def run(self) -> None:
@@ -268,11 +312,28 @@ class AgentRunner:
         while not self.stopped.is_set():
             started = time.time()
             code = self.start().wait()
+            self.end_all()
             if self.stopped.is_set():
                 break
             pause = 5.0 if time.time() - started > 600 else min(pause * 2, 300.0)
             log.warning("agent exited with %s; restarting in %.0f s", code, pause)
             self.stopped.wait(pause)
+
+
+def reap_orphans(keep: int | None) -> None:
+    """In the sealed machine the supervisor is the container's first process, so the agent's orphans become its
+    children: collect the ones that exited (never `keep`, the agent process `Popen` waits for itself)."""
+    while True:
+        try:
+            exited = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            return
+        if exited is None or exited.si_pid == keep:
+            return
+        try:
+            os.waitpid(exited.si_pid, os.WNOHANG)
+        except ChildProcessError:
+            return
 
 
 def funding_loop(h: Harness, stop: threading.Event) -> None:
@@ -437,7 +498,7 @@ def main() -> int:
         builder_fee_tenths_bps=image.builder_fee_tenths_bps,
         mainnet=mainnet,
     )
-    runner = AgentRunner(agent_command(1024, uid, gid, hidden, environment=agent_environment()))
+    runner = AgentRunner(agent_command(1024, uid, gid, hidden, environment=agent_environment()), uid=uid)
     writes = not (dev and os.environ.get("KOKOAH_AGENT_NO_WRITES") == "1")
     harness = Harness(
         config, key, attestor, http=httpx.Client(timeout=20, trust_env=False), on_stop=runner.stop, allow_writes=writes
