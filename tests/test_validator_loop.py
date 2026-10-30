@@ -608,6 +608,18 @@ async def test_after_the_deadline_a_failed_history_read_costs_that_address_the_d
     await hl.close()
 
 
+async def test_past_the_deadline_a_failed_own_fill_history_leaves_only_that_return_unknown(tmp_path: Path) -> None:
+    """A's own fill history cannot be read, past the deadline: its off-market fills cannot be checked, so A's return
+    for the day is unknown; B is scored as usual."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    FILLS_FAIL.add(addr_a)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)  # long past the deadline
+    known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
+    assert {r["address"]: bool(r["return_known"]) for r in known} == {addr_a: False, addr_b: True}
+    assert {r.hotkey: r for r in result.records}[HK_B].pay_alpha > 0
+    await hl.close()
+
+
 async def test_points_an_earlier_attempt_stored_still_measure_the_day(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
