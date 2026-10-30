@@ -22,7 +22,7 @@ from kokoah_subnet.validator.collect import (
     retry_deadline,
 )
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo, day_bounds_ms
-from kokoah_subnet.validator.loop import step
+from kokoah_subnet.validator.loop import other_subnet, start_day_for, step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
 
@@ -339,6 +339,48 @@ async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> N
     report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 120)
     assert report["weights"]["ok"] and len(chain.executed) == 2
     await hl.close()
+
+
+async def test_watch_mode_scores_and_records_but_never_submits_weights(tmp_path: Path) -> None:
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "watch": True})
+    now = DAY_MS / 1000 + 86_400 + 600
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
+    assert report["scored"]["day"] == DAY and store.day(DAY) is not None
+    assert report["weights"] == {"skipped": "watch mode: weights are never submitted"} and chain.executed == []
+    chain._block += 360
+    report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 120)
+    assert chain.executed == []
+    await hl.close()
+
+
+def test_a_record_serves_one_subnet() -> None:
+    assert other_subnet(None, "finney", 39) is None  # a fresh record
+    assert other_subnet(("finney", 39), "finney", 39) is None
+    assert other_subnet(("finney", 39), "wss://my-node:443", 39) is None  # an endpoint of the same chain
+    refused = other_subnet(("test", 385), "finney", 39)
+    assert refused and "test netuid 385" in refused and "fresh database" in refused
+    assert other_subnet(("test", 385), "finney", 385)  # the same number on another network
+    assert other_subnet(("finney", 39), "finney", 40)
+
+
+def test_the_start_day_is_given_else_remembered_else_yesterday(tmp_path: Path) -> None:
+    store = Store(tmp_path / "v.sqlite")
+    now = DAY_MS / 1000 + 86_400 + 600  # early on the day after DAY
+    assert start_day_for(store, "", now) == DAY  # a fresh record starts with yesterday
+    assert start_day_for(store, "", now + 5 * 86_400) == DAY  # and remembers it across restarts
+    assert start_day_for(store, "2026-10-23", now) == "2026-10-23"  # a given day wins and is remembered
+    assert start_day_for(store, "", now) == "2026-10-23"
+    store.close()
+
+
+def test_the_record_remembers_its_subnet(tmp_path: Path) -> None:
+    store = Store(tmp_path / "v.sqlite")
+    assert store.last_run_subnet() is None
+    store.start_run(network="test", netuid=385)
+    store.start_run(network="finney", netuid=39)
+    assert store.last_run_subnet() == ("finney", 39)
+    store.close()
 
 
 async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:

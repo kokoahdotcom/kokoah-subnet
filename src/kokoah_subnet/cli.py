@@ -187,8 +187,9 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--builder", required=True, help="the builder address whose daily fill file is scored")
     vrun.add_argument(
         "--burn-hotkey",
-        required=True,
-        help="registered hotkey (own coldkey) that receives a day on which no miner has any weight",
+        default="",
+        help="registered hotkey (own coldkey) that receives a day on which no miner has any weight; without one, "
+        "such a day goes to the owner hotkey",
     )
     vrun.add_argument("--data-dir", required=True, type=Path)
     vrun.add_argument(
@@ -199,12 +200,17 @@ def build_parser() -> argparse.ArgumentParser:
     vrun.add_argument("--wallet", default="validator")
     vrun.add_argument("--wallet-hotkey", default="default")
     vrun.add_argument("--wallet-path", default=None)
-    vrun.add_argument("--start-day", default="2026-10-20", help="day index 0, YYYY-MM-DD")
+    vrun.add_argument(
+        "--start-day",
+        default="",
+        help="the first day scored, YYYY-MM-DD; default: the one the record remembers, else yesterday (UTC)",
+    )
     vrun.add_argument("--hl-info-url", default=None)
     vrun.add_argument("--builder-base-url", default=None)
     vrun.add_argument("--tao-usd-fallback", type=float, default=0.0, help="TAO/USD when no TAO perp is listed")
     vrun.add_argument("--poll-seconds", type=int, default=60)
     vrun.add_argument("--once", action="store_true", help="one pass, then exit")
+    vrun.add_argument("--watch", action="store_true", help="score and record every day, never submit weights")
     vrun.add_argument("--day", default=None, help="score this day (YYYY-MM-DD; only the oldest pending day)")
     vrun.add_argument(
         "--agent-service",
@@ -366,6 +372,7 @@ def _validator(args: argparse.Namespace) -> int:
             poll_s=args.poll_seconds,
             db_url=args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", ""),
             agent_service=args.agent_service,
+            watch=args.watch,
         )
         asyncio.run(run(cfg, once=args.once, day=args.day))
         return 0

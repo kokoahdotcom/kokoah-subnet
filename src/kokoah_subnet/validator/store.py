@@ -86,6 +86,12 @@ class Store:
             result = c.execute(insert(S.runs).values(started_at=_now(), **fields))
             return int(result.inserted_primary_key[0])
 
+    def last_run_subnet(self) -> tuple[str, int] | None:
+        """The network and netuid of the record's latest run."""
+        with self._engine.connect() as c:
+            row = c.execute(select(S.runs.c.network, S.runs.c.netuid).order_by(S.runs.c.id.desc()).limit(1)).first()
+        return (str(row[0]), int(row[1])) if row else None
+
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         with self._engine.connect() as c:
             row = c.execute(select(S.meta.c.value).where(S.meta.c.key == key)).first()

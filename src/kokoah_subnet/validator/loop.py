@@ -10,12 +10,14 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.engine import make_url
 
 from kokoah_subnet import __version__
+from kokoah_subnet.chain import NETWORKS
 from kokoah_subnet.mechanism import DEFAULT, SPEC_VERSION, Params
 
 from .builder_feed import NotPublished, download, sha256
@@ -30,6 +32,31 @@ log = logging.getLogger("kokoah_subnet.validator")
 def previous_utc_day(now: float | None = None) -> str:
     t = datetime.fromtimestamp(now if now is not None else time.time(), tz=UTC)
     return (t - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def start_day_for(store: Store, given: str, now: float | None = None) -> str:
+    """The first day this validator scores: the one given, else the one its record remembers, else yesterday (UTC).
+    Remembered, so a restart without the setting goes on from the same day."""
+    day = given or store.get_meta("start_day") or previous_utc_day(now)
+    if store.get_meta("start_day") != day:
+        store.set_meta("start_day", day)
+    return day
+
+
+def other_subnet(previous: tuple[str, int] | None, network: str, netuid: int) -> str | None:
+    """Why a record cannot serve this subnet, or None. A record belongs to one subnet: its days, bindings and states
+    mean nothing on another. Another netuid, or another named network, is refused; an endpoint URL cannot be told
+    apart from a named network, so it is let through."""
+    if previous is None:
+        return None
+    was_network, was_netuid = previous
+    named = was_network in NETWORKS and network in NETWORKS
+    if was_netuid == netuid and not (named and was_network != network):
+        return None
+    return (
+        f"this record is for {was_network} netuid {was_netuid}, not {network} netuid {netuid}: "
+        "give this subnet a fresh database (--db-url) or data directory"
+    )
 
 
 def pending_days(store: Store, start_day: str, last_day: str) -> list[str]:
@@ -149,7 +176,10 @@ async def step(
     # while older days are still pending, a newly scored day does not trigger a submission of its own: the chain
     # gets the weights of the latest day once a tempo, not one submission per day caught up
     caught_up = not pending_days(store, cfg.start_day, previous_utc_day(now))
-    report["weights"] = await submit_weights(cfg, store, client, wallet, snap, caught_up)
+    if cfg.watch:
+        report["weights"] = {"skipped": "watch mode: weights are never submitted"}
+    else:
+        report["weights"] = await submit_weights(cfg, store, client, wallet, snap, caught_up)
     return report
 
 
@@ -217,6 +247,11 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     store = Store(cfg.store_target())
+    refused = other_subnet(store.last_run_subnet(), cfg.network, cfg.netuid)
+    if refused:
+        store.close()
+        raise SystemExit(refused)
+    cfg = replace(cfg, start_day=start_day_for(store, cfg.start_day))
     hl = HyperliquidInfo(cfg.hl_info_url)
     wallet = (
         bt.Wallet(name=cfg.wallet_name, hotkey=cfg.wallet_hotkey, path=cfg.wallet_path)
