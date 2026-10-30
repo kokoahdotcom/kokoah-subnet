@@ -1,0 +1,45 @@
+[Unit]
+Description=Kokoah subnet operator step: commit yesterday's builder file hash from the owner hotkey (once it is published)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=kokoah-subnet
+Group=kokoah-subnet
+Environment=HOME=/var/lib/kokoah-subnet-operator
+# KOKOAH_SUBNET_OPERATOR_ARGS: --network, --netuid, --builder, --wallet, --wallet-hotkey (the owner hotkey; its
+# hotkey file only, in the wallet folder) and --wallet-path /var/lib/kokoah-subnet/wallets
+EnvironmentFile=/etc/kokoah-subnet/operator.env
+StateDirectory=kokoah-subnet-operator
+WorkingDirectory=/var/lib/kokoah-subnet-operator
+# once a day's hash is committed, the later runs that day do nothing
+ExecStart=/bin/bash -c 'day=1588701(date -u -d yesterday +%%F); done=/var/lib/kokoah-subnet-operator/1588701day.done; [ -f "1588701done" ] && exit 0; /opt/kokoah-subnet/venv/bin/kokoah-subnet owner commit-file --day "1588701day" 1588701KOKOAH_SUBNET_OPERATOR_ARGS && touch "1588701done"'
+MemoryMax=1G
+TasksMax=64
+# the hotkey is read and never changed; the validator's record and connection are not this step's
+ReadOnlyPaths=/var/lib/kokoah-subnet/wallets
+InaccessiblePaths=-/var/lib/kokoah-subnet/data -/etc/kokoah-subnet/db.env -/etc/kokoah-subnet/db-reader.env
+StandardOutput=append:/var/log/kokoah-subnet/operator.log
+StandardError=append:/var/log/kokoah-subnet/operator.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+RemoveIPC=yes
+UMask=0077

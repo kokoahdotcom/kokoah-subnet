@@ -8,6 +8,9 @@
 #   scripts/db.sh url        print the connection URL (from the env file); `url reader` the read-only one
 #   scripts/db.sh backup F [DB]   pg_dump (custom format) of the database (default kokoah_subnet) to file F
 #   scripts/db.sh create-db DB    create another database in the same container (same user), if missing
+#   scripts/db.sh owner-role ROLE DB   a login role that owns database DB and its tables, and nothing else: for a
+#                                 service that must not connect as the container's superuser (the agent service);
+#                                 its URL goes in the env file as KOKOAH_SUBNET_ROLE_<ROLE>_URL
 #
 # Listens on 127.0.0.1:48110 only. The passwords are generated once and kept in the env file (outside the repo):
 # $KOKOAH_SUBNET_DB_ENV, default ~/.local/share/kokoah/subnet-db.env, as KOKOAH_SUBNET_DB_URL=... for the validator
@@ -107,5 +110,38 @@ case "${1:-status}" in
     fi
     # only its owner connects: not PUBLIC, so not the read-only role either
     docker exec "$NAME" psql -U "$USER" -d "$DB" -qc "REVOKE ALL ON DATABASE $new FROM PUBLIC" ;;
+  owner-role)
+    ensure_env; role="${2:?role name}"; db="${3:?database name}"
+    [[ "$role" =~ ^[a-z_][a-z0-9_]*$ && "$db" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "bad role or database name" >&2; exit 1; }
+    [ "$role" != "$USER" ] && [ "$role" != "$READER" ] || { echo "$role is taken" >&2; exit 1; }
+    key="KOKOAH_SUBNET_ROLE_${role^^}"
+    if ! grep -q "^${key}_URL=" "$ENV_FILE"; then
+      pw="$(new_password)"
+      printf '%s_PASSWORD=%s\n%s_URL=postgresql+psycopg://%s:%s@127.0.0.1:%s/%s\n' "$key" "$pw" "$key" "$role" "$pw" "$PORT" "$db" >> "$ENV_FILE"
+      # shellcheck disable=SC1090
+      . "$ENV_FILE"
+    fi
+    pwvar="${key}_PASSWORD"
+    # the password goes in on stdin, never as an argument; the role may create tables in its database (the service
+    # creates its own at start) and owns those already there
+    docker exec -i "$NAME" psql -U "$USER" -d "$db" -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
+DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$role') THEN CREATE ROLE $role LOGIN; END IF;
+END \$\$;
+ALTER ROLE $role WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${!pwvar}';
+ALTER DATABASE $db OWNER TO $role;
+REVOKE ALL ON DATABASE $db FROM PUBLIC;
+DO \$\$ DECLARE t text; BEGIN
+  FOR t IN SELECT format('%I.%I', schemaname, tablename) FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE 'ALTER TABLE ' || t || ' OWNER TO $role';
+  END LOOP;
+END \$\$;
+DO \$\$ DECLARE d text; BEGIN
+  FOR d IN SELECT datname FROM pg_database WHERE datallowconn AND datname <> '$db' LOOP
+    EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC, $role', d);
+  END LOOP;
+END \$\$;
+SQL
+    echo "$role owns $db (URL in $ENV_FILE as ${key}_URL)" >&2 ;;
   *) sed -n 2,14p "$0" ;;
 esac

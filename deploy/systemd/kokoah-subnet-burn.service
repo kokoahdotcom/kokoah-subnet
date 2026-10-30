@@ -1,0 +1,55 @@
+[Unit]
+Description=Kokoah subnet burn: burns what the burn hotkey received (signed by its own coldkey)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=kokoah-subnet-burn
+Group=kokoah-subnet-burn
+Environment=HOME=/var/lib/kokoah-subnet-burn
+# the record the burns are written to (read by systemd, never by the service user)
+EnvironmentFile=/etc/kokoah-subnet/db.env
+# KOKOAH_SUBNET_BURN_ARGS: --network and --netuid
+EnvironmentFile=/etc/kokoah-subnet/burn.env
+# the burn wallet stays where it is (/etc/kokoah-subnet/burn-wallet, root's alone): systemd hands its files to this run
+# only, in a private place nobody else reads, and they are put together as a wallet named "burn"
+LoadCredential=coldkey:/etc/kokoah-subnet/burn-wallet/coldkey
+LoadCredential=coldkeypub:/etc/kokoah-subnet/burn-wallet/coldkeypub.txt
+LoadCredential=hotkey:/etc/kokoah-subnet/burn-wallet/hotkeys/default
+LoadCredential=hotkeypub:/etc/kokoah-subnet/burn-wallet/hotkeys/defaultpub.txt
+RuntimeDirectory=kokoah-subnet-burn
+StateDirectory=kokoah-subnet-burn
+WorkingDirectory=/var/lib/kokoah-subnet-burn
+ExecStartPre=/bin/mkdir -p %t/kokoah-subnet-burn/wallets/burn/hotkeys
+ExecStartPre=/bin/ln -sfn /run/credentials/%n/coldkey %t/kokoah-subnet-burn/wallets/burn/coldkey
+ExecStartPre=/bin/ln -sfn /run/credentials/%n/coldkeypub %t/kokoah-subnet-burn/wallets/burn/coldkeypub.txt
+ExecStartPre=/bin/ln -sfn /run/credentials/%n/hotkey %t/kokoah-subnet-burn/wallets/burn/hotkeys/default
+ExecStartPre=/bin/ln -sfn /run/credentials/%n/hotkeypub %t/kokoah-subnet-burn/wallets/burn/hotkeys/defaultpub.txt
+ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet owner burn --wallet burn --wallet-hotkey default --wallet-path %t/kokoah-subnet-burn/wallets $KOKOAH_SUBNET_BURN_ARGS
+MemoryMax=1G
+TasksMax=64
+InaccessiblePaths=-/var/lib/kokoah-subnet -/var/lib/kokoah-subnet-agents -/etc/kokoah-subnet/agent-service.env -/etc/kokoah-subnet/agent-wrap.key
+StandardOutput=append:/var/log/kokoah-subnet/burn.log
+StandardError=append:/var/log/kokoah-subnet/burn.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+RemoveIPC=yes
+UMask=0077
