@@ -64,6 +64,21 @@ def test_keys_and_secrets_are_never_packaged(tmp_path: Path) -> None:
     assert "lib/notes.txt" in str(refused.value)
     (d / "lib" / "hot.pem").unlink()
     (d / "lib" / "notes.txt").unlink()
+    # other kinds of keys by content or name
+    for name, text in (
+        ("lib/backup.asc", "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOY\n-----END PGP PRIVATE KEY BLOCK-----\n"),
+        ("lib/store.json", '{"crypto": {"ciphertext": "ab", "kdf": "scrypt"}}'),
+        ("lib/hk.json", '{"secretPhrase": "x", "accountId": "0x"}'),
+        ("lib/server.ppk", "PuTTY-User-Key-File-3: ssh-ed25519\n"),
+    ):
+        (d / name).write_text(text)
+        with pytest.raises(ValueError, match=name):
+            package(d)
+        (d / name).unlink()
+    # a key parser that only names the header in its code is packaged
+    (d / "lib" / "ssh.py").write_text('_SK_START = b"-----BEGIN OPENSSH PRIVATE KEY-----"\n')
+    assert "lib/ssh.py" in zipfile.ZipFile(io.BytesIO(package(d))).namelist()
+    (d / "lib" / "ssh.py").unlink()
     # a vendored package's certificate bundle is packaged
     (d / "certifi").mkdir()
     (d / "certifi" / "cacert.pem").write_text("-----BEGIN CERTIFICATE-----\nMIID\n-----END CERTIFICATE-----\n")

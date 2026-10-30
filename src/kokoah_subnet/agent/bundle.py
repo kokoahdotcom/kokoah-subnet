@@ -17,6 +17,7 @@ import fnmatch
 import hashlib
 import io
 import os
+import re
 import stat
 import zipfile
 from pathlib import Path
@@ -36,6 +37,7 @@ SECRET_FILES = (
     "*.mnemonic",
     "*.seed",
     "*.p12",
+    "*.ppk",
     "*.pfx",
     "*.jks",
     "*.keystore",
@@ -50,7 +52,14 @@ SECRET_FILES = (
     "utc--*",  # an Ethereum keystore file
 )
 SECRET_FOLDERS = frozenset({"wallets", ".bittensor", "hotkeys", ".ssh"})  # a wallet's hotkeys are not encrypted
-PRIVATE_KEY = b"PRIVATE KEY-----"  # the end of a PEM private key's header line, whatever its kind
+# a whole PEM private key block (any kind, PGP included): a header line, its body and the matching end line, so a
+# library that only names the header in its code (as key parsers do) is not taken for a key
+PRIVATE_KEY_BLOCK = re.compile(
+    rb"-----BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-----\r?\n(?:[A-Za-z0-9+/=:,\- ]*\r?\n)+?-----END \1-----"
+)
+# encrypted key files whatever their name: an Ethereum keystore (ciphertext and its key derivation) and a Bittensor
+# key file (its secret phrase or seed)
+KEY_FILE_FIELDS = ((b'"ciphertext"', b'"kdf"'), (b'"secretPhrase"',), (b'"secretSeed"',))
 
 
 def looks_secret(relative: Path, content: bytes = b"") -> bool:
@@ -60,7 +69,8 @@ def looks_secret(relative: Path, content: bytes = b"") -> bool:
     return (
         any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_FILES)
         or bool(SECRET_FOLDERS & {part.lower() for part in relative.parts[:-1]})
-        or PRIVATE_KEY in content
+        or PRIVATE_KEY_BLOCK.search(content) is not None
+        or any(all(field in content for field in fields) for fields in KEY_FILE_FIELDS)
     )
 
 
