@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.3)
+# Incentive mechanism in plain words (v6.4)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -43,9 +43,11 @@ Nothing is capped and nothing is burned (only a day with nobody to pay would go 
 ## Fair play
 
 Trades with yourself or your linked accounts never count, and neither do trades between two of the subnet's own
-miners. When two miners' accounts keep opposite positions for weeks and the mirrored volume is more than a quarter
-of an account's volume, that mirrored part earns no credit; above half, both accounts also leave the skill reward for
-30 days. The skill reward needs a real edge, proven over 90 days.
+miners (they report no one, since anyone can trade against anyone's orders). When two accounts of one owner (on one
+coldkey, or a master and its sub-accounts) keep opposite positions for weeks, the mirrored part earns no credit when
+it is more than a quarter of the account's positions; above half, both accounts also leave the skill reward for 30
+days. A day's profit made in a coin that hardly anyone else traded does not count for skill. The skill reward needs
+a real edge, proven over 90 days.
 
 ## Agents
 

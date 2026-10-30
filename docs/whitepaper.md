@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.1, October 2026. Mechanism specification v6.3.
+Whitepaper, version 3.1, October 2026. Mechanism specification v6.4.
 
 ### Summary
 
@@ -168,7 +168,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.3; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.4; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -209,12 +209,14 @@ it, the skill reward joins the volume reward.
 **What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own
 cluster (sub-accounts, addresses on the same coldkey, addresses funded by or transferring with each other); fills
 against another linked account, since the subnet does not pay for volume between its own miners (both sides of every
-trade carry the same trade id, so this is exact); fills priced more than 0.5% from the exchange's minute mark, which
-are valued at the mark; and fills whose order did not carry the Kokoah builder code, which the validator confirms
-from the account's own signed orders. Persistent hedging through the market is caught by position: daily net
-positions correlated below −0.8 with another linked account on at least 10 days in the last 30. Mirrored volume above
-25% of an account's notional is removed from its credit; above 50%, both accounts are reported and leave the skill
-reward for 30 days.
+trade carry the same trade id, so this is exact; such trades report no one, since anyone can take anyone's orders);
+fills priced more than 0.5% from the exchange's minute mark, which are valued at the mark; and fills whose order did
+not carry the Kokoah builder code, which the validator confirms from the account's own signed orders. A coin in which
+an account made more than a quarter of the day's volume was priced by its own trades, so that day's return is not
+counted for skill. Persistent hedging between accounts of one owner (one coldkey, or a master and its sub-accounts)
+is caught by position: net positions at each day's end correlated below −0.8 on at least 10 days in the last 30.
+Mirrored positions above 25% of an account's are removed from its credit; above 50%, both accounts are reported and
+leave the skill reward for 30 days.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 90 days;
 luck floor 0.25; participation full at $1M over 30 days; copy rule above 0.9 correlation over 30 days; agent bonus 10%
@@ -440,7 +442,8 @@ s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
 w_i        = s_i × v_i × (1.1 for a verified agent)       when entry holds, else 0
 copies     = in a group with daily-return correlation > 0.9 over ≥ 30 common days, only the leader keeps its w
-             (the leader trades first on the same coin and side; else the longest record)
+             (the leader trades first on the same coin and side, by notional, smoothed over the days; else the
+             earliest registration)
 ```
 
 The agent check, by each validator:
