@@ -541,6 +541,9 @@ def test_a_harness_1_1_0_machine_keeps_its_key_copy_and_its_public_answer_still_
     own = world["machine"].token([digest])
     refused = svc.put(f"/key-store/{account.address}", json={**body, "token": own})
     assert refused.status_code == 403 and "only from harness 1.1.0" in refused.json()["detail"]  # not 1.1.0
+    unapproved = DevelopmentAttestor(world["machine_key"], "sha256:" + "0d" * 32).token([digest])
+    refused = svc.put(f"/key-store/{account.address}", json={**body, "token": unapproved})
+    assert refused.status_code == 403 and "not an approved harness" in refused.json()["detail"]
     monkeypatch.setattr(images, "DEFAULT_AUDIENCE_KEYSTORE_IMAGES", (IMAGE,))  # the test image stands in for 1.1.0
     public = world["machine"].token([digest, "ab" * 32])  # how /attestation answers: the challenge and the binding
     assert svc.put(f"/key-store/{account.address}", json={**body, "token": public}).status_code == 403
