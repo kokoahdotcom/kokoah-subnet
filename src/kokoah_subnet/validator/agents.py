@@ -256,11 +256,18 @@ async def check_agents(
     agents = {hk: b for hk, b in agents.items() if b.address not in released}
     if not agents:
         return out
+    approved = list(images)
+    if not approved:  # no machine can pass: nothing to ask
+        refused = [
+            AgentCheck(hk, b.address, b.agent.code_sha256, b.agent.url, False, "no harness image is approved")
+            for hk, b in agents.items()
+            if b.agent is not None
+        ]
+        return sorted([*out, *refused], key=lambda c: c.hotkey)
     if keys is None:
         from kokoah_subnet.agent.attest import google_keys
 
         keys = await asyncio.to_thread(google_keys)
-    approved = list(images)
     gate = asyncio.Semaphore(CONCURRENCY)
 
     async def bounded(hk: str, b: Binding) -> AgentCheck:

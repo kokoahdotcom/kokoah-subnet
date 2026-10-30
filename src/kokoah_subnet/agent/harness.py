@@ -50,7 +50,7 @@ from .hlsign import (
     withdraw_action,
 )
 
-HARNESS_VERSION = "1.2.0"
+HARNESS_VERSION = "1.3.0"
 MAINNET_API = "https://api.hyperliquid.xyz"
 TESTNET_API = "https://api.hyperliquid-testnet.xyz"
 AGENT_CLOID_PREFIX = "6b6f0603"  # "ko", origin 0x06 (agent), layout 0x03 (kokoah-shared actions/cloid.ts)
