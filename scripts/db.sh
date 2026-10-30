@@ -81,7 +81,8 @@ case "${1:-status}" in
         "$IMAGE" >/dev/null
     fi
     for _ in $(seq 1 60); do
-      if docker exec "$NAME" pg_isready -U "$USER" -d "$DB" >/dev/null 2>&1; then ensure_reader; echo "ready on 127.0.0.1:$PORT (URLs in $ENV_FILE)" >&2; exit 0; fi
+      # over TCP: the image's first-start init server listens only on its socket, so this waits for the real one
+      if docker exec "$NAME" pg_isready -h 127.0.0.1 -U "$USER" -d "$DB" >/dev/null 2>&1; then ensure_reader; echo "ready on 127.0.0.1:$PORT (URLs in $ENV_FILE)" >&2; exit 0; fi
       sleep 1
     done
     echo "the database did not answer within 60 s" >&2; exit 1 ;;
@@ -106,5 +107,5 @@ case "${1:-status}" in
     fi
     # only its owner connects: not PUBLIC, so not the read-only role either
     docker exec "$NAME" psql -U "$USER" -d "$DB" -qc "REVOKE ALL ON DATABASE $new FROM PUBLIC" ;;
-  *) sed -n 2,13p "$0" ;;
+  *) sed -n 2,14p "$0" ;;
 esac

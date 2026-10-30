@@ -88,3 +88,19 @@ def test_a_failed_or_unfinished_archive_is_never_kept_or_counted(tmp_path: Path)
     assert run() == 0
     bundles = sorted(p.name for p in backups.glob("kokoah_subnet_agents_bundles-*.tgz"))
     assert len(bundles) == 14 and bundles[0] == "kokoah_subnet_agents_bundles-20260102.tgz" and writing.exists()
+
+
+def test_a_set_but_missing_agent_folder_fails_the_backup(tmp_path: Path) -> None:
+    """KOKOAH_SUBNET_AGENT_DATA set means the host runs the agent service: a wrong path fails the run (the timer shows
+    it) instead of quietly leaving the agent database and code out of the backups."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "backup.sh").write_text((SCRIPTS / "backup.sh").read_text())
+    (scripts / "db.sh").write_text('#!/usr/bin/env bash\n: > "$2"\n')
+    (scripts / "db.sh").chmod(0o755)
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "KOKOAH_SUBNET_BACKUP_DIR": str(tmp_path / "b")}
+    ok = subprocess.run(["bash", str(scripts / "backup.sh")], env=env, capture_output=True)
+    assert ok.returncode == 0  # a validator without the agent service backs up its record only
+    missing = env | {"KOKOAH_SUBNET_AGENT_DATA": str(tmp_path / "no-such-folder")}
+    failed = subprocess.run(["bash", str(scripts / "backup.sh")], env=missing, capture_output=True, text=True)
+    assert failed.returncode != 0 and "no bundles" in failed.stderr

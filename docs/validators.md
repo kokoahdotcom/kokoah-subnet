@@ -200,7 +200,9 @@ request limit. Publishing lets miners and other validators compare figures with 
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source
   (through the read-only role) and the dashboards in `dashboards/`.
 - **Backups.** `kokoah-subnet-backup.timer` dumps the record daily (14 kept) to `/var/backups/kokoah-subnet/`;
-  `scripts/db.sh backup <file>` does it by hand.
+  `scripts/db.sh backup <file>` does it by hand. On a host that also runs the agent service, put
+  `KOKOAH_SUBNET_AGENT_DATA=<its data directory>` in `/etc/kokoah-subnet/backup.env`: its database and the stored
+  agent code are then backed up too, and a wrong path fails the backup instead of skipping them.
 
 ## 10. Choosing the start day
 

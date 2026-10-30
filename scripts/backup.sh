@@ -13,12 +13,15 @@ umask 077
 # (left by a run that was killed)
 find "$dir" -maxdepth 1 -type f -name '*.tmp*' -mmin +1440 -delete
 "$here/db.sh" backup "$dir/kokoah_subnet-$day.dump"
-if [ -n "${KOKOAH_SUBNET_AGENT_DATA:-}" ] && [ -d "$KOKOAH_SUBNET_AGENT_DATA" ]; then
+if [ -n "${KOKOAH_SUBNET_AGENT_DATA:-}" ]; then
+  # set means this host runs the agent service: a missing folder is an error, never a silently skipped backup
+  [ -d "$KOKOAH_SUBNET_AGENT_DATA/bundles" ] || { echo "no bundles in KOKOAH_SUBNET_AGENT_DATA=$KOKOAH_SUBNET_AGENT_DATA" >&2; exit 1; }
   "$here/db.sh" backup "$dir/kokoah_subnet_agents-$day.dump" kokoah_subnet_agents
   bundles="$dir/kokoah_subnet_agents_bundles-$day.tgz"
-  trap 'rm -f "$bundles.tmp"' EXIT
-  tar czf "$bundles.tmp" -C "$KOKOAH_SUBNET_AGENT_DATA" bundles
-  mv -f "$bundles.tmp" "$bundles"
+  tmp="$bundles.tmp.$$"
+  trap 'rm -f "$tmp"' EXIT
+  tar czf "$tmp" -C "$KOKOAH_SUBNET_AGENT_DATA" bundles
+  mv -f "$tmp" "$bundles"
   trap - EXIT
 fi
 # keep the newest 14 of each kind; the date stamp in the name sorts in time order (a kind may have no files)
