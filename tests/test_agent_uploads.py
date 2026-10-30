@@ -162,7 +162,9 @@ async def test_bundles_of_a_hotkey_that_left_are_deleted_after_a_month_and_can_b
         registered -= {"h2", "h3"}  # h2 and h3 leave the subnet
         assert application.state.prune_bundles() == 0  # just left: the month starts now
         clock.now += 29 * 86_400
-        assert application.state.prune_bundles() == 0  # not a month yet
+        restarted = create_app(tmp_path / "svc", verify=lambda m, s, h: s == "ok", clock=clock,
+                               is_registered=lambda hk: hk in registered)  # fmt: skip
+        assert restarted.state.prune_bundles() == 0  # not a month yet, though the service restarted meanwhile
         clock.now += 2 * 86_400
         assert application.state.prune_bundles() == 1
         kept = {p.name for p in (tmp_path / "svc" / "bundles").iterdir()}

@@ -256,7 +256,7 @@ def test_the_registered_list_is_read_again_when_old_or_on_an_unknown_hotkey() ->
     now[0] = 800
     assert not hk.check("c") and hk.check("b") and len(calls) == 4  # the chain is down: the last list stands
     now[0] = 700 + 6 * 600 + 1
-    with pytest.raises(ConnectionError):
+    with pytest.raises(RuntimeError, match="cannot be read"):
         hk.check("b")  # too old to stand on
 
 

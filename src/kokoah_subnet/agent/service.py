@@ -77,7 +77,7 @@ log = logging.getLogger("kokoah_subnet.agent.service")
 SUBMIT_COOLDOWN_S = 12 * 3600
 SUBMIT_ATTEMPTS_PER_HOUR = 6  # uploads one hotkey may send, accepted or refused (each one is read and checked)
 UPLOADS_AT_ONCE = 8  # bodies received at the same time (one per hotkey); more are told to try again
-UPLOAD_DEADLINE_S = 60.0  # the whole body; a slower one is cut off
+UPLOAD_DEADLINE_S = 120.0  # the whole body (20 MB at about 1.4 Mbit/s); a slower one is cut off
 KEEP_BUNDLES_PER_HOTKEY = 5  # older bundles are deleted unless an unreleased key copy names them
 KEEP_LEFT_BUNDLES_S = 30 * 86_400  # a bundle of a hotkey no longer registered, after this long
 PRUNE_EVERY_S = 6 * 3600
@@ -130,6 +130,12 @@ linked = Table(  # every link a binding on chain has named (hotkey and address):
     Column("hotkey", String(64), primary_key=True),
     Column("address", String(42), primary_key=True),
     Column("seen_at", Float, nullable=False),
+)
+hotkeys_gone = Table(  # when pruning first found a hotkey no longer registered (gone again once it is back)
+    "agent_hotkeys_gone",
+    metadata,
+    Column("hotkey", String(64), primary_key=True),
+    Column("since", Float, nullable=False),
 )
 key_events = Table(  # every store, restore and release, for the record
     "agent_key_events",
@@ -323,19 +329,24 @@ def create_app(
             if old not in needed:
                 (data_dir / "bundles" / old).unlink(missing_ok=True)
 
-    left_since: dict[str, float] = {}  # hotkey -> when pruning first found it unregistered (since the service started)
-
     def gone_long_enough(hotkey: str, now: float) -> bool:
+        """Whether the hotkey left the subnet KEEP_LEFT_BUNDLES_S ago: from when pruning first found it gone, kept in
+        the database so that a restart does not start the month over."""
         if is_registered is None:
             return False
         try:
             registered = is_registered(hotkey)
         except Exception:  # noqa: BLE001 - the chain cannot be read now: keep everything
             return False
-        if registered:
-            left_since.pop(hotkey, None)
-            return False
-        return now - left_since.setdefault(hotkey, now) > KEEP_LEFT_BUNDLES_S
+        with engine.begin() as c:
+            if registered:
+                c.execute(hotkeys_gone.delete().where(hotkeys_gone.c.hotkey == hotkey))
+                return False
+            since = c.execute(select(hotkeys_gone.c.since).where(hotkeys_gone.c.hotkey == hotkey)).scalar()
+            if since is None:
+                c.execute(insert(hotkeys_gone).values(hotkey=hotkey, since=now))
+                since = now
+        return now - float(since) > KEEP_LEFT_BUNDLES_S
 
     def prune_bundles() -> int:
         """Delete the bundles nobody can run any more: beyond a hotkey's newest KEEP_BUNDLES_PER_HOTKEY, and those of
@@ -696,13 +707,16 @@ def create_app(
         }
 
     links_lock = threading.Lock()
-    links_read = [float("-inf")]  # when the chain's bindings were last read (the service's clock)
+    links_read = [float("-inf")]  # when the chain's bindings were last read (the service's clock), worked or not
+    links_known = [False]  # whether that read worked: only then is a link missing from them known to be missing
 
     def read_links() -> None:
         """The links the chain's bindings name now, added to those remembered."""
         assert bound_pairs is not None
         links_read[0] = clock()  # a failed read waits its turn too
+        links_known[0] = False
         current = {(str(hk), str(a).lower()) for hk, a in bound_pairs()}
+        links_known[0] = True
         with engine.begin() as c:
             seen = {(hk, a) for hk, a in c.execute(select(linked.c.hotkey, linked.c.address)).all()}
             new = [{"hotkey": hk, "address": a, "seen_at": clock()} for hk, a in sorted(current - seen)]
@@ -726,13 +740,20 @@ def create_app(
 
         if known():
             return True
-        if clock() - links_read[0] >= BINDINGS_REFRESH_S and links_lock.acquire(blocking=False):
-            try:  # one reader at a time; everyone else answers from what is remembered meanwhile
+        unreadable = HTTPException(
+            status_code=503, detail="the subnet's bindings cannot be read now: try again shortly"
+        )
+        if clock() - links_read[0] >= BINDINGS_REFRESH_S:
+            if not links_lock.acquire(blocking=False):
+                raise unreadable  # another request is reading them: nothing is known yet
+            try:
                 read_links()
             except Exception as exc:  # noqa: BLE001 - the chain could not be read
-                raise HTTPException(status_code=503, detail="the subnet's bindings cannot be read now") from exc
+                raise unreadable from exc
             finally:
                 links_lock.release()
+        elif not links_known[0]:
+            raise unreadable  # the last read failed, and the next one waits its turn
         return known()
 
     def require_link(hotkey: str, address: str) -> None:

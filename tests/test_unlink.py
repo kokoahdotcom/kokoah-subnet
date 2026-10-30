@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from eth_account import Account
 from fastapi.testclient import TestClient
 
@@ -231,7 +232,31 @@ def test_a_chain_that_cannot_be_read_is_not_asked_again_on_every_request(tmp_pat
     c = TestClient(app)
     ask = {"hotkey": H1, "address": owner.address}
     assert c.get("/unlinks/message", params=ask).status_code == 503
-    assert [c.get("/unlinks/message", params=ask).status_code for _ in range(5)] == [403] * 5  # not read again yet
+    assert [c.get("/unlinks/message", params=ask).status_code for _ in range(5)] == [503] * 5  # not read again yet
     assert len(reads) == 1
     clock.now += 31
     assert c.get("/unlinks/message", params=ask).status_code == 503 and len(reads) == 2
+
+
+def test_registrations_that_cannot_be_read_are_retried_after_a_pause_and_never_called_unknown() -> None:
+    from kokoah_subnet.chain import RegisteredHotkeys
+
+    now, reads = [0.0], []
+    up = [False]
+
+    async def fetch() -> set[str]:
+        reads.append(now[0])
+        if not up[0]:
+            raise RuntimeError("chain down")
+        return {H1}
+
+    hk = RegisteredHotkeys(fetch, max_age_s=600, refresh_s=30, clock=lambda: now[0])
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="cannot be read"):
+            hk.check(H1)
+    assert len(reads) == 1  # one try, then a pause
+    up[0], now[0] = True, 31.0
+    assert hk.check(H1) and not hk.check(H2) and len(reads) == 2
+    up[0], now[0] = False, 700.0  # the list is old and the chain is down: the old list still answers for a while
+    assert hk.check(H1) and len(reads) == 3
+    assert hk.check(H1) and len(reads) == 3

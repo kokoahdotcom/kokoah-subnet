@@ -74,7 +74,9 @@ async def bound_links(network: str, netuid: int) -> set[tuple[str, str]]:
 
 class RegisteredHotkeys:
     """`check(hotkey)`: whether the hotkey is registered on the subnet. The list is read again when it is older than
-    `max_age_s`, or on an unknown hotkey once `refresh_s` has passed (a just-registered miner waits at most that)."""
+    `max_age_s`, or on an unknown hotkey once `refresh_s` has passed (a just-registered miner waits at most that);
+    after a failed read, the next waits `refresh_s` too. Without a list read recently enough to go by, `check`
+    raises (the service answers that the registrations cannot be read now, never that a hotkey is unknown)."""
 
     def __init__(
         self,
@@ -88,17 +90,24 @@ class RegisteredHotkeys:
         self.refresh_s = refresh_s
         self.clock = clock
         self._hotkeys: set[str] = set()
-        self._read_at: float | None = None
+        self._read_at: float | None = None  # the last read that worked
+        self._tried_at: float | None = None  # the last read, worked or not
         self._lock = threading.Lock()
         self._refreshing = threading.Lock()
 
+    def _due(self, hotkey: str) -> bool:
+        now = self.clock()
+        age = None if self._read_at is None else now - self._read_at
+        stale = age is None or age > self.max_age_s or (hotkey not in self._hotkeys and age > self.refresh_s)
+        resting = self._tried_at is not None and now - self._tried_at < self.refresh_s
+        return stale and not resting
+
     def _read(self) -> None:
+        self._tried_at = self.clock()
         try:
             hotkeys = asyncio.run(self.fetch())
         except Exception:
-            if self._read_at is None or self.clock() - self._read_at > 6 * self.max_age_s:
-                raise  # nothing recent enough to fall back on
-            return  # keep the last list; read again on the next unknown hotkey
+            return  # keep the last list; `check` says whether it is still recent enough
         with self._lock:
             self._hotkeys, self._read_at = hotkeys, self.clock()
 
@@ -106,21 +115,16 @@ class RegisteredHotkeys:
         """One reader at a time refreshes the list; everyone else answers from the current list meanwhile (only the
         very first read is waited for), so a slow chain never holds up other requests."""
         with self._lock:
-            age = None if self._read_at is None else self.clock() - self._read_at
-            stale = age is None or age > self.max_age_s or (hotkey not in self._hotkeys and age > self.refresh_s)
-        if stale:
-            if self._refreshing.acquire(blocking=self._read_at is None):
-                try:
-                    with self._lock:
-                        age = None if self._read_at is None else self.clock() - self._read_at
-                        still = (
-                            age is None
-                            or age > self.max_age_s
-                            or (hotkey not in self._hotkeys and age > self.refresh_s)
-                        )
-                    if still:
-                        self._read()
-                finally:
-                    self._refreshing.release()
+            due = self._due(hotkey)
+        if due and self._refreshing.acquire(blocking=self._read_at is None):
+            try:
+                with self._lock:
+                    due = self._due(hotkey)
+                if due:
+                    self._read()
+            finally:
+                self._refreshing.release()
         with self._lock:
+            if self._read_at is None or self.clock() - self._read_at > 6 * self.max_age_s:
+                raise RuntimeError("the subnet's registrations cannot be read now")
             return hotkey in self._hotkeys
