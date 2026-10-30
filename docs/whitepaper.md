@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.1, October 2026. Mechanism specification v6.2.
+Whitepaper, version 3.1, October 2026. Mechanism specification v6.3.
 
 ### Summary
 
@@ -168,7 +168,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.2; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.3; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance

@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.2)
+# Incentive mechanism in plain words (v6.3)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).

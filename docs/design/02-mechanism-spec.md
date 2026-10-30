@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.2)
+# Kokoah subnet incentive mechanism: complete specification (v6.3)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -108,7 +108,9 @@ Removed before anything is computed:
    selling above it) is removed from the day's return like a deposit, over all of the address's perpetual fills,
    builder code or not, so two accounts cannot manufacture a steady profit by trading each other at off-market prices.
    A failed read of a coin's minute candles fails the day's scoring until the file deadline; after it, the coin's
-   builder fills go uncounted and the day's return of every address that traded the coin is unknown;
+   builder fills go uncounted and the day's return of every address that traded the coin is unknown. The exchange
+   keeps only its latest 5000 minute candles (about three and a half days): a day scored later, whose candles no
+   longer reach back to its start, is settled at once the same way, never clipped in part;
 3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill), measured as a share of the address's notional, then removed from credit: the subnet
    does not pay for volume between its own miners. Exact, so an honest trader is never flagged by coincidence;
@@ -371,7 +373,8 @@ after 60 days.
   the failed read is lost: without the recorded history the day is measured from points an earlier read stored if they
   reach past the day's end, otherwise the account's average is unknown and it is not eligible that day; without the
   fill history its return is unknown; fills that needed a failed read go uncounted (§3). The minute candles of a coin
-  the exchange does not list are settled at once the same way, so no trader can hold everyone's day with it. The other
+  the exchange does not list are settled at once the same way, so no trader can hold everyone's day with it, and so
+  are those of a day older than the exchange keeps (§3). The other
   reads (account value, flows, positions, fee rates, stake) fall back. Every failure is recorded.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.

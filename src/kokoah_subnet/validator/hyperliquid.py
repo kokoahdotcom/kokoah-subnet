@@ -19,6 +19,7 @@ from kokoah_subnet.mechanism.fills import Fill, parse_user_fills
 MAINNET_INFO = "https://api.hyperliquid.xyz/info"
 MAINNET_EXPLORER = "https://rpc.hyperliquid.xyz/explorer"
 PAGE = 2000  # fills per response; the API keeps the most recent 10,000 per address
+CANDLES_KEPT = 5000  # candles per coin and interval the API keeps (minute candles: about three and a half days)
 
 # request weights per info type (the exchange budgets 1,200 weight per minute per address; documented values,
 # unknown types count 20)
@@ -376,6 +377,15 @@ def mark_by_minute(candles: list[dict[str, Any]]) -> dict[int, float]:
         except (KeyError, TypeError, ValueError):
             continue
     return out
+
+
+def minutes_lost(marks: dict[int, float], start_ms: int, now_ms: int) -> bool:
+    """Whether the exchange no longer holds a day's minute candles from its start: it keeps only its most recent
+    `CANDLES_KEPT`, so for a day that began before them the answer starts later than the day, or is empty. A day
+    within reach is never called lost (a quiet coin can start the day without a candle)."""
+    if start_ms >= now_ms - CANDLES_KEPT * 60_000:
+        return False
+    return not marks or min(marks) > start_ms
 
 
 def mean_close(candles: list[dict[str, Any]]) -> float:
