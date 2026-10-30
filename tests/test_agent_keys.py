@@ -547,11 +547,9 @@ def test_a_restore_resumes_the_account_only_for_the_master_and_hotkey_it_was_fil
 ) -> None:
     """Someone holding only the miner's secret starts a genuine machine to restore the account with their own address
     as master (where withdrawals would go): the machine refuses, and the key is never used."""
-    from kokoah_subnet.agent import attest
-
     ticks = iter(range(10**6))
     real = time.time
-    monkeypatch.setattr(attest.time, "time", lambda: real() + next(ticks))  # each machine's token is its own
+    monkeypatch.setattr(time, "time", lambda: real() + next(ticks))  # each machine's token is its own
     master = Account.create()
     key = start(world, master)
     address = Account.from_key(key).address.lower()
