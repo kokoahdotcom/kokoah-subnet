@@ -38,6 +38,7 @@ FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
 FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
+EARLY = DAY_MS / 1000 + 86_400 + 3600  # an hour after the day ended: before the deadline
 
 
 @dataclass
@@ -274,6 +275,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         burn_hotkey=BURN,
         weights_every_blocks=360,
         retry_missing_s=3600,
+        retry_grace_hours=0.0,  # the tests set the time of each attempt themselves
     )
     cache = tmp_path / "fills" / "0xbuilder"
     cache.mkdir(parents=True)
@@ -569,8 +571,19 @@ async def test_a_failed_history_read_fails_the_day_instead_of_zeroing_the_trader
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     PORTFOLIO_FAILS.add(addr_a)
     with pytest.raises(RuntimeError, match="portfolio history"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
     assert store.day(DAY) is None  # not scored: the loop retries within the hour
+    await hl.close()
+
+
+async def test_after_the_deadline_a_failed_history_read_costs_that_address_the_day_only(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    PORTFOLIO_FAILS.add(addr_a)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)  # long past the deadline
+    records = {r.hotkey: r for r in result.records}
+    assert not records[HK_A].eligible and records[HK_A].pay_alpha == 0.0
+    assert records[HK_B].eligible and records[HK_B].pay_alpha > 0
+    assert store.execute_sql(f"select stage from errors where day = '{DAY}' and stage = 'portfolio'")
     await hl.close()
 
 
@@ -578,7 +591,7 @@ async def test_a_retried_day_keeps_its_binding_events(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     PORTFOLIO_FAILS.add(addr_a)
     with pytest.raises(RuntimeError, match="portfolio history"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
     assert store.bindings() == {}  # nothing accepted on a day that was not scored
     PORTFOLIO_FAILS.clear()
     await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
@@ -607,7 +620,7 @@ async def test_a_failed_address_cancels_the_other_reads(tmp_path: Path) -> None:
 
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(slow_b))
     with pytest.raises(RuntimeError, match="portfolio history"):
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
     assert cancelled == [addr_b] and store.equity_series(addr_b, 5) == []
     await hl.close()
 
@@ -654,6 +667,30 @@ async def test_failed_minute_candles_wait_for_the_deadline_then_leave_the_coin_u
     assert excluded == [{"excluded": "no_mark"}]
     known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
     assert {r["address"]: bool(r["return_known"]) for r in known} == {addr_a: False, addr_b: False}  # both: BTC history
+    await hl.close()
+
+
+@pytest.mark.parametrize(
+    "answer", [httpx.Response(422, json={"error": "unknown coin"}), httpx.Response(200, content=b"null")]
+)
+async def test_a_coin_the_exchange_refuses_never_holds_the_day(tmp_path: Path, answer: httpx.Response) -> None:
+    """The exchange refuses BTC's minute candles outright (a client error, or no answer at all): waiting cannot help,
+    so the day is scored at once, with the BTC builder fills uncounted, instead of holding every miner's day."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+
+    def btc_refused(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "candleSnapshot" and body["req"]["interval"] == "1m" and body["req"]["coin"] == "BTC":
+            return httpx.Response(answer.status_code, content=answer.content, headers=answer.headers)
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(btc_refused))
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+    records = {r.hotkey: r for r in result.records}
+    assert records[HK_A].fees.fills == 0 and records[HK_B].fees.fills == 10
+    assert store.execute_sql(f"select distinct excluded from fills where address = '{addr_a}'") == [
+        {"excluded": "no_mark"}
+    ]
     await hl.close()
 
 
@@ -1019,6 +1056,22 @@ async def test_a_validator_waits_for_the_unlink_list_until_the_deadline(tmp_path
             await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=early)
         late = DAY_MS / 1000 + 86_400 + (DEFAULT.file_deadline_hours + 1) * 3600
         result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=late)
+    assert {r.hotkey for r in result.records} == {HK_A, HK_B}
+    await hl.close()
+
+
+async def test_a_validator_back_after_the_deadline_still_retries_a_failed_read_for_a_while(tmp_path: Path) -> None:
+    """Back from an outage two days later, a validator's first attempt at a day is already past the file deadline: a
+    failed read still fails the attempt for the grace period after that first attempt, then the day is scored."""
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg = ValidatorConfig(**{**cfg.__dict__, "agent_service": "https://svc.example", "retry_grace_hours": 3.0})
+    back = DAY_MS / 1000 + 3 * 86_400  # two days after the day ended
+    async with _unlinks_service([], fail=True) as http:
+        with pytest.raises(RuntimeError, match="unlinks unavailable"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back)
+        with pytest.raises(RuntimeError, match="unlinks unavailable"):
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back + 2 * 3600)
+        result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, agent_http=http, now_ts=back + 4 * 3600)
     assert {r.hotkey for r in result.records} == {HK_A, HK_B}
     await hl.close()
 

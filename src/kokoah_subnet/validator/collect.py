@@ -90,6 +90,9 @@ class ValidatorConfig:
     fills_cache: Path | None = None  # where downloaded builder files are kept, per builder (default: data_dir/fills)
     db_url: str = ""  # the record; empty = SQLite file in data_dir
     agent_images: tuple[str, ...] = APPROVED_HARNESS_IMAGES  # approved sealed-machine harness images
+    # failed reads are waited for until the file deadline, and never less than this long after this validator's first
+    # attempt at the day, so a validator that comes back after an outage still retries before it scores without them
+    retry_grace_hours: float = 3.0
     agent_service: str = ""  # the owner's agent service (its released list); empty: no account counts as an agent
     extra: dict[str, str] = field(default_factory=dict)
 
@@ -231,7 +234,12 @@ async def collect_and_score(
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
-    past_deadline = clock >= end_ms / 1000 + params.file_deadline_hours * 3600
+    first_attempt = store.get_meta(f"first_attempt:{day}")
+    if first_attempt is None:
+        store.set_meta(f"first_attempt:{day}", repr(clock))
+    first_ts = float(first_attempt) if first_attempt is not None else clock
+    deadline_ts = max(end_ms / 1000 + params.file_deadline_hours * 3600, first_ts + cfg.retry_grace_hours * 3600)
+    past_deadline = clock >= deadline_ts
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
     except NotPublished:
@@ -315,7 +323,7 @@ async def collect_and_score(
             store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid))
         except Exception as exc:
             store.put_error(day, None, None, "unlinks", str(exc))
-            if clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
+            if not past_deadline:
                 raise RuntimeError(f"unlinks unavailable: {exc}") from exc
         finally:
             if own_unlink_http:
@@ -430,16 +438,17 @@ async def collect_and_score(
     async def marks_for(coin: str) -> dict[int, float] | None:
         """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
         first address to ask reads them, the others wait for that answer), so every address is clipped against the
-        same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
-        after it, None: the coin's builder fills go uncounted and the day's return of an address that traded the
-        coin is unknown."""
+        same marks. The clip is an anti-wash rule, so a read that may succeed later (rate limit, server error, no
+        answer) is recorded and fails the day until the deadline; after it, or at once when the exchange refuses the
+        coin outright (so no trader can hold everyone's day with a coin that has no candles), None: the coin's
+        builder fills go uncounted and the day's return of an address that traded the coin is unknown."""
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
                     marks_cache[coin] = mark_by_minute(await hl.candles(coin, "1m", start_ms, end_ms))
                 except Exception as exc:  # noqa: BLE001
                     store.put_error(day, None, None, "marks", f"minute candles of {coin}: {exc}")
-                    if not past_deadline:
+                    if not past_deadline and not getattr(exc, "lasting", False):
                         raise RuntimeError(f"minute candles of {coin} unavailable: {exc}") from exc
                     marks_cache[coin] = None
         return marks_cache[coin]
@@ -452,12 +461,15 @@ async def collect_and_score(
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
         # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
-        # hourly) instead of costing the trader the day, and the average is never estimated from a snapshot.
+        # hourly) until the deadline, and the average is never estimated from a snapshot; after it, this address's
+        # average and return are unknown for the day (it is not eligible) and every other address is scored as usual
         try:
             windows = await hl.portfolio(address)
         except Exception as exc:
             store.put_error(day, hk, address, "portfolio", str(exc))
-            raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
+            if not past_deadline:
+                raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
+            windows = []
         store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
         store.put_equity_points(
             address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
@@ -485,6 +497,7 @@ async def collect_and_score(
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
         # fills beyond the file go unconfirmed, and every other address is scored as usual
         gaps: list[int] = []
+        history_read = True
         try:
             public = await hl.fills_by_time(address, start_ms, end_ms, gaps)
         except Exception as exc:
@@ -492,6 +505,7 @@ async def collect_and_score(
             if not past_deadline:
                 raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
             public = []
+            history_read = False  # off-market fills cannot be checked, so the day's return is unknown
         if gaps:
             store.put_note(
                 day,
@@ -556,7 +570,7 @@ async def collect_and_score(
             if mark:
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
         # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
-        return_known = not any(f.coin in unmarked for f in public)
+        return_known = history_read and not any(f.coin in unmarked for f in public)
         if unmarked:
             store.put_note(
                 day,
@@ -578,7 +592,7 @@ async def collect_and_score(
             end_ms,
         )
         if change.value_start is not None and change.value_end is None:
-            if clock < end_ms / 1000 + params.file_deadline_hours * 3600:
+            if not past_deadline:
                 raise RuntimeError(f"the recorded history of {address} does not reach the end of {day} yet")
         try:
             state = await hl.account_state(address)

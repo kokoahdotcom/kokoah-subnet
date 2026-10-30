@@ -55,6 +55,15 @@ class RateLimiter:
             await asyncio.sleep(max(0.05, wait))
 
 
+class InfoRequestFailed(RuntimeError):
+    """An info request that failed every attempt. `lasting` when the exchange refused it (a 4xx other than 429, or an
+    answer that is not one), so asking again will not help."""
+
+    def __init__(self, message: str, lasting: bool = False) -> None:
+        super().__init__(message)
+        self.lasting = lasting
+
+
 class HyperliquidInfo:
     """Async client with retries, a weight-aware rate limiter and bounded concurrency, so a validator with hundreds
     of bound traders stays inside the public limits and still finishes quickly."""
@@ -87,6 +96,7 @@ class HyperliquidInfo:
         return await self.post(body, attempts, url=self._explorer)
 
     async def post(self, body: Mapping[str, Any], attempts: int = 4, url: str | None = None) -> Any:
+        """The answer to an info request, tried `attempts` times; raises InfoRequestFailed."""
         last: Exception | None = None
         weight = WEIGHTS.get(str(body.get("type")), 20)
         for attempt in range(attempts):
@@ -104,7 +114,10 @@ class HyperliquidInfo:
                     last = exc
             if attempt + 1 < attempts:
                 await asyncio.sleep(max(self._gap, self._backoff) * (2**attempt))
-        raise RuntimeError(f"info request failed after {attempts} attempts: {last}")
+        status = last.response.status_code if isinstance(last, httpx.HTTPStatusError) else 0
+        raise InfoRequestFailed(
+            f"info request failed after {attempts} attempts: {last}", lasting=400 <= status < 500 and status != 429
+        )
 
     async def fills_by_time(self, user: str, start_ms: int, end_ms: int, gaps: list[int] | None = None) -> list[Fill]:
         """All fills of `user` in [start_ms, end_ms), paging forward (2,000 per page). A full page can end inside a
@@ -173,7 +186,10 @@ class HyperliquidInfo:
             "type": "candleSnapshot",
             "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
         }
-        return [dict(c) for c in await self.post(body)]
+        answer = await self.post(body)
+        if not isinstance(answer, list):
+            raise InfoRequestFailed(f"no candles for {coin}: {str(answer)[:80]}", lasting=True)
+        return [dict(c) for c in answer]
 
     async def portfolio(self, user: str) -> list[Any]:
         """The exchange's account-value and PnL history windows for an address (`portfolio`)."""
