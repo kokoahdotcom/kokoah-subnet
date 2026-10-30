@@ -456,16 +456,18 @@ async def collect_and_score(
     marks_cache: dict[str, dict[int, float] | None] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
     listings: dict[str, set[str] | None] = {}
+    listing_locks: dict[str, asyncio.Lock] = {}
 
     async def listed(coin: str) -> bool | None:
         """Whether the exchange lists the coin (None when its list cannot be read): the same answer for every
-        validator."""
+        validator. One read per exchange, shared by its coins."""
         dex = coin.split(":", 1)[0] if ":" in coin else ""
-        if dex not in listings:
-            try:
-                listings[dex] = await hl.perp_names(dex)
-            except Exception:  # noqa: BLE001 - unknown, so the read is waited for as usual
-                listings[dex] = None
+        async with listing_locks.setdefault(dex, asyncio.Lock()):
+            if dex not in listings:
+                try:
+                    listings[dex] = await hl.perp_names(dex)
+                except Exception:  # noqa: BLE001 - unknown, so the read is waited for as usual
+                    listings[dex] = None
         names = listings[dex]
         return None if names is None else coin in names
 

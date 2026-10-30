@@ -168,7 +168,15 @@ def test_agent_bind_takes_only_an_http_endpoint_with_its_port(
         assert bind(wrong) == 1 and "http://<host>:<port>" in capsys.readouterr().out
     for private in ("http://127.0.0.1:8080", "http://10.0.0.5:8080", "http://192.168.1.2:8080"):
         assert bind(private) == 1 and "public" in capsys.readouterr().out
-    assert bind("http://no-such-host.invalid:8080") == 1 and "does not resolve" in capsys.readouterr().out
+    import socket
+
+    from kokoah_subnet.validator import agents
+
+    async def no_such_host(host: str) -> list[str]:
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    monkeypatch.setattr(agents, "resolve_host", no_such_host)  # no real lookup in the offline tests
+    assert bind("http://no-such-host.example:8080") == 1 and "does not resolve" in capsys.readouterr().out
     assert not asked  # nothing was contacted
     assert bind("http://203.0.113.9:8080") == 1 and "cannot read the machine" in capsys.readouterr().out
     assert bind("http://203.0.113.5:8080/") == 1 and "set up for hotkey 5Other" in capsys.readouterr().out
