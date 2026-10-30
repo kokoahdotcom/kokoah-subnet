@@ -187,19 +187,41 @@ _PROBE = (
 )
 
 
+# The sandbox's own environment: fixed, and nothing from the bundle (it runs as root until it drops privileges)
+LAUNCHER_ENV = {"PATH": "/usr/bin:/bin"}
+
+
+def agent_environment(home: Path | None = None) -> dict[str, str]:
+    """What the agent's program starts with. The sandbox sets it only at its last step, once the agent's user, view,
+    limits and filter are in place: before that, a bundle file named like a module the sandbox imports (or
+    `sitecustomize`) would run as root."""
+    home = home or AGENT_HOME
+    return {
+        "KOKOAH_AGENT_SOCKET": str(AGENT_SOCKET),
+        "PYTHONPATH": str(home),
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(home),
+    }
+
+
 def agent_command(
     memory_mb: int,
     uid: int | None,
     gid: int | None,
     hide: list[str] | None = None,
     program: list[str] | None = None,
+    environment: dict[str, str] | None = None,
 ) -> list[str]:
-    # the sandbox runs as a plain script (standard library only), so the agent's environment needs no harness code
-    cmd = [sys.executable, str(Path(sandbox.__file__).resolve()), "--memory-mb", str(memory_mb)]
+    # the sandbox runs as a plain script (standard library only) and isolated (-I: no environment variables, no user
+    # or script directory on the import path), so the agent's environment needs no harness code and its bundle is
+    # never on the sandbox's import path
+    cmd = [sys.executable, "-I", str(Path(sandbox.__file__).resolve()), "--memory-mb", str(memory_mb)]
     if uid is not None:
         cmd += ["--uid", str(uid), "--gid", str(gid if gid is not None else uid)]
     for d in hide or []:
         cmd += ["--hide", d]
+    for name, value in (environment or {}).items():
+        cmd += ["--setenv", f"{name}={value}"]
     return [*cmd, "--", *(program or [sys.executable, str(AGENT_HOME / "entry.py")])]
 
 
@@ -213,7 +235,7 @@ def visible_to_agent(directories: list[str], uid: int | None, gid: int | None) -
             capture_output=True,
             text=True,
             timeout=60,
-            env={"PATH": "/usr/bin:/bin"},
+            env=LAUNCHER_ENV,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return [f"{d} (the sandbox did not start: {exc})" for d in directories]
@@ -223,11 +245,12 @@ def visible_to_agent(directories: list[str], uid: int | None, gid: int | None) -
 
 
 class AgentRunner:
-    """Runs the agent in the sandbox and restarts it (with a growing pause) until stopped."""
+    """Runs the agent in the sandbox and restarts it (with a growing pause) until stopped. The sandbox starts from
+    `LAUNCHER_ENV` in the agent's directory; the command carries the agent's own environment (`agent_command`)."""
 
-    def __init__(self, command: list[str], env: dict[str, str]) -> None:
+    def __init__(self, command: list[str], home: Path | None = None) -> None:
         self.command = command
-        self.env = env
+        self.home = home or AGENT_HOME
         self.stopped = threading.Event()
         self.proc: subprocess.Popen[bytes] | None = None
 
@@ -236,12 +259,15 @@ class AgentRunner:
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
 
+    def start(self) -> subprocess.Popen[bytes]:
+        self.proc = subprocess.Popen(self.command, env=LAUNCHER_ENV, cwd=str(self.home), close_fds=True)
+        return self.proc
+
     def run(self) -> None:
         pause = 5.0
         while not self.stopped.is_set():
             started = time.time()
-            self.proc = subprocess.Popen(self.command, env=self.env, cwd=str(AGENT_HOME), close_fds=True)
-            code = self.proc.wait()
+            code = self.start().wait()
             if self.stopped.is_set():
                 break
             pause = 5.0 if time.time() - started > 600 else min(pause * 2, 300.0)
@@ -411,15 +437,7 @@ def main() -> int:
         builder_fee_tenths_bps=image.builder_fee_tenths_bps,
         mainnet=mainnet,
     )
-    runner = AgentRunner(
-        agent_command(1024, uid, gid, hidden),
-        {
-            "KOKOAH_AGENT_SOCKET": str(AGENT_SOCKET),
-            "PYTHONPATH": str(AGENT_HOME),
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(AGENT_HOME),
-        },
-    )
+    runner = AgentRunner(agent_command(1024, uid, gid, hidden, environment=agent_environment()))
     writes = not (dev and os.environ.get("KOKOAH_AGENT_NO_WRITES") == "1")
     harness = Harness(
         config, key, attestor, http=httpx.Client(timeout=20, trust_env=False), on_stop=runner.stop, allow_writes=writes

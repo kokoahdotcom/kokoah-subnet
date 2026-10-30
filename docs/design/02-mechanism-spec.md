@@ -429,9 +429,13 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   machine's attested store nonce covers the permission, so a copy can be filed under a hotkey only by its owner.
 - **Runs the miner's agent code in a sandbox**: a separate user, its own view of the filesystem in which the
   launcher's folder (the attestation socket and the launcher's token) is empty, no new privileges, no core dumps,
-  memory and process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and
-  other processes' memory. The agent's only way out is the harness's Unix socket, and it cannot ask the machine for
-  an attestation token; the harness starts it only after a probe, run exactly as the agent, sees nothing there.
+  memory and process limits, and a seccomp filter that refuses every network socket except Unix sockets, and the
+  calls an agent never needs that widen what it reaches of the kernel: other processes' memory, io_uring, new
+  namespaces, mounts, kernel keyrings, BPF, performance counters, userfaultfd, modules and kexec. The sandbox itself
+  starts isolated (`python -I`, a fixed environment), and the agent's environment, which puts its bundle on Python's
+  import path, is set only as the agent's program starts: nothing in the bundle runs before the sandbox is in place.
+  The agent's only way out is the harness's Unix socket, and it cannot ask the machine for an attestation token; the
+  harness starts it only after a probe, run exactly as the agent, sees nothing there.
 - **Offers the agent a narrow interface**: orders (limit and trigger), cancels, leverage, isolated margin and a
   scheduled cancel; read-only exchange data, account queries answered for this account only. Kokoah's builder code
   is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`). An order that executes
