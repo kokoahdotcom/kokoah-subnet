@@ -163,11 +163,13 @@ All times are UTC.
 5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
    subnet's settings, including commit-reveal.
 
-A failed read of a miner's recorded account values fails that day's scoring; the validator retries within the
-hour. A failed read of a fill history, the explorer, a linked account, the minute candles or the unlinks fails the
-day's scoring until 12 hours after the day ends; after that the day is scored and only the fills that needed the
-failed read go uncounted (without a coin's candles, also the day's return of an account that traded it). Other reads
-(positions, fee rates, stake) fall back. Every failure is recorded.
+A failed read of a miner's recorded account values, a fill history, the explorer, a linked account, the minute
+candles or the unlinks fails that day's scoring, and the validator retries within the hour, until 12 hours after the
+day ends, and never sooner than 3 hours after its first attempt at the day (so a validator back from an outage still
+retries). After that the day is scored and only what needed the failed read is lost: without the recorded account
+values the account is not eligible that day, and fills that needed a failed read go uncounted (without a coin's
+candles or the fill history, also the day's return). A coin whose candles the exchange refuses outright is settled
+at once the same way. Other reads (positions, fee rates, stake) fall back. Every failure is recorded.
 
 ## 8. The public interface
 

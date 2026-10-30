@@ -125,7 +125,7 @@ src/kokoah_subnet/
   binding/       how a hotkey binds a Hyperliquid account
 deploy/          harness image (reproducible build), systemd units, reverse-proxy sample
 dashboards/      validator monitoring
-scripts/         local chain, database, backups, CI checks and verification
+scripts/         local chain, database, backups and CI checks
 docs/            whitepaper, specification and guides
 tests/           offline tests
 ```
