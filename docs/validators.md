@@ -212,10 +212,10 @@ request limit. Publishing lets miners and other validators compare figures with 
 ## 10. Choosing the start day
 
 Set `--start-day` to a day within the last three days: the exchange keeps minute prices for about three and a half
-days, and a day scored later has its perpetual builder fills uncounted on this validator's record. The same holds
-after an outage, so keep the validator running and let it catch up within three days. From the start day on, the
-validator scores every day in order and builds its record day by day; each account's earlier daily values are
-backfilled from the exchange when the account is first scored.
+days, and on a day scored later this validator's record counts none of the perpetual builder fills and knows no
+day's return (no skill credit that day). The same holds after an outage, so keep the validator running and let it
+catch up within three days. From the start day on, the validator scores every day in order and builds its record
+day by day; each account's earlier daily values are backfilled from the exchange when the account is first scored.
 
 ## 11. Upgrades
 
