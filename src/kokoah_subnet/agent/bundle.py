@@ -202,8 +202,33 @@ def decrypt(blob: bytes, key: bytes) -> bytes:
     return AESGCM(key).decrypt(nonce, ciphertext, MAGIC)
 
 
+MAX_DIRECTORY_BYTES = 2 * 2**20  # the zip's list of entries: 5000 entries with long paths fit in well under this
+_END = b"PK\x05\x06"  # end of central directory record
+_ZIP64_LOCATOR = b"PK\x06\x07"
+
+
+def check_directory(plain: bytes) -> None:
+    """Refuse an archive whose list of entries is too big to read cheaply, before anything parses it: the counts and
+    the size in its last record, which is all the reader goes by. (Bundles never need zip64: it is refused.)"""
+    end = plain.rfind(_END, max(0, len(plain) - 22 - 65_535))
+    if end < 0 or len(plain) < end + 22:
+        raise ValueError("not a zip file")
+    if end >= 20 and plain[end - 20 : end - 16] == _ZIP64_LOCATOR:
+        raise ValueError("zip64 archives are not accepted")
+    on_disk, total, size = (
+        int.from_bytes(plain[end + 8 : end + 10], "little"),
+        int.from_bytes(plain[end + 10 : end + 12], "little"),
+        int.from_bytes(plain[end + 12 : end + 16], "little"),
+    )
+    if total > MAX_FILES or on_disk > MAX_FILES:
+        raise ValueError("too many files")
+    if size > MAX_DIRECTORY_BYTES:
+        raise ValueError("the list of files is above the limit")
+
+
 def check_zip(plain: bytes) -> list[zipfile.ZipInfo]:
     """The entries of a bundle zip, after every safety check (raises ValueError)."""
+    check_directory(plain)
     try:
         zf = zipfile.ZipFile(io.BytesIO(plain))
     except zipfile.BadZipFile as exc:

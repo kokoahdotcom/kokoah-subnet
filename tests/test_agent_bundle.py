@@ -222,3 +222,36 @@ def test_the_service_checks_plain_bundles_and_records_their_fingerprint(tmp_path
     assert upload(svc, "h2", b"not a zip", "00").status_code == 400
     assert svc.get("/agents/" + "0" * 64 + "/bundle").status_code == 404
     assert svc.get("/agents/../../etc/bundle").status_code in (400, 404)
+
+
+def test_an_archive_with_a_huge_list_of_files_is_refused_before_it_is_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import struct
+    import zipfile
+
+    from kokoah_subnet.agent import bundle
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("entry.py", "print('a')\n")
+    good = buf.getvalue()
+    bundle.check_zip(good)
+    end = good.rfind(b"PK\x05\x06")
+
+    def with_end(entries: int, size: int) -> bytes:
+        record = bytearray(good[end:])
+        struct.pack_into("<HHI", record, 8, entries, entries, size)
+        return good[:end] + bytes(record)
+
+    parsed: list[bool] = []
+    monkeypatch.setattr("kokoah_subnet.agent.bundle.zipfile.ZipFile", lambda *a, **k: parsed.append(True))
+    with pytest.raises(ValueError, match="too many files"):
+        bundle.check_zip(with_end(bundle.MAX_FILES + 1, 100))
+    with pytest.raises(ValueError, match="list of files"):
+        bundle.check_zip(with_end(1, bundle.MAX_DIRECTORY_BYTES + 1))  # few files claimed, a long list to read
+    zip64 = good[:end] + b"PK\x06\x07" + bytes(16) + good[end:]
+    with pytest.raises(ValueError, match="zip64"):
+        bundle.check_zip(zip64)
+    with pytest.raises(ValueError, match="not a zip"):
+        bundle.check_zip(b"just bytes")
+    assert parsed == []
