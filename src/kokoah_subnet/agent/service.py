@@ -394,14 +394,16 @@ def create_app(
             return None
         except AttestationError as exc:
             own_audience_error = str(exc)
-        legacy = [i for i in approved if i in DEFAULT_AUDIENCE_KEYSTORE_IMAGES]
-        if not legacy:
+        if "audience" not in own_audience_error.lower():
             return own_audience_error
+        legacy = [i for i in approved if i in DEFAULT_AUDIENCE_KEYSTORE_IMAGES]
         try:
             verify_token(token, key_source[0], legacy, [nonce], audience=AUDIENCE, exact_nonces=True)
             return None
         except AttestationError as exc:
-            return own_audience_error if "audience" not in own_audience_error.lower() else str(exc)
+            if "not an approved harness" in str(exc):
+                return "a key-store token without the key store's audience is accepted only from harness 1.1.0"
+            return str(exc)
 
     def machine_proof(token: str, nonce: str) -> None:
         error = proof_error(token, nonce)
