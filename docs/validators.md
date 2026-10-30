@@ -163,15 +163,15 @@ All times are UTC.
 5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
    subnet's settings, including commit-reveal.
 
-A failed read of a miner's recorded account values, a fill history, the explorer, a linked account, the minute
-candles or the unlinks fails that day's scoring, and the validator retries within the hour, until 12 hours after the
-day ends, and never sooner than 3 hours after its first attempt at the day; the days of a backlog share the first
-one's window, so a validator back from an outage retries for 3 hours in all (a day it had already started gets a new
-window once on its return). After that the day is scored and only
-what needed the failed read is lost: without the recorded account values the account is not eligible that day
-(unless points an earlier read stored cover the whole day), and fills that needed a failed read go uncounted
-(without a coin's candles or the fill history, also the day's return). The candles of a coin the exchange does not
-list are settled at once the same way. Other reads (positions, fee rates, stake) fall back. Every failure is recorded.
+A failed read of a miner's recorded account values, a fill history, the explorer, a linked account, the minute candles
+or the unlinks fails that day's scoring, and the validator retries within the hour, until 12 hours after the day ends,
+and never sooner than 3 hours after its first attempt at the day; the days of a backlog share the first one's window,
+so a validator back from an outage retries for 3 hours in all (a day it had already started gets a new window once on
+its return). After that the day is scored and only what needed the failed read is lost: without the recorded account
+values the account is not eligible that day (unless points an earlier read stored cover the whole day), and fills that
+needed a failed read go uncounted (without a coin's candles or the fill history, also the day's return). The candles
+of a coin the exchange does not list are settled at once the same way. Other reads (positions, fee rates, stake) fall
+back. Every failure is recorded.
 
 ## 8. The public interface
 

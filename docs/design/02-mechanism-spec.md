@@ -361,18 +361,18 @@ after 60 days.
 
 ### 14b. Robustness rules
 
-- A failed read of the account's recorded history (§9a), the fill history, the explorer, a linked account, the
-  minute candles or the unlinks fails the day's scoring, which is retried within the hour, until the deadline: the
-  file deadline, and never sooner than `retry_grace_hours` (3) after this validator's first attempt at the day. The
-  days of a backlog (days already over when the day before them was first attempted, as after an outage) share the
-  first one's window, so a validator back from an outage retries for 3 hours in all, and a validator that was away
-  from a day it had started (for more than twice its retry pace) starts that day's window again once on its return;
-  after that a failed read is final for that day on that validator. Past the deadline the day is scored and only what depends on the failed
-  read is lost: without the recorded history the day is measured from points an earlier read stored if they reach
-  past the day's end, otherwise the account's average is unknown and it is not eligible that day; without the fill
-  history its return is unknown; fills that needed a failed read go uncounted (§3). The minute candles of a coin
-  the exchange does not list are settled at once the same way, so no trader can hold everyone's day with it. The
-  other reads (account value, flows, positions, fee rates, stake) fall back. Every failure is recorded.
+- A failed read of the account's recorded history (§9a), the fill history, the explorer, a linked account, the minute
+  candles or the unlinks fails the day's scoring, which is retried within the hour, until the deadline: the file
+  deadline, and never sooner than `retry_grace_hours` (3) after this validator's first attempt at the day. The days of
+  a backlog (days already over when the day before them was first attempted, as after an outage) share the first one's
+  window, so a validator back from an outage retries for 3 hours in all, and a validator that was away from a day it
+  had started (for more than twice its retry pace) starts that day's window again once on its return; after that a
+  failed read is final for that day on that validator. Past the deadline the day is scored and only what depends on
+  the failed read is lost: without the recorded history the day is measured from points an earlier read stored if they
+  reach past the day's end, otherwise the account's average is unknown and it is not eligible that day; without the
+  fill history its return is unknown; fills that needed a failed read go uncounted (§3). The minute candles of a coin
+  the exchange does not list are settled at once the same way, so no trader can hold everyone's day with it. The other
+  reads (account value, flows, positions, fee rates, stake) fall back. Every failure is recorded.
 - A re-score of a day starts from the state as it was before that day (state history), never from the already
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
