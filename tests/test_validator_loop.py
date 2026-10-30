@@ -22,7 +22,7 @@ from kokoah_subnet.validator.collect import (
     retry_deadline,
 )
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo, day_bounds_ms
-from kokoah_subnet.validator.loop import other_subnet, start_day_for, step
+from kokoah_subnet.validator.loop import other_subnet, run_config, start_day_for, step
 from kokoah_subnet.validator.serve import create_app
 from kokoah_subnet.validator.store import Store
 
@@ -344,6 +344,7 @@ async def test_step_scores_then_sets_weights_once_per_tempo(tmp_path: Path) -> N
 async def test_watch_mode_scores_and_records_but_never_submits_weights(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     cfg = ValidatorConfig(**{**cfg.__dict__, "watch": True})
+    assert run_config(cfg)["watch"] == "True"  # what the health check reads from the run record
     now = DAY_MS / 1000 + 86_400 + 600
     report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
     assert report["scored"]["day"] == DAY and store.day(DAY) is not None

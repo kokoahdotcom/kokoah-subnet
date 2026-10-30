@@ -36,6 +36,7 @@ def check(
             .limit(1)
         ).first()
         last_epoch = c.execute(select(func.max(S.epochs.c.at))).scalar()
+        last_config = c.execute(select(S.runs.c.config).order_by(desc(S.runs.c.id)).limit(1)).scalar()
         recent = (
             select(func.count()).select_from(S.errors).where(S.errors.c.at >= now - timedelta(hours=24))
         )  # notes are routine facts (another front end's fills, caps reached): counted, never a problem
@@ -57,7 +58,13 @@ def check(
             )
         if scored_at is not None and now - scored_at > timedelta(hours=max_day_age_h):
             problems.append(f"last scoring run was {(now - scored_at).total_seconds() / 3600:.0f} h ago")
-    if last_weights is None:
+    # a watching validator (`--watch`) scores and records every day but never submits weights
+    if isinstance(last_config, str):
+        last_config = json.loads(last_config)
+    watching = isinstance(last_config, dict) and str(last_config.get("watch")) == "True"
+    if watching:
+        pass
+    elif last_weights is None:
         problems.append("no weights submitted yet")
     else:
         at = last_weights[0] if last_weights[0].tzinfo else last_weights[0].replace(tzinfo=UTC)
@@ -86,6 +93,7 @@ def check(
         "builder_earned_usd": earned,
         "checked_at": now.isoformat(),
         "latest_day": latest[0] if latest else None,
+        "watching": watching,
         "last_weights_ok": bool(last_weights[1]) if last_weights else None,
         "last_epoch_at": last_epoch.isoformat() if last_epoch else None,
         "errors_24h": int(errors_24h or 0),

@@ -47,6 +47,20 @@ def test_check_reports_missing_and_stale_things(tmp_path: Path) -> None:
     assert any("burn failed" in p for p in check(s, now=now)["problems"])
 
 
+def test_a_watching_validator_is_not_asked_for_weights(tmp_path: Path) -> None:
+    s = Store(tmp_path / "v.sqlite")
+    now = datetime.now(tz=UTC)
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    s.put_day(yesterday, 2, "{}", paid_alpha=1.0, burn_alpha=1.0)
+    s.put_epoch(100, 1, 360, 1.0, [])
+    s.start_run(network="finney", netuid=39, config={"watch": "True"})
+    r = check(s, now=now)
+    assert r["ok"] and r["watching"] is True, r["problems"]
+    s.start_run(network="finney", netuid=39, config={"watch": "False"})  # voting now: weights are expected again
+    r = check(s, now=now)
+    assert r["watching"] is False and "no weights submitted yet" in r["problems"]
+
+
 def test_a_refused_alert_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
