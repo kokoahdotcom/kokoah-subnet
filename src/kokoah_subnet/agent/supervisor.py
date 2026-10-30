@@ -57,6 +57,7 @@ from .bundle import decrypt, is_encrypted, sha256_hex, unpack
 from .harness import Harness, HarnessConfig, agent_app, public_app
 from .keystore import (
     KeyService,
+    Restored,
     check_secret,
     checked_address,
     decrypt_key,
@@ -292,12 +293,19 @@ def account_key(
     if restore:
         address = restore.lower()
 
-        def restored() -> bytes:  # a fresh token for every try: a token is accepted once
+        def restored() -> Restored:  # a fresh token for every try: a token is accepted once
             challenge = keys.challenge(address)
             return keys.restore(address, attestor.token([restore_digest(address, challenge)], KEYSTORE_AUDIENCE))
 
-        blob = retried("restoring the key copy", restored)
-        key = decrypt_key(blob, address, secret)
+        copy = retried("restoring the key copy", restored)
+        # the account resumes only for the master and hotkey it was filed for: a secret alone must not let anyone
+        # restart it with withdrawals going to their own address
+        if copy.master != master.lower() or copy.hotkey != hotkey:
+            raise SystemExit(
+                f"the account {address} was filed for master {copy.master} and hotkey {copy.hotkey}: start the machine "
+                "with KOKOAH_AGENT_MASTER and KOKOAH_AGENT_HOTKEY set to those"
+            )
+        key = decrypt_key(copy.blob, address, secret)
         log.info("restored account %s", address)
         return key
     if not permit:
@@ -332,7 +340,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     image = ImageSettings.load()
     dev = image.development and os.environ.get("KOKOAH_AGENT_DEV") == "1"
-    http = httpx.Client(timeout=60)  # certificates are checked: the service is reached as itself or not at all
+    # certificates are checked and no proxy or certificate setting from the environment is read: the service is
+    # reached as itself or not at all
+    http = httpx.Client(timeout=60, trust_env=False)
     service = service_url(image, dev, os.environ)
     submission = env("KOKOAH_AGENT_SUBMISSION")
     plain, code = fetch_code(service, submission, os.environ.get("KOKOAH_AGENT_BUNDLE_KEY"), http)
@@ -401,7 +411,9 @@ def main() -> int:
         },
     )
     writes = not (dev and os.environ.get("KOKOAH_AGENT_NO_WRITES") == "1")
-    harness = Harness(config, key, attestor, http=httpx.Client(timeout=20), on_stop=runner.stop, allow_writes=writes)
+    harness = Harness(
+        config, key, attestor, http=httpx.Client(timeout=20, trust_env=False), on_stop=runner.stop, allow_writes=writes
+    )
     del key
     log.info("account %s, code %s, harness for netuid %d", harness.address, code, config.netuid)
     if writes:

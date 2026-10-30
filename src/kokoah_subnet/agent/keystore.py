@@ -22,7 +22,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 from cryptography.hazmat.primitives import hashes
@@ -132,12 +132,18 @@ def release_message(address: str, time_ms: int) -> str:
     return f"kokoah-agent-release-1 account={address.lower()} time={time_ms}"
 
 
+class Restored(NamedTuple):
+    blob: bytes  # the copy, encrypted with the miner's secret
+    master: str  # the master and hotkey the copy was filed for
+    hotkey: str
+
+
 class KeyService:
     """The owner's service, as the sealed machine and the miner's tools reach it."""
 
     def __init__(self, service: str, http: httpx.Client | None = None) -> None:
         self.service = service.rstrip("/")
-        self.http = http or httpx.Client(timeout=30)
+        self.http = http or httpx.Client(timeout=30, trust_env=False)
 
     def _url(self, address: str, tail: str = "") -> str:
         return f"{self.service}/key-store/{address.lower()}{tail}"
@@ -177,10 +183,13 @@ class KeyService:
         r.raise_for_status()
         return str(r.json()["challenge"])
 
-    def restore(self, address: str, token: str) -> bytes:
+    def restore(self, address: str, token: str) -> Restored:
         r = self.http.post(self._url(address, "/restore"), json={"token": token})
         r.raise_for_status()
-        return base64.b64decode(r.json()["blob"])
+        answer = r.json()
+        return Restored(
+            base64.b64decode(answer["blob"]), str(answer.get("master", "")).lower(), str(answer.get("hotkey", ""))
+        )
 
     def release(self, address: str, time_ms: int, signature: str) -> bytes:
         r = self.http.post(self._url(address, "/release"), json={"time_ms": time_ms, "signature": signature})

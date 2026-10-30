@@ -540,3 +540,23 @@ def test_a_key_store_token_needs_the_key_stores_audience_and_exactly_its_digest(
         f"/key-store/{account.address}", json={**body, "token": world["machine"].token([digest], KEYSTORE_AUDIENCE)}
     )
     assert stored.status_code == 200, stored.text
+
+
+def test_a_restore_resumes_the_account_only_for_the_master_and_hotkey_it_was_filed_for(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Someone holding only the miner's secret starts a genuine machine to restore the account with their own address
+    as master (where withdrawals would go): the machine refuses, and the key is never used."""
+    from kokoah_subnet.agent import attest
+
+    ticks = iter(range(10**6))
+    real = time.time
+    monkeypatch.setattr(attest.time, "time", lambda: real() + next(ticks))  # each machine's token is its own
+    master = Account.create()
+    key = start(world, master)
+    address = Account.from_key(key).address.lower()
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_MASTER"):
+        start(world, Account.create(), address)
+    with pytest.raises(SystemExit, match="KOKOAH_AGENT_HOTKEY"):
+        start(world, master, address, hotkey=BOB)
+    assert start(world, master, address) == key  # the right settings restore it

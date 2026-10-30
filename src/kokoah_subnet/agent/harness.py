@@ -114,7 +114,7 @@ class Harness:
         self._account = Account.from_key(key)  # the key lives only in this object's memory
         self.address = self._account.address.lower()
         self.attestor = attestor
-        self.http = http or httpx.Client(timeout=20)
+        self.http = http or httpx.Client(timeout=20, trust_env=False)
         self.on_stop = on_stop
         self.started_at = int(time.time())
         self._nonce_lock = threading.Lock()

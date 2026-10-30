@@ -507,7 +507,9 @@ def create_app(
                 raise HTTPException(status_code=410, detail="this key was released to the miner")
             blob = opened(row)  # before anything is recorded: a copy the service cannot open changes nothing
             event(c, a, "restore", used)
-        return {"address": a, "blob": blob}
+        # the record's master and hotkey: the machine resumes the account only for those, never for start settings
+        # that name someone else (a secret alone must not let anyone redirect the account's withdrawals)
+        return {"address": a, "blob": blob, "master": row["master"], "hotkey": row["hotkey"]}
 
     @app.post("/key-store/{address}/release")
     def release(address: str, body: Release) -> dict[str, Any]:
