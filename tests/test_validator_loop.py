@@ -1663,3 +1663,40 @@ async def test_a_day_the_exchange_may_have_cut_counts_its_loss_but_not_its_profi
         (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
         assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)  # a profit not counted, a loss kept
         assert store.position_series([addr_a], [DAY])[addr_a] != {}
+
+
+async def test_a_validator_that_reads_later_never_counts_a_profit_it_could_not_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The day's one fill and one 90 minutes after the day ended make two, the limit here. A validator that read the
+    account before that later fill sees one and counts the day's profit; one that read after it sees two, so the
+    day's own fills may be gone from what it read, and it counts none (its loss would still count)."""
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "FILLS_KEPT", 2)
+    end = DAY_MS + 86_400_000
+    later = [{"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 90 * 60_000, "crossed": True,
+              "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10}]  # fmt: skip
+    # the recorded profit is 5,000 dollars, 3,000 once the 2,000-dollar off-market gift is removed
+    for read_at, expected in ((end + 65 * 60_000, 3_000.0), (end + 120 * 60_000, 0.0)):
+        sub = tmp_path / f"read{read_at}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+
+        def reads_at(request: httpx.Request, a: str = addr_a, at: int = read_at) -> httpx.Response:
+            body = json.loads(request.content)
+            if body["type"] == "clearinghouseState" and body["user"].lower() == a:
+                return httpx.Response(200, json={**_info_handler(request).json(), "time": at})
+            if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == a:
+                return httpx.Response(200, json=[f for f in later if int(f["time"]) <= body["endTime"]])
+            return _info_handler(request)
+
+        PNL_DAY[addr_a] = 5_000.0
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(reads_at))
+        try:
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6), read_at
