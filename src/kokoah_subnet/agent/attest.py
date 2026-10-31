@@ -109,7 +109,7 @@ class KeySource(Protocol):
     def get_signing_key_from_jwt(self, token: str) -> Any: ...
 
 
-KEYS_REFRESH_S = 300.0  # Google's key set is read again at most this often (it changes every few weeks)
+KEYS_REFRESH_S = 60.0  # Google's key set is read again at most this often for an unknown key (it rotates weekly)
 RETRY_S = 10.0  # after a failed read
 
 
@@ -126,6 +126,9 @@ class PublishedKeys:
 
     def get_signing_key_from_jwt(self, token: str) -> Any:
         kid = str(jwt.get_unverified_header(token).get("kid", ""))
+        key = self._keys.get(kid)  # a known key: no waiting behind a read of the set
+        if key is not None:
+            return key
         with self._lock:
             if kid not in self._keys and time.monotonic() - self._read_at >= self.refresh_s:
                 try:
