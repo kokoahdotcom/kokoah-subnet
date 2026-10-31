@@ -197,17 +197,16 @@ def test_the_unlink_list_comes_in_pages_oldest_first_and_misses_none(tmp_path: P
 async def test_a_validator_reads_every_page_and_checks_each_signature_once(monkeypatch: Any) -> None:
     owners = [Account.create() for _ in range(3)]
     rows = [signed(o, H1, ms("2026-10-24") + i) for i, o in enumerate(owners)]
-    asked: list[float] = []
+    asked: list[str] = []
 
     def answer(request: httpx.Request) -> httpx.Response:
-        since = float(request.url.params.get("since", "0"))
-        asked.append(since)
-        page = [r for i, r in enumerate(rows) if i >= since][:2]
-        listed = [{"hotkey": u.hotkey, "address": u.address, "time_ms": u.time_ms, "signature": u.signature,
-                   "received_at": rows.index(u)} for u in page]  # fmt: skip
-        return httpx.Response(
-            200, json={"unlinks": listed, "next": listed[-1]["received_at"] if len(page) == 2 else None}
-        )
+        after = request.url.params.get("after", "")
+        asked.append(after)
+        start = int(after) + 1 if after else 0  # the service's cursor names the last row of the page before
+        page = rows[start : start + 2]
+        listed = [{"hotkey": u.hotkey, "address": u.address, "time_ms": u.time_ms, "signature": u.signature}
+                  for u in page]  # fmt: skip
+        return httpx.Response(200, json={"unlinks": listed, "next": str(start + 1) if len(page) == 2 else None})
 
     checked: list[str] = []
     real = Unlink.signed_by_address
@@ -219,7 +218,7 @@ async def test_a_validator_reads_every_page_and_checks_each_signature_once(monke
     monkeypatch.setattr(Unlink, "signed_by_address", counted)
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
         found = await fetch_unlinks(http, "http://svc", NETUID, known={(H1, rows[0].address)})
-    assert found == rows[1:] and asked == [0.0, 1.0, 2.0]
+    assert found == rows[1:] and asked == ["", "1"]
     assert sorted(checked) == sorted(u.address for u in rows[1:])  # the kept one is never checked again
 
 

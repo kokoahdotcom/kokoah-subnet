@@ -207,9 +207,9 @@ async def fetch_unlinks(
     kept, of which only the first per pair counts) are skipped unchecked, so each signature is checked once."""
     out: list[Unlink] = []
     seen = set(known)
-    since = 0.0
+    after = ""
     for _ in range(UNLINK_PAGES):
-        r = await http.get(f"{service.rstrip('/')}/unlinks", params={"since": since}, timeout=20)
+        r = await http.get(f"{service.rstrip('/')}/unlinks", params={"after": after}, timeout=20)
         r.raise_for_status()
         page = r.json()
         for x in page["unlinks"]:
@@ -221,9 +221,9 @@ async def fetch_unlinks(
                 seen.add((u.hotkey, u.address))
                 out.append(u)
         following = page.get("next")
-        if following is None or float(following) <= since:
+        if not following or following == after:
             break
-        since = float(following)
+        after = str(following)
     return out
 
 
