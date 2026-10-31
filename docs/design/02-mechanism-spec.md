@@ -119,7 +119,7 @@ Removed before anything is computed:
    validator read, part of the day's own history (and with it what these checks look at) may be gone. Validators
    score a day within the hour after its builder file comes out, so they read alike; one that reads much later sees
    more fills since and may find such a day cut where an earlier one did not, and never counts a profit it could not
-   check;
+   check; nor does one that could not read the fills since the day ended;
 3. **bound counterparties:** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill) are removed from credit: the subnet does not pay for volume between its own miners.
    They report no one: any miner can take another's resting orders, so who traded with whom says nothing about who
@@ -128,7 +128,8 @@ Removed before anything is computed:
    master and its sub-accounts: the links only the owner can create, §14a) and active in the same coin, the net
    position at each day's end over the last 30 days. The size is what the exchange records just before the first
    fill since the day ended (else the size the validator reads), valued at the close of the coin's last hourly
-   candle of the day, so it is the same whenever a validator reads it; main perpetuals only. A failed read fails the
+   candle of the day (the one opening at 23:00, never the next day's first), so it is the same whenever a validator
+   reads it; main perpetuals only. A failed read fails the
    day until the deadline, and an address with 10,000 fills or more since the day ended (the exchange keeps no
    more, so the first may be gone) has no positions that day; correlation below
    −0.8 on at least 10 overlapping days marks the overlapping notional as mirrored. Pairs without such a link are
