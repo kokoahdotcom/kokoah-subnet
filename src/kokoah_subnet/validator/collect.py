@@ -229,6 +229,7 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
 
 
 MAX_TX_LOOKUPS = 200  # per address and day: taker fills beyond it are not confirmed one by one
+CUT_WINDOW_MS = 3_600_000  # the fills counted toward a possibly cut day: up to an hour after the day's end
 
 
 async def confirmed_builder_orders(
@@ -619,9 +620,6 @@ async def collect_and_score(
                 raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
             public = []
             history_read = False  # off-market fills cannot be checked, so the day's return is unknown
-        if history_read:  # the copy rule's look back: the day's own orders, builder code or not
-            history_of[address] = [f for f in public if is_perp(f.coin) and ":" not in f.coin]
-            store.put_history_orders(address, day, history_of[address])
         if gaps:
             store.put_note(
                 day,
@@ -732,17 +730,26 @@ async def collect_and_score(
             errors[hk] = f"account state: {str(exc)[:160]}"
             store.put_error(day, hk, address, "account state", str(exc))
         later = await fills_since_end(hk, address, read_state) if read_state is not None else None
-        # the exchange keeps an address's latest FILLS_KEPT fills: with that many since the day began, part of the
-        # day's own history may be gone, and with it what the thin-coin and off-market checks look at. Such a day is
-        # treated like a thin one: its loss counts, its profit does not
-        since_start = len(public) + len(later) if later is not None else 0
-        cut = since_start >= FILLS_KEPT
+        # the exchange keeps an address's latest FILLS_KEPT fills: with that many from the day's start to an hour
+        # after its end (a fixed window, so every validator decides alike once the hour is over), part of the day's
+        # own history may be gone, and with it what the thin-coin and off-market checks and the copy rule look at.
+        # Such a day is treated like a thin one: its loss counts, its profit does not; and its orders are not kept
+        # for the copy rule. A validator whose own read since may have been cut decides the same, whatever the hour
+        if read_state is not None and later is not None and not past_deadline:
+            if int(read_state.get("time") or clock * 1000) < end_ms + CUT_WINDOW_MS:
+                raise RuntimeError(f"the hour after {day} is not over yet for {address}")
+        early = [f for f in later if f.time_ms < end_ms + CUT_WINDOW_MS] if later is not None else []
+        since_start = len(public) + len(early)
+        cut = since_start >= FILLS_KEPT or (later is not None and len(public) + len(later) >= FILLS_KEPT)
         if cut:
             store.put_note(
                 day, hk, address, "fill history",
-                f"{since_start} fills since the day began: the exchange may no longer hold all of the "
-                "day's, so its profit is not counted (a loss is) and its positions are left out",
+                f"{since_start} fills from the day's start to an hour after it: the exchange may no longer hold all "
+                "of the day's, so its profit is not counted (a loss is)",
             )  # fmt: skip
+        if history_read and not cut:  # the copy rule's look back: the day's own orders, builder code or not
+            history_of[address] = [f for f in public if is_perp(f.coin) and ":" not in f.coin]
+            store.put_history_orders(address, day, history_of[address])
         try:
             if read_state is None:
                 raise RuntimeError("no account state")
@@ -795,8 +802,11 @@ async def collect_and_score(
             if read_state is not None:
                 errors[hk] = f"account state: {str(exc)[:160]}"
                 store.put_error(day, hk, address, "account state", str(exc))
-        if read_state is not None and later is not None and not cut:
-            await record_positions(hk, address, read_state, later)
+        if read_state is not None and later is not None:
+            if len(later) >= FILLS_KEPT:  # the first fills since the day ended may be gone: no positions today
+                store.put_note(day, hk, address, "positions", f"{len(later)} fills since the day's end: left out")
+            else:
+                await record_positions(hk, address, read_state, later)
         try:
             fee_raw = await hl.fee_rates_raw(address)
             rates = (float(fee_raw["userCrossRate"]) * 1e4, float(fee_raw["userAddRate"]) * 1e4)
