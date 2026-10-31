@@ -115,8 +115,10 @@ Removed before anything is computed:
    marks are its own prices and its counterparty's, so they tell nothing about what it made there. The day stays
    known (a day left out would hide a loss): its loss counts in full, its profit counts as nothing (removed like
    money moved in), and its builder fills still count. The same for a day the exchange may have cut: it keeps an
-   address's latest 10,000 fills, so with that many fills from the day's start to the validator's read, part of the
-   day's own history (and with it what these checks look at) may be gone; such a day also has no positions;
+   address's latest 10,000 fills, so with that many fills from the day's start to an hour after its end (a fixed
+   window: a validator scores a day only once that hour is over, so all decide alike), or by the validator's own
+   read, part of the day's own history (and with it what these checks and the copy rule look at) may be gone; such
+   a day's orders are not kept for the copy rule (its builder fills stand in that day);
 3. **bound counterparties:** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill) are removed from credit: the subnet does not pay for volume between its own miners.
    They report no one: any miner can take another's resting orders, so who traded with whom says nothing about who
@@ -127,7 +129,7 @@ Removed before anything is computed:
    fill since the day ended (else the size the validator reads), valued at the close of the coin's last hourly
    candle of the day, so it is the same whenever a validator reads it; main perpetuals only. A failed read fails the
    day until the deadline, and an address with 10,000 fills or more since the day ended (the exchange keeps no
-   more) has no positions that day; correlation below
+   more, so the first may be gone) has no positions that day; correlation below
    −0.8 on at least 10 overlapping days marks the overlapping notional as mirrored. Pairs without such a link are
    not compared, since anyone can hold the opposite of another trader's position. Mirrored notional above 25% of an
    address's position notional is removed from its credit; an address with more than 50% mirrored is reported, and
@@ -210,7 +212,8 @@ Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no 
 - **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
   (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
   whose trades come first, judged on each account's whole fill history (builder code or not, so a copy placed
-  elsewhere is seen too). Each member's orders of the day (the pieces filled in one millisecond are one order) are
+  elsewhere is seen too). Each member's orders of the day (the pieces filled in one millisecond are one order, and
+  so are all the slices of one of the exchange's TWAP orders, at its first slice) are
   matched with the other member's most recent earlier order on the same coin and side, from that day or the 3 days
   before, and when that one is smaller, with the ones before it within 10 minutes until the later order is matched
   in full (an order sent in slices is copied as a whole); each earlier order's notional is used once in a day's
@@ -218,9 +221,10 @@ Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no 
   minute over one minute plus the wait (half at a minute), so the shorter waits decide (a copier trades soon after
   what it copies; the original's next trade comes on its own schedule). Small orders placed just before weigh no
   more than their size, and a copy made hours later still counts, a little. The weighed leads and the matched
-  notional are smoothed over the days like the credit (30% today). The member that leads every other member head to
-  head, with at least $1,000 of notional matched in its favour and a weighed lead at least 1.5 times what that
-  member led it by, leads. Without such a member, the member registered on the subnet first (the same on every
+  notional are smoothed over the days like the credit (30% today). The member that leads head to head every other
+  member it has at least $1,000 matched with, either way (a member with less in common blocks nothing), with at
+  least $1,000 matched in its favour and a weighed lead at least 1.5 times what that member led it by, leads. A
+  hotkey swapped on chain keeps its place in the other members' leads. Without such a member, the member registered on the subnet first (the same on every
   validator) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another
   miner earns nothing, and splitting one account above the volume cap into several gains nothing.
 - **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
