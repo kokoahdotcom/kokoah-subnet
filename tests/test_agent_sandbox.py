@@ -393,35 +393,79 @@ def test_a_stop_while_the_sandbox_is_still_root_ends_the_agent() -> None:
         shutil.rmtree(home, ignore_errors=True)
 
 
+# The agent's program forks a child that leaves the agent's process group (and in the "thread" case, keeps running
+# in a second thread after its main thread exits, so it shows as a zombie), notes its id, and the program exits.
+ESCAPE = (
+    "import ctypes, os, platform, sys, threading, time\n"
+    "pid = os.fork()\n"
+    "if pid == 0:\n"
+    "    os.setsid()\n"
+    "    open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+    "    def kill_all():\n"
+    "        while True:\n"
+    "            try:\n                os.kill(-1, 9)\n"
+    "            except OSError:\n                pass\n"
+    "            time.sleep(0.001)\n"
+    "    threading.Thread(target=kill_all).start()\n"
+    "    if sys.argv[2] == 'thread':\n"
+    "        time.sleep(0.2)\n"
+    "        ctypes.CDLL(None).syscall({'x86_64': 60, 'aarch64': 93}[platform.machine()], 0)  # the main thread only\n"
+    "    while True:\n        time.sleep(1)\n"
+    "time.sleep(5)\n"  # the child's first round of kills ends this one too
+)
+
+
 @needs_root_and_namespaces
-def test_an_agent_that_kills_whatever_it_can_still_ends() -> None:
-    """An agent process that keeps sending SIGKILL to every process its user can reach: the cleanup runs as the
-    supervisor, which no agent can signal, so it still ends."""
+@pytest.mark.parametrize("how", ["group", "thread"])
+def test_an_agent_child_that_left_its_group_and_kills_back_still_ends(how: str) -> None:
+    """A child of the agent outside its process group, sending SIGKILL to everything its user can reach (and, in
+    one case, running on with its main thread gone, so it shows as a zombie): the supervisor's own cleanup, which no
+    agent can signal, ends it after the agent has exited."""
     import shutil
     import tempfile
 
     from kokoah_subnet.agent import supervisor
 
-    uid = 61236
+    uid = 61237 if how == "group" else 61238
     if supervisor.processes_of(uid):
         pytest.skip(f"uid {uid} is in use here")
     home = Path(tempfile.mkdtemp(dir="/tmp"))
     os.chmod(home, 0o777)
-    killer = "import os\nwhile True:\n    try:\n        os.kill(-1, 9)\n    except OSError:\n        pass\n"
+    note = home / "child"
     runner = supervisor.AgentRunner(
-        supervisor.agent_command(1024, uid, uid, program=["/usr/bin/python3", "-c", killer]), home, uid=uid
-    )
+        supervisor.agent_command(1024, uid, uid, program=["/usr/bin/python3", "-c", ESCAPE, str(note), how]), home,
+        uid=uid,
+    )  # fmt: skip
     try:
         proc = runner.start()
         assert proc is not None
-        for _ in range(100):  # until it has been killing for a while as the agent's user
-            time.sleep(0.05)
-            if supervisor.processes_of(uid) and proc.poll() is None:
-                break
-        time.sleep(0.2)
-        assert supervisor.processes_of(uid) == [proc.pid]
+        proc.wait(timeout=30)  # the agent's program is gone (its own child killed it); the child is not
+        time.sleep(0.5)
+        child = int(note.read_text())
+        assert supervisor.processes_of(uid) == [child]
         runner.stop()
-        assert supervisor.processes_of(uid) == [] and proc.poll() is not None
+        assert supervisor.processes_of(uid) == []
     finally:
         runner.stop()
         shutil.rmtree(home, ignore_errors=True)
+
+
+def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import ctypes
+    import errno
+
+    from kokoah_subnet.agent import supervisor
+
+    class Refusing:  # the kernel refuses the pidfd (a container that does not allow it, say)
+        def syscall(self, *args: object) -> int:
+            ctypes.set_errno(errno.EPERM)
+            return -1
+
+    monkeypatch.setattr(supervisor, "_libc", Refusing())
+    me = os.getuid()
+    with pytest.raises(OSError, match="pidfd_open"):
+        supervisor.kill_user_processes(me, rounds=1)
+    runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=me)
+    with pytest.raises(OSError):
+        runner.start()  # no new agent beside processes that could not be ended
+    assert runner.proc is None
