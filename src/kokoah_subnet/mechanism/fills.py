@@ -40,6 +40,7 @@ class Fill:
     cloid: str | None = None  # the client order id (history fills only)
     source: str = "file"  # "file" (builder file only), "history" (the address's own history only), "both"
     hash: str | None = None  # the transaction that produced the fill (history fills only)
+    start_position: float | None = None  # the coin's position size just before the fill (history fills only)
 
     @property
     def notional(self) -> float:
@@ -151,6 +152,7 @@ def parse_user_fills(user: str, records: Iterable[Mapping[str, Any]]) -> list[Fi
                 cloid=str(cloid).lower() if cloid else None,
                 source="history",
                 hash=str(tx).lower() if tx else None,
+                start_position=float(r["startPosition"]) if r.get("startPosition") not in (None, "") else None,
             )
         )
     return out
