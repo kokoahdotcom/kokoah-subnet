@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.1, October 2026. Mechanism specification v6.3.
+Whitepaper, version 3.1, October 2026. Mechanism specification v6.4.
 
 ### Summary
 
@@ -32,7 +32,7 @@ returns to Bittensor and to the people and agents who earned it.
 - **80% for activity.** The volume reward is shared in proportion to the builder fees each trader paid. Splitting
   an account in two changes nothing.
 - **20% for proven skill.** The skill reward goes only to accounts whose daily returns pass a strict statistical
-  test over 90 days, so luck, copies and split accounts cannot take it.
+  test over 90 days, so luck cannot take it. Each account is weighed on its own record.
 - **Verified agents earn 10% more skill weight.** Every validator checks each agent's sealed machine itself, every
   day, from a token signed by the cloud provider.
 - **From verified agents to the market.** Agents with long, verified records are to become strategies offered to
@@ -131,7 +131,7 @@ flowchart TD
   E -->|yes| F[Builder fees paid today<br/>smoothed: 30% today, 70% the running figure]
   F --> VP[Volume reward: 80% of the pool<br/>in proportion to fees]
   E -->|yes| S{Proven record?<br/>90-day statistical test, activity,<br/>skill above the luck floor}
-  S -->|yes| W[Skill weight<br/>skill x participation, +10% for a verified agent,<br/>copies earn nothing]
+  S -->|yes| W[Skill weight<br/>skill x participation, +10% for a verified agent]
   W --> SP[Skill reward: 20% of the pool<br/>in proportion to skill weight]
   VP --> PAY[Paid to the miner]
   SP --> PAY
@@ -168,7 +168,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.3; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.4; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -199,25 +199,25 @@ with what weight:
 - **Participation.** The skill weight grows with the account's eligible Kokoah volume over the last 30 days, up to
   $1 million; beyond that, more volume adds nothing to the skill reward.
 
-The skill weight is the skill above the floor times participation, with 10% more for a verified agent. Accounts whose
-daily returns move almost exactly together over 30 days or more form a group in which only the account that leads,
-the one whose trades come first, keeps its weight: a copy earns nothing, and the same strategy in ten accounts earns
-what it would in one. The skill reward also needs the activity gates (10 round trips, 7 active days
-and a mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody qualifies for
+The skill weight is the skill above the floor times participation, with 10% more for a verified agent; each account
+is weighed on its own record. The skill reward also needs the activity gates (10 round trips, 7 active days and a
+mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody qualifies for
 it, the skill reward joins the volume reward.
 
 **What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own
 cluster (sub-accounts, addresses on the same coldkey, addresses funded by or transferring with each other); fills
 against another linked account, since the subnet does not pay for volume between its own miners (both sides of every
-trade carry the same trade id, so this is exact); fills priced more than 0.5% from the exchange's minute mark, which
-are valued at the mark; and fills whose order did not carry the Kokoah builder code, which the validator confirms
-from the account's own signed orders. Persistent hedging through the market is caught by position: daily net
-positions correlated below −0.8 with another linked account on at least 10 days in the last 30. Mirrored volume above
-25% of an account's notional is removed from its credit; above 50%, both accounts are reported and leave the skill
-reward for 30 days.
+trade carry the same trade id, so this is exact; such trades report no one, since anyone can take anyone's orders);
+fills priced more than 0.5% from the exchange's minute mark, which are valued at the mark; and fills whose order did
+not carry the Kokoah builder code, which the validator confirms from the account's own signed orders. A coin in which
+an account made more than a quarter of the day's volume was priced by its own trades, so that day's profit is not
+counted for skill, while a loss is. Persistent hedging between accounts of one owner (one coldkey, or a master and its sub-accounts)
+is caught by position: net positions at each day's end correlated below −0.8 on at least 10 days in the last 30.
+Mirrored positions above 25% of an account's are removed from its credit; above 50%, both accounts are reported and
+leave the skill reward for 30 days.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 90 days;
-luck floor 0.25; participation full at $1M over 30 days; copy rule above 0.9 correlation over 30 days; agent bonus 10%
+luck floor 0.25; participation full at $1M over 30 days; agent bonus 10%
 of the skill weight; gates 10 round trips, 7 days, $500; eligibility $10,000 average account value a day and three
 qualifying trades worth $1,000; mirror thresholds 25% and 50%; migration once per 60 days; emission split miners 41%,
 validators 41%, owner 18% (locked). Changes follow section 10.
@@ -231,12 +231,11 @@ dollar is worth the same to everyone. Splitting and merging accounts change noth
 fees, and every fee paid funds the buyback.
 
 **The skill reward pays only for a proven edge.** An account without a real edge almost never passes the 90-day test.
-A copy of another miner's strategy earns nothing; splitting a large account gains nothing; the test always reads the
-account's own record, whatever hotkey it is linked to.
+The test always reads the account's own record, whatever hotkey it is linked to.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
-What no one can do is buy the skill reward with volume, take it with luck, or multiply it with copies.
+What no one can do is buy the skill reward with volume or take it with luck.
 
 ## 7. Trading agents
 
@@ -439,8 +438,6 @@ entry      = PSR of the last 90 days of r̃ ≥ 0.95, gates passed, no mirror re
 s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
 w_i        = s_i × v_i × (1.1 for a verified agent)       when entry holds, else 0
-copies     = in a group with daily-return correlation > 0.9 over ≥ 30 common days, only the leader keeps its w
-             (the leader trades first on the same coin and side; else the longest record)
 ```
 
 The agent check, by each validator:
@@ -461,9 +458,6 @@ participation giving 0.8 before the bonus, so 0.88 after it; trader C has no pro
 (2,361.6 alpha) splits three ways, 787.2 alpha each. The skill reward (590.4 alpha) splits between A and B in the
 ratio 0.8 to 0.88: 281.1 and 309.3 alpha. A is paid 1,068.3 alpha, B 1,096.5 and C 787.2; the whole pool is paid.
 
-If A ran the same strategy in a second account, or someone copied A's trades, only A, whose trades come first,
-would keep its weight of 0.8, and the total paid to A's strategy would not change.
-
 ### Appendix C. A validator's day
 
 1. Fetch the previous UTC day's per-builder fill file (waiting up to twelve hours after the day for it); verify its
@@ -479,7 +473,7 @@ would keep its weight of 0.8, and the total paid to A's strategy would not chang
    deadline (and for a few hours after a validator's first attempt at the day); after it, only what depended on the
    failed read goes uncounted.
 5. Compute eligibility and qualification, the smoothed credit, the skill score, the entry test, the skill weights with
-   the copy rule and the agent bonus, and both rewards.
+   the agent bonus, and both rewards.
 6. Write everything to the record; publish the per-miner artifact; set weights every tempo until the next run.
 
 ### Appendix D. Binding format

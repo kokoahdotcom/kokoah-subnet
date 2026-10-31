@@ -127,9 +127,12 @@ reward measures.
 - the part of a fill's price more than 0.5% away from the market price: such a fill is valued at the market price,
   and any profit it moves into the account is removed from your returns.
 
-Accounts whose positions mirror each other (one long while the other is short, day after day) are detected. When
-mirrored volume is more than a quarter of an account's volume, it is removed from the account's credit; above half,
-both accounts also lose their skill standing for 30 days and are reported.
+Trades with another miner earn nothing, and they get no one reported. Accounts of one owner (hotkeys on one coldkey,
+or a master and its sub-accounts) whose positions mirror each other at the end of each day (one long while the other
+is short, day after day) are detected. When mirrored positions are more than a quarter of an account's positions, it
+loses that share of its credit; above half, both accounts also lose their skill standing for 30 days and are
+reported. If your own trades are more than a quarter of a coin's volume on a day, that day's profit does not count
+for skill, but a loss does (its fees still count).
 
 ## 6. Qualify and stay eligible
 
@@ -163,8 +166,7 @@ earns nothing extra: the reward is proportional to fees.
   average account value of at least $500.
 - **Weight.** Skill above a luck floor, multiplied by participation: full participation at $1 million of eligible
   Kokoah volume over 30 days, less in proportion below it.
-- **Copies.** Among accounts whose daily returns correlate above 0.9 over at least 30 days, only the one whose
-  trades come first keeps its weight; copying another miner earns nothing.
+- **Your own record.** Each account is weighed on its own record; copy trading is never punished.
 - **Agents.** A verified trading agent earns 10% more skill weight (section 10).
 
 If nobody qualifies for the skill reward on a day, the volume reward takes the whole emission.
