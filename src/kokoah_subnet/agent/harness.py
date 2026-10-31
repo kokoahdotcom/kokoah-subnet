@@ -80,6 +80,7 @@ AGENT_METHODS = frozenset(
     {"order", "cancel", "cancel_by_cloid", "update_leverage", "update_isolated_margin", "schedule_cancel"}
 )
 SIGNED_REQUEST_WINDOW_MS = 300_000
+STOP_WAIT_S = 90.0  # how long a stop waits for the agent's calls under way (each exchange request times out at 20 s)
 # the public interface: requests a minute from one caller, and the threads its slow work may hold
 ATTESTATIONS_PER_MINUTE = 6  # validators ask once per check; each answer is a call to the launcher
 SIGNED_PER_MINUTE = 10  # /withdraw and /stop: the miner's own requests
@@ -126,6 +127,8 @@ class Harness:
         self.http = http or httpx.Client(timeout=20, trust_env=False)
         self.on_stop = on_stop
         self.stopped = False  # once a signed stop is accepted, the agent places nothing more
+        self._calls = threading.Condition()  # the agent's calls under way, which a stop waits for
+        self._in_flight = 0
         self.started_at = int(time.time())
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
@@ -307,8 +310,6 @@ class Harness:
     def call(self, method: str, params: dict[str, Any]) -> Any:
         if method not in AGENT_METHODS:  # checked before anything else: no attribute is ever looked up by name
             raise ValueError(f"method not offered: {method}")
-        if self.stopped:  # whatever of the agent may still run after a stop, nothing it asks reaches the exchange
-            raise ValueError("the agent was stopped")
         handlers: dict[str, Callable[..., Any]] = {
             "order": self.order,
             "cancel": self.cancel,
@@ -317,7 +318,16 @@ class Harness:
             "update_isolated_margin": self.update_isolated_margin,
             "schedule_cancel": self.schedule_cancel,
         }
-        return handlers[method](**params)
+        with self._calls:
+            if self.stopped:  # whatever of the agent may still run after a stop, nothing it asks reaches the exchange
+                raise ValueError("the agent was stopped")
+            self._in_flight += 1
+        try:
+            return handlers[method](**params)
+        finally:
+            with self._calls:
+                self._in_flight -= 1
+                self._calls.notify_all()
 
     def agent_info(self, request: dict[str, Any]) -> Any:
         kind = request.get("type")
@@ -380,7 +390,10 @@ class Harness:
 
     def stop(self, time_ms: int, signature: str) -> Any:
         self._check_master(stop_message(self.address, time_ms), signature, time_ms)
-        self.stopped = True  # before the cancels, so no order of the agent's lands after them
+        with self._calls:
+            self.stopped = True  # before the cancels, so no order of the agent's lands after them
+            # and an order already on its way is answered first, so it is among the open orders cancelled below
+            self._calls.wait_for(lambda: self._in_flight == 0, timeout=STOP_WAIT_S)
         open_orders = self.info({"type": "openOrders", "user": self.address})
         results = [self.cancel(o["coin"], int(o["oid"])) for o in open_orders]
         if self.on_stop:

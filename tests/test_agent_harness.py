@@ -158,6 +158,42 @@ def test_the_two_interfaces(setup: Any) -> None:
     assert after == {"ok": False, "error": "the agent was stopped"} and len(fake.posted) == posted
 
 
+def test_a_stop_waits_for_an_order_already_on_its_way(setup: Any) -> None:
+    """An order the agent sent just before the stop is answered before the stop reads the open orders, so it is among
+    those cancelled and never left on the book."""
+    import threading
+
+    h, fake, master, _ = setup
+    order_sent, release = threading.Event(), threading.Event()
+    log: list[str] = []
+    answer: Callable[[httpx.Request], httpx.Response] = fake.handler
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if request.url.path == "/exchange" and body["action"]["type"] == "order":
+            order_sent.set()
+            release.wait(5)
+        log.append(body["action"]["type"] if request.url.path == "/exchange" else body["type"])
+        return answer(request)
+
+    h.http = httpx.Client(transport=httpx.MockTransport(slow), base_url="https://x")
+    placing = threading.Thread(
+        target=h.call, args=("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    )
+    placing.start()
+    assert order_sent.wait(5)
+    t = int(time.time() * 1000)
+    sig = "0x" + bytes(master.sign_message(encode_defunct(text=stop_message(h.address, t))).signature).hex()
+    stopping = threading.Thread(target=h.stop, args=(t, sig))
+    stopping.start()
+    time.sleep(0.2)
+    assert "openOrders" not in log and stopping.is_alive()  # the stop waits while the order is on its way
+    release.set()
+    placing.join(5)
+    stopping.join(5)
+    assert log.index("order") < log.index("openOrders") < log.index("cancel")
+
+
 def test_the_harness_binding_line_is_the_subnet_one() -> None:
     assert harness_module.binding_message(7, "5Abc", "0xAB") == binding_message(7, "5Abc", "0xAB")
 
