@@ -1,6 +1,7 @@
 """The skill pool's entry rules and weight (specification section 7a)."""
 
 import random
+from dataclasses import replace
 
 import pytest
 
@@ -162,6 +163,16 @@ def test_a_copier_s_second_account_makes_up_no_lead() -> None:
     assert sum(leads["c"].values()) > sum(leads["orig"].values())  # added up, C would look like the leader
     registered = {"orig": 1_000, "c": 5_000, "s": 6_000}
     assert copy_leader(["orig", "c", "s"], leads, registered, DEFAULT) == "orig"
+
+
+def test_an_original_trading_by_twap_keeps_the_lead() -> None:
+    """The original buys $10,000 with the exchange's TWAP, ten $1,000 slices thirty seconds apart; the copier buys
+    the whole $10,000 five seconds after the first slice. The slices are one order, at the first one."""
+    orig = [replace(f, twap_id=77) for k in range(10) for f in order("orig", T0 + k * 30_000, 1_000.0)]
+    copy = order("copier", T0 + 5_000, 10_000.0)
+    leads, matched = copy_matches(["orig", "copier"], {"orig": orig, "copier": copy})
+    assert leads["orig"]["copier"] > 0 and "orig" not in leads["copier"]
+    assert copy_leader(["orig", "copier"], leads, REGISTERED, DEFAULT, matched) == "orig"
 
 
 def test_the_lead_is_judged_over_the_days() -> None:
