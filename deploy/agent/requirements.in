@@ -1,4 +1,5 @@
 # The sealed machine's packages (the harness only; no chain SDK). Pinned to the repository lock.
+coincurve==21.0.0
 cryptography==44.0.0
 eth-account==0.13.7
 fastapi==0.148.0

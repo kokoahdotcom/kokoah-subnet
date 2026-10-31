@@ -17,7 +17,7 @@ from bittensor.keyfiles import Keypair
 from cryptography.hazmat.primitives.asymmetric import rsa
 from eth_account import Account
 from fastapi.testclient import TestClient
-from uploads import upload
+from uploads import now_ms, signed_upload, upload
 
 from kokoah_subnet.agent.attest import DevelopmentAttestor, StaticKeys
 from kokoah_subnet.agent.bundle import encrypt, new_key, package, sha256_hex
@@ -62,8 +62,7 @@ def world(tmp_path: Path) -> dict[str, Any]:
     bundle_key = new_key()
     blob = encrypt(plain, bundle_key)  # private code: the service stores only ciphertext
     blob_id = sha256_hex(blob)
-    sig = bytes(hotkey.sign(submit_message(blob_id, hotkey.ss58_address).encode())).hex()
-    r = upload(service, hotkey.ss58_address, blob, sig)
+    r = signed_upload(service, hotkey, blob)
     assert r.status_code == 200 and r.json()["encrypted"] and r.json()["code_sha256"] is None
     # the sealed machine: fetch, check, decrypt, fingerprint
     got, code = fetch_code("http://svc", blob_id, bundle_key.hex(), service)
@@ -90,10 +89,15 @@ def test_submission_rules(world: dict[str, Any], tmp_path: Path) -> None:
     hotkey = Keypair.create_from_uri("//Alice")
     blob = package(make_agent(tmp_path / "second"))
     blob_id = sha256_hex(blob)
-    good = bytes(hotkey.sign(submit_message(blob_id, hotkey.ss58_address).encode())).hex()
-    assert upload(svc, hotkey.ss58_address, blob, good).status_code == 429  # one per 12 hours
+    t = now_ms()
+    good = bytes(hotkey.sign(submit_message(blob_id, hotkey.ss58_address, t).encode())).hex()
+    assert upload(svc, hotkey.ss58_address, blob, good, time_ms=t).status_code == 429  # one per 12 hours
     bob = Keypair.create_from_uri("//Bob")
-    assert upload(svc, bob.ss58_address, blob, good).status_code == 403  # signed by Alice, sent as Bob
+    assert upload(svc, bob.ss58_address, blob, good, time_ms=t).status_code == 403  # signed by Alice, sent as Bob
+    assert upload(svc, hotkey.ss58_address, blob, good, time_ms=t + 1).status_code == 403  # not the signed time
+    late = t - 6 * 60_000  # a signature from more than 5 minutes ago is refused, whatever it signed
+    old = bytes(hotkey.sign(submit_message(blob_id, hotkey.ss58_address, late).encode())).hex()
+    assert upload(svc, hotkey.ss58_address, blob, old, time_ms=late).status_code == 403
 
 
 async def _check(world: dict[str, Any], binding: Binding, images: list[str], others: list[Any]) -> Any:

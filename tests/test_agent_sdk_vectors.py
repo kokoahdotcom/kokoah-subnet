@@ -121,7 +121,7 @@ def test_a_signed_stop_cancels_the_orders_and_ends_the_agent(tmp_path: Path, mon
     monkeypatch.setattr(supervisor, "AGENT_HOME", tmp_path)  # the agent's directory inside the sealed machine
     posted: list[dict[str, Any]] = []
     orders = [{"coin": "BTC", "oid": 11}, {"coin": "ETH", "oid": 12}]
-    runner = AgentRunner([sys.executable, "-c", "import time; time.sleep(60)"], {})
+    runner = AgentRunner([sys.executable, "-c", "import time; time.sleep(60)"], tmp_path)
     h = harness(True, posted, orders)
     h.on_stop = runner.stop
     thread = threading.Thread(target=runner.run, daemon=True)

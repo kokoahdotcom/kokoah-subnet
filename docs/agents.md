@@ -57,9 +57,12 @@ out, and the tool refuses to package a file that looks like a key or a secret: b
 `UTC--` keystore file), or by its content, whatever its name (a PEM or PGP private key, an Ethereum keystore or a
 Bittensor key file). Certificate files are fine. Keep keys outside the agent directory. The code is encrypted so that
 only your sealed machine can read it; `--public` publishes it unencrypted instead, and then anyone can download it
-from the service. One submission per hotkey per 12 hours, and only from a hotkey that is registered on the subnet
-(the service also stores key copies only for registered hotkeys; getting an account back or taking its key out works
-even after the hotkey lost its registration).
+from the service. One submission per hotkey per 12 hours (and at most 6 uploads an hour, refused ones included),
+and only from a hotkey that is registered on the subnet (the service also stores key copies only for registered
+hotkeys; getting an account back or taking its key out works even after the hotkey lost its registration). The
+service keeps a hotkey's newest five bundles, and a month after a hotkey leaves the subnet it deletes its bundles,
+except the one a kept key copy was filed with; the same hotkey can submit a deleted bundle again (a new submission,
+under the 12-hour rule), for instance before restarting a machine on it.
 
 Kokoah's agent service is `https://api.kokoah.com/miners`: `/agents` (submissions and their code), `/images` (the
 approved harness images), `/key-store/<account>` (the machines' encrypted key copies) and `/key-store/released`
@@ -143,6 +146,10 @@ curl http://<machine>:8080/status
 #  "network": "mainnet", "started_at"}
 curl "http://<machine>:8080/attestation?challenge=$(openssl rand -hex 32)"   # a token: the machine proves itself
 ```
+
+`/attestation` answers 6 requests a minute from one address, `/withdraw` and `/stop` 10, then "429 too many
+requests" to that address for the rest of the minute (others are not affected); `/status` and `/binding` are never
+limited.
 
 If `/status` does not answer a few minutes after the start, the machine stopped. Check every setting (an address
 with a typo, an unknown network, a missing or weak secret, a start permission that was used or is more than 7 days

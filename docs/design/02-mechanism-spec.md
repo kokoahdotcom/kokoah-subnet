@@ -83,7 +83,8 @@ rate, and counts only once its **order is confirmed**: the address's own transac
 (`userDetails`) list every order it signed with its builder field and client order id, and a candidate counts when
 its client order id belongs to an order the address placed with Kokoah's builder (and was not modified afterwards,
 a modify carries no builder field), or, for a taker fill, when the transaction that placed and filled it
-(`txDetails` of the fill's hash) is such an order. Builder approvals are not used: the order's own builder field
+(`txDetails` of the fill's hash) is such an order; such one-by-one lookups are made for at most 100 taker fills per
+address a day (in the order of their transaction hashes). Builder approvals are not used: the order's own builder field
 decides, and it cannot be changed after the fact. Counterparties of history fills come from trade ids: the
 validator reads the day's fills of every bound address and of up to 25 linked accounts per address (its
 sub-accounts first, then its transfer partners by the amount moved, largest first), and a fill whose trade id
@@ -348,7 +349,8 @@ after 60 days.
   record, which stays with the address, as do its penalties.
 - **Unlinking.** The linked address ends its link with one signature, without the hotkey:
   `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
-  subnet's service, which accepts it only within 10 minutes of its time and publishes it (`GET /unlinks`). Every
+  subnet's service, which accepts it only within 10 minutes of its time and only for a link a binding on chain has
+  named (the service remembers every link the subnet's bindings name), and publishes it (`GET /unlinks`). Every
   validator checks each signature, keeps every unlink it has seen and applies it from the first UTC day after its
   time: the link ends (credit and qualification end with the identity, as when leaving), the address is free for
   another hotkey and the hotkey for another address, and this hotkey and this address are never accepted together
@@ -437,9 +439,13 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
   machine's attested store nonce covers the permission, so a copy can be filed under a hotkey only by its owner.
 - **Runs the miner's agent code in a sandbox**: a separate user, its own view of the filesystem in which the
   launcher's folder (the attestation socket and the launcher's token) is empty, no new privileges, no core dumps,
-  memory and process limits, and a seccomp filter that refuses every network socket except Unix sockets, io_uring and
-  other processes' memory. The agent's only way out is the harness's Unix socket, and it cannot ask the machine for
-  an attestation token; the harness starts it only after a probe, run exactly as the agent, sees nothing there.
+  memory and process limits, and a seccomp filter that refuses every network socket except Unix sockets, and the
+  calls an agent never needs that widen what it reaches of the kernel: other processes' memory, io_uring, new
+  namespaces, mounts, kernel keyrings, BPF, performance counters, userfaultfd, modules and kexec. The sandbox itself
+  starts isolated (`python -I`, a fixed environment), and the agent's environment, which puts its bundle on Python's
+  import path, is set only as the agent's program starts: nothing in the bundle runs before the sandbox is in place.
+  The agent's only way out is the harness's Unix socket, and it cannot ask the machine for an attestation token; the
+  harness starts it only after a probe, run exactly as the agent, sees nothing there.
 - **Offers the agent a narrow interface**: orders (limit and trigger), cancels, leverage, isolated margin and a
   scheduled cancel; read-only exchange data, account queries answered for this account only. Kokoah's builder code
   is attached to every order and the order id carries Kokoah's agent marker (`0x6b6f0603…`). An order that executes
@@ -450,7 +456,8 @@ started from Kokoah's published harness image. The harness (`src/kokoah_subnet/a
 
 **Submission.** The miner packages the code reproducibly (`kokoah-subnet agent package`, an `entry.py` and any
 packages it imports inside), encrypted by default with a key only the miner holds, and submits it to the owner's
-service signed by a registered hotkey (`agent submit`; one submission per hotkey per 12 hours). The machine fetches exactly
+service signed by a registered hotkey with the time (`agent submit`; within 5 minutes; one submission per hotkey per
+12 hours, and at most 6 uploads an hour, refused ones included). The machine fetches exactly
 that submission, checks its id, decrypts it inside, and computes the **code fingerprint** (sha256 of the zip).
 
 **Binding.** The machine signs the subnet binding line with the account's key; the miner publishes it with an

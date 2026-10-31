@@ -220,9 +220,9 @@ uv run kokoah-subnet miner unlink-message --hotkey <hotkey ss58> --address <0x..
 uv run kokoah-subnet miner unlink --hotkey <hotkey ss58> --address <0x...> --time-ms <time> --signature <0x...>
 ```
 
-From the next UTC day the hotkey earns nothing from the address, its unpaid credit is lost (as when leaving), the
-address can be linked by another hotkey and the hotkey can link another address. This hotkey and this address can
-never be linked again. Penalties stay with the address.
+Only a link a binding on chain has named can be unlinked. From the next UTC day the hotkey earns nothing from the
+address, its unpaid credit is lost (as when leaving), the address can be linked by another hotkey and the hotkey can
+link another address. This hotkey and this address can never be linked again. Penalties stay with the address.
 
 Leaving the subnet forfeits the part of your credit not yet paid out (with the 30% smoothing, most of the last few
 days' fees).

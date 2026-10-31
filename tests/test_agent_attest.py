@@ -1,5 +1,7 @@
 """A validator's checks on a sealed machine's token: signature, production build, approved image, fresh nonces."""
 
+from typing import Any
+
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -63,3 +65,84 @@ def test_the_binding_digest_names_everything() -> None:
         binding_digest(2, "hk", "0xabc", "12" * 32),
     ):
         assert other != base
+
+
+def test_tokens_naming_made_up_keys_cost_at_most_one_key_read_a_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    import jwt as pyjwt
+
+    from kokoah_subnet.agent import attest
+
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    real = pyjwt.PyJWK.from_dict({**pyjwt.algorithms.RSAAlgorithm.to_jwk(rsa_key.public_key(), as_dict=True),
+                                  "kid": "google-1", "alg": "RS256"})  # fmt: skip
+    reads: list[float] = []
+    now = [1000.0]
+    monkeypatch.setattr("kokoah_subnet.agent.attest.time.monotonic", lambda: now[0])
+
+    def fetch() -> list[Any]:
+        reads.append(now[0])
+        return [real]
+
+    keys = attest.PublishedKeys(fetch, refresh_s=300)
+
+    def token(kid: str) -> str:
+        return pyjwt.encode({"x": 1}, rsa_key, algorithm="RS256", headers={"kid": kid})
+
+    assert keys.get_signing_key_from_jwt(token("google-1")) is real and len(reads) == 1
+    for i in range(50):  # made-up keys: refused, and the set is not read again within the window
+        with pytest.raises(pyjwt.PyJWKClientError):
+            keys.get_signing_key_from_jwt(token(f"made-up-{i}"))
+    assert len(reads) == 1
+    now[0] += 301  # a new key of Google's is found once the window has passed
+    with pytest.raises(pyjwt.PyJWKClientError):
+        keys.get_signing_key_from_jwt(token("google-2"))
+    assert len(reads) == 2 and keys.get_signing_key_from_jwt(token("google-1")) is real
+
+
+def test_a_known_key_is_answered_while_the_key_set_is_being_read() -> None:
+    import threading
+    import time as clock
+
+    import jwt as pyjwt
+
+    from kokoah_subnet.agent import attest
+
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    real = pyjwt.PyJWK.from_dict({**pyjwt.algorithms.RSAAlgorithm.to_jwk(rsa_key.public_key(), as_dict=True),
+                                  "kid": "google-1", "alg": "RS256"})  # fmt: skip
+    slow, reads = threading.Event(), [0]
+
+    def fetch() -> list[Any]:
+        reads[0] += 1
+        if reads[0] > 1:
+            slow.wait(5)  # a slow read of the set, for a key nobody has seen
+        return [real]
+
+    keys = attest.PublishedKeys(fetch, refresh_s=0)
+
+    def token(kid: str) -> str:
+        return pyjwt.encode({"x": 1}, rsa_key, algorithm="RS256", headers={"kid": kid})
+
+    assert keys.get_signing_key_from_jwt(token("google-1")) is real
+    outcome: list[str] = []
+
+    def unknown() -> None:
+        try:
+            keys.get_signing_key_from_jwt(token("google-2"))
+            outcome.append("accepted")
+        except pyjwt.PyJWKClientError:
+            outcome.append("refused")
+
+    reading = threading.Thread(target=unknown)
+    reading.start()
+    for _ in range(100):  # until the read for google-2 is under way
+        if reads[0] == 2:
+            break
+        clock.sleep(0.01)
+    assert reads[0] == 2 and not slow.is_set()
+    started = clock.monotonic()
+    assert keys.get_signing_key_from_jwt(token("google-1")) is real
+    assert clock.monotonic() - started < 1  # no waiting behind it
+    slow.set()
+    reading.join(timeout=10)
+    assert outcome == ["refused"]  # a key Google does not publish is refused once the read is done

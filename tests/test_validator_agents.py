@@ -135,3 +135,35 @@ async def test_the_batch_has_an_overall_deadline(monkeypatch: pytest.MonkeyPatch
         results = await check_agents(slow, 2, StaticKeys(None), [IMAGE], http, no_extra, released=set())
     assert time.monotonic() - started < 3
     assert len(results) == 3 and all(not r.ok and "timed out" in str(r.reason) for r in results)
+
+
+async def test_with_no_approved_image_no_account_is_an_agent_and_no_machine_is_asked() -> None:
+    good, app, key = good_machine("hkGood")
+    transport = Machine({"203.0.113.20": app})
+    async with httpx.AsyncClient(transport=transport) as http:
+        results = await check_agents(
+            {"hkGood": good}, 2, StaticKeys(key.public_key()), [], http, no_extra, released=set()
+        )
+    assert [(r.ok, r.reason) for r in results] == [(False, "no harness image is approved")]
+    assert transport.asked == []
+
+
+def test_withdrawn_harness_images_are_never_approved() -> None:
+    from kokoah_subnet.agent.images import APPROVED_HARNESS_IMAGES
+
+    withdrawn = {
+        "sha256:4c4576cf7f406661342d74f98feb7ce80b3c7f53045b6816c5bbbe143aada527",  # 1.2.0: bundle code ran as root
+    }
+    assert not withdrawn & set(APPROVED_HARNESS_IMAGES)
+
+
+async def test_a_slow_name_lookup_counts_against_the_machine_s_own_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def slow(host: str) -> list[str]:
+        await asyncio.sleep(30)
+        return ["203.0.113.9"]
+
+    monkeypatch.setattr(agents, "resolve_host", slow)
+    monkeypatch.setattr(agents, "ANSWER_TIMEOUT_S", 0.3)
+    started = time.monotonic()
+    result = await one(binding_at("agent.example.com"), Machine({}))
+    assert not result.ok and result.reason == "machine too slow to answer" and time.monotonic() - started < 2

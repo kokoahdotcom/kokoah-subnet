@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from eth_account import Account
 from fastapi.testclient import TestClient
 
@@ -112,7 +113,8 @@ def test_the_service_files_an_unlink_only_when_the_address_signed_it_just_now(tm
     assert c.get("/unlinks/message", params={"hotkey": "nope", "address": owner.address}).status_code == 400
     listed = c.get("/unlinks", params={"address": owner.address}).json()["unlinks"]
     assert [u["hotkey"] for u in listed] == [H1] and c.get("/unlinks", params={"address": other.address}).json() == {
-        "unlinks": []
+        "unlinks": [],
+        "next": None,
     }
 
 
@@ -140,3 +142,170 @@ def test_a_validator_keeps_every_unlink_it_saw_and_the_first_per_pair(tmp_path: 
     store.put_unlinks("2026-10-24", [first])
     store.put_unlinks("2026-10-27", [later])
     assert store.unlinks() == [first]
+
+
+def test_only_a_link_a_binding_on_chain_named_can_be_unlinked_and_it_is_remembered(tmp_path: Path) -> None:
+    clock, owner, stranger = Clock(), Account.create(), Account.create()
+    links = {(H1, owner.address.lower())}
+    reads = []
+
+    def bound() -> set[tuple[str, str]]:
+        reads.append(clock.now)
+        return set(links)
+
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: hk == H1, clock=clock,
+                     netuid=NETUID, bound_pairs=bound)  # fmt: skip
+    c = TestClient(app)
+    t = int(clock.now * 1000)
+
+    def unlink(key: Any) -> int:
+        body = {"hotkey": H1, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
+        return int(c.post("/unlinks", json=body).status_code)
+
+    assert unlink(stranger) == 403  # a fresh address never linked to the hotkey: nothing to unlink
+    assert unlink(stranger) == 403 and len(reads) == 1  # the chain is read again only after a while
+    links.clear()  # the hotkey commits something else: the link it named before is remembered
+    clock.now += 60
+    assert unlink(owner) == 200 and c.get("/unlinks").json()["unlinks"][0]["address"] == owner.address.lower()
+
+
+def test_the_unlink_list_comes_in_pages_oldest_first_and_misses_none(tmp_path: Path) -> None:
+    clock = Clock()
+    keys = [Account.create() for _ in range(5)]
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
+                     netuid=NETUID)  # fmt: skip
+    c = TestClient(app)
+    for i, key in enumerate(keys):
+        t = int(clock.now * 1000)
+        body = {"hotkey": H1, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
+        assert c.post("/unlinks", json=body).status_code == 200
+        clock.now += 1 if i == 0 else 0  # four of them received at the very same time
+    seen, after, pages = [], "", 0
+    while True:
+        page = c.get("/unlinks", params={"after": after, "limit": 2}).json()
+        seen += [u["address"] for u in page["unlinks"]]
+        pages += 1
+        if page["next"] is None:
+            break
+        after = page["next"]
+    assert sorted(seen) == sorted(k.address.lower() for k in keys) and len(seen) == 5 and pages == 3
+    assert c.get("/unlinks", params={"after": "nonsense"}).status_code == 400
+
+
+def test_an_unlink_filed_after_the_clock_went_back_still_comes_after_a_reader_s_place(tmp_path: Path) -> None:
+    clock = Clock()
+    keys = [Account.create() for _ in range(3)]
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
+                     netuid=NETUID)  # fmt: skip
+    c = TestClient(app)
+
+    def file(key: Any) -> None:
+        t = int(clock.now * 1000)
+        body = {"hotkey": H1, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
+        assert c.post("/unlinks", json=body).status_code == 200
+
+    file(keys[0])
+    last = c.get("/unlinks").json()["unlinks"][-1]
+    place = f"{last['received_at']!r}|{last['hotkey']}|{last['address']}"  # where a reader stopped
+    clock.now -= 600  # the clock went back
+    file(keys[1])
+    file(keys[2])  # and the same instant again
+    later = [u["address"] for u in c.get("/unlinks", params={"after": place}).json()["unlinks"]]
+    assert sorted(later) == sorted(k.address.lower() for k in keys[1:])
+
+
+async def test_a_validator_reads_every_page_and_checks_each_signature_once(monkeypatch: Any) -> None:
+    owners = [Account.create() for _ in range(3)]
+    rows = [signed(o, H1, ms("2026-10-24") + i) for i, o in enumerate(owners)]
+    asked: list[str] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        after = request.url.params.get("after", "")
+        asked.append(after)
+        start = int(after) + 1 if after else 0  # the service's cursor names the last row of the page before
+        page = rows[start : start + 2]
+        listed = [{"hotkey": u.hotkey, "address": u.address, "time_ms": u.time_ms, "signature": u.signature}
+                  for u in page]  # fmt: skip
+        return httpx.Response(200, json={"unlinks": listed, "next": str(start + 1) if len(page) == 2 else None})
+
+    checked: list[str] = []
+    real = Unlink.signed_by_address
+
+    def counted(self: Unlink, netuid: int) -> bool:
+        checked.append(self.address)
+        return real(self, netuid)
+
+    monkeypatch.setattr(Unlink, "signed_by_address", counted)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+        found = await fetch_unlinks(http, "http://svc", NETUID, known={(H1, rows[0].address)})
+    assert found == rows[1:] and asked == ["", "1"]
+    assert sorted(checked) == sorted(u.address for u in rows[1:])  # the kept one is never checked again
+
+
+def test_a_chain_that_cannot_be_read_is_not_asked_again_on_every_request(tmp_path: Path) -> None:
+    clock, owner = Clock(), Account.create()
+    reads = []
+
+    def down() -> set[tuple[str, str]]:
+        reads.append(clock.now)
+        raise RuntimeError("chain down")
+
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: hk == H1, clock=clock,
+                     netuid=NETUID, bound_pairs=down)  # fmt: skip
+    c = TestClient(app)
+    ask = {"hotkey": H1, "address": owner.address}
+    assert c.get("/unlinks/message", params=ask).status_code == 503
+    assert [c.get("/unlinks/message", params=ask).status_code for _ in range(5)] == [503] * 5  # not read again yet
+    assert len(reads) == 1
+    clock.now += 31
+    assert c.get("/unlinks/message", params=ask).status_code == 503 and len(reads) == 2
+
+
+def test_registrations_that_cannot_be_read_are_retried_after_a_pause_and_never_called_unknown() -> None:
+    from kokoah_subnet.chain import RegisteredHotkeys
+
+    now, reads = [0.0], []
+    up = [False]
+
+    async def fetch() -> set[str]:
+        reads.append(now[0])
+        if not up[0]:
+            raise RuntimeError("chain down")
+        return {H1}
+
+    hk = RegisteredHotkeys(fetch, max_age_s=600, refresh_s=30, clock=lambda: now[0])
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="cannot be read"):
+            hk.check(H1)
+    assert len(reads) == 1  # one try, then a pause
+    up[0], now[0] = True, 31.0
+    assert hk.check(H1) and not hk.check(H2) and len(reads) == 2
+    up[0], now[0] = False, 700.0  # the list is old and the chain is down: the old list still answers for a while
+    assert hk.check(H1) and len(reads) == 3
+    assert hk.check(H1) and len(reads) == 3
+
+
+async def test_a_validator_reads_every_unlink_the_service_kept_across_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real service and the validator's reader together: more unlinks than fit on a page, many received at the
+    same moment, each read once."""
+    from kokoah_subnet.agent import service as service_module
+
+    monkeypatch.setattr(service_module, "UNLINK_PAGE", 3)
+    clock, owners = Clock(), [Account.create() for _ in range(8)]
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
+                     netuid=NETUID)  # fmt: skip
+    c = TestClient(app)
+    for i, key in enumerate(owners):
+        t = int(clock.now * 1000)
+        body = {"hotkey": H1 if i % 2 else H2, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1 if i % 2 else H2, key.address, t)}  # fmt: skip
+        assert c.post("/unlinks", json=body).status_code == 200
+        clock.now += 1 if i % 3 == 0 else 0
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as http:
+        found = await fetch_unlinks(http, "http://svc", NETUID)
+    assert sorted(u.address for u in found) == sorted(k.address.lower() for k in owners)

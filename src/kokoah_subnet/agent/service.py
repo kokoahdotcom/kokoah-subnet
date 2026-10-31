@@ -11,8 +11,10 @@ sealed machines fetch it, and where they keep their account key encrypted with t
                                             and the account never earns the agent bonus again
     GET  /key-store/released                       every released account
     GET  /unlinks/message?hotkey=&address=      the text a linked address signs to end its link (with the time)
-    POST /unlinks                                an address's signed unlink (spec section 14)
-    GET  /unlinks[?address=]                     every unlink accepted, for validators (they check each signature)
+    POST /unlinks                                an address's signed unlink (spec section 14), of a link a binding
+                                                 on chain has named
+    GET  /unlinks[?address=][&after=&limit=]     every unlink accepted, oldest received first, in pages, for
+                                                 validators (they check each signature)
 
 A submission's id is the sha256 of the stored bytes (encrypted or not), so a machine can check it fetched exactly
 what was submitted. A plain bundle is checked here (a zip with an entry.py, safe paths, within the size limits) and
@@ -20,7 +22,10 @@ its code fingerprint recorded; an encrypted one cannot be read here and is check
 decrypts it inside the sealed machine. Nothing here is trusted by validators: they compare the fingerprint the
 attested harness reports with the one the miner committed on chain.
 
-The hotkey signs `kokoah-agent-submit-1 sha256=<id> hotkey=<ss58>`. One submission per hotkey per 12 hours.
+The hotkey signs `kokoah-agent-submit-2 sha256=<id> hotkey=<ss58> time=<unix ms>` (within 5 minutes of the
+service's clock). One submission per hotkey per 12 hours, and at most 6 uploads an hour, accepted or refused.
+Bundles nobody can run any more (older than a hotkey's newest five, or of a hotkey that left the subnet a month ago)
+are deleted, unless a kept key copy names them.
 """
 
 from __future__ import annotations
@@ -29,19 +34,24 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import logging
+import math
 import os
 import secrets
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import anyio
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
@@ -56,7 +66,10 @@ from sqlalchemy import (
     create_engine,
     func,
     insert,
+    literal,
     select,
+    text,
+    tuple_,
 )
 from starlette.concurrency import run_in_threadpool
 
@@ -64,8 +77,17 @@ from ..binding.unlink import Unlink, unlink_message
 from .bundle import MAX_BUNDLE_BYTES, check_zip, is_encrypted
 from .keystore import PERMIT_DAYS, parse_permit, release_message, restore_digest, start_message, store_digest
 
+log = logging.getLogger("kokoah_subnet.agent.service")
 SUBMIT_COOLDOWN_S = 12 * 3600
-KEEP_BUNDLES_PER_HOTKEY = 5  # older bundles are deleted unless an account's key copy names them
+SUBMIT_ATTEMPTS_PER_HOUR = 6  # uploads one hotkey may send, accepted or refused (each one is read and checked)
+UPLOADS_AT_ONCE = 8  # bodies received at the same time (one per hotkey); more are told to try again
+UPLOAD_DEADLINE_S = 120.0  # the whole body (20 MB at about 1.4 Mbit/s); a slower one is cut off
+KEEP_BUNDLES_PER_HOTKEY = 5  # older bundles are deleted unless an unreleased key copy names them
+KEEP_LEFT_BUNDLES_S = 30 * 86_400  # a bundle of a hotkey no longer registered, after this long
+PRUNE_EVERY_S = 6 * 3600
+UNLINK_PAGE = 5000  # the most unlinks one answer lists
+BINDINGS_REFRESH_S = 30.0  # an unlink of a link not seen yet reads the chain's bindings again after this long
+BINDINGS_POLL_S = 600.0  # and they are read this often anyway, so every link a binding names is remembered
 metadata = MetaData()
 submissions = Table(
     "agent_submissions",
@@ -106,6 +128,19 @@ unlinks = Table(  # every unlink accepted: a linked address ended its link to a 
     Column("signature", String(200), nullable=False),
     Column("received_at", Float, nullable=False),
 )
+linked = Table(  # every link a binding on chain has named (hotkey and address): the links an unlink can end
+    "subnet_links_seen",
+    metadata,
+    Column("hotkey", String(64), primary_key=True),
+    Column("address", String(42), primary_key=True),
+    Column("seen_at", Float, nullable=False),
+)
+hotkeys_gone = Table(  # when pruning first found a hotkey no longer registered (gone again once it is back)
+    "agent_hotkeys_gone",
+    metadata,
+    Column("hotkey", String(64), primary_key=True),
+    Column("since", Float, nullable=False),
+)
 key_events = Table(  # every store, restore and release, for the record
     "agent_key_events",
     metadata,
@@ -145,8 +180,8 @@ UNLINK_WINDOW_MS = 600_000  # an unlink's time must be this close to the service
 SS58_CHARS = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 
-def submit_message(blob_sha256: str, hotkey: str) -> str:
-    return f"kokoah-agent-submit-1 sha256={blob_sha256} hotkey={hotkey}"
+def submit_message(blob_sha256: str, hotkey: str, time_ms: int) -> str:
+    return f"kokoah-agent-submit-2 sha256={blob_sha256} hotkey={hotkey} time={time_ms}"
 
 
 def used_token(token: str) -> str:
@@ -210,21 +245,46 @@ def create_app(
     accept_unverified_machines: bool = False,
     wrap_key: bytes | None = None,
     netuid: int | None = None,
+    bound_pairs: Callable[[], Iterable[tuple[str, str]]] | None = None,
 ) -> FastAPI:
     """`attestation_keys`: the token keys (Google's when None). `is_registered` (hotkey -> registered on the subnet;
     the public service always sets it) gates submissions and stored keys; restores and releases never depend on it,
     so a miner who lost their registration still gets their account back. `wrap_key` (32 bytes, kept out of the
     backups) adds the service's own encryption over every stored copy. `netuid`: the subnet the service serves (a
     start permission must name it). A key copy is filed only with the hotkey owner's start permission: signed by
-    the hotkey, for this subnet, at most PERMIT_DAYS old, used once. `accept_unverified_machines` is for local
-    development only: any token is accepted for storing and restoring keys."""
+    the hotkey, for this subnet, at most PERMIT_DAYS old, used once. `bound_pairs` (the public service always sets
+    it): the (hotkey, address) links the subnet's bindings on chain name now; every one seen is remembered, and only
+    those can be unlinked. `accept_unverified_machines` is for local development only: any token is accepted for
+    storing and restoring keys."""
     if wrap_key is not None and len(wrap_key) != 32:
         raise ValueError("the service's key must be 32 bytes")
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "bundles").mkdir(exist_ok=True)
     engine = create_engine(db_url or f"sqlite:///{data_dir / 'agents.sqlite'}", future=True)
     metadata.create_all(engine)
-    app = FastAPI(title="Kokoah subnet agent service")
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        async def upkeep() -> None:
+            due = {prune_bundles: 0.0, poll_links: 0.0}  # each job's next run (monotonic)
+            every = {prune_bundles: PRUNE_EVERY_S, poll_links: BINDINGS_POLL_S}
+            while True:
+                for job in due:
+                    if time.monotonic() >= due[job]:
+                        due[job] = time.monotonic() + every[job]
+                        try:
+                            await anyio.to_thread.run_sync(job)
+                        except Exception:  # noqa: BLE001 - tried again next round
+                            log.exception("%s failed", job.__name__)
+                await asyncio.sleep(max(1.0, min(due.values()) - time.monotonic()))
+
+        task = asyncio.create_task(upkeep())
+        try:
+            yield
+        finally:
+            task.cancel()
+
+    app = FastAPI(title="Kokoah subnet agent service", lifespan=lifespan)
 
     def require_registered(hotkey: str) -> None:
         if is_registered is None:
@@ -237,26 +297,94 @@ def create_app(
             raise HTTPException(status_code=403, detail="the hotkey is not registered on the subnet")
 
     submit_lock = asyncio.Lock()
+    uploading = asyncio.Semaphore(UPLOADS_AT_ONCE)
+    receiving: set[str] = set()  # hotkeys whose body is being received
+    checking = anyio.CapacityLimiter(2)  # bundle checks run off the event loop, two at a time
+    attempts: dict[str, list[float]] = {}  # hotkey -> its upload times within the last hour
+    attempts_lock = threading.Lock()
+
+    def count_attempt(hotkey: str) -> None:
+        now = clock()
+        with attempts_lock:
+            recent = [t for t in attempts.get(hotkey, []) if now - t < 3600]
+            if len(recent) >= SUBMIT_ATTEMPTS_PER_HOUR:
+                attempts[hotkey] = recent
+                raise HTTPException(status_code=429, detail=f"{SUBMIT_ATTEMPTS_PER_HOUR} uploads an hour per hotkey")
+            attempts[hotkey] = [*recent, now]
+            for hk in [hk for hk, ts in attempts.items() if not ts or now - ts[-1] >= 3600]:
+                del attempts[hk]
+
+    def in_use(c: Any) -> set[str]:
+        """The submissions an unreleased key copy names: a machine restoring that account fetches them again."""
+        q = (
+            select(key_events.c.detail)
+            .select_from(key_events.join(keys, keys.c.address == key_events.c.address))
+            .where(key_events.c.event == "store", keys.c.released_at.is_(None))
+        )
+        return {str(d).rsplit("submission ", 1)[-1] for (d,) in c.execute(q).all() if d and "submission " in str(d)}
 
     def drop_old_bundles(c: Any, hotkey: str) -> None:
-        """Keep a hotkey's newest KEEP_BUNDLES_PER_HOTKEY bundles and any bundle an account's key copy names."""
+        """Keep a hotkey's newest KEEP_BUNDLES_PER_HOTKEY bundles and any bundle an unreleased key copy names."""
         rows = c.execute(
             select(submissions.c.id).where(submissions.c.hotkey == hotkey).order_by(submissions.c.submitted_at.desc())
         ).all()
-        in_use = {
-            str(d).rsplit("submission ", 1)[-1]
-            for (d,) in c.execute(select(key_events.c.detail).where(key_events.c.event == "store")).all()
-            if d and "submission " in str(d)
-        }
+        needed = in_use(c)
         for (old,) in rows[KEEP_BUNDLES_PER_HOTKEY:]:
-            if old not in in_use:
+            if old not in needed:
                 (data_dir / "bundles" / old).unlink(missing_ok=True)
+
+    def gone_long_enough(hotkey: str, now: float) -> bool:
+        """Whether the hotkey left the subnet KEEP_LEFT_BUNDLES_S ago: from when pruning first found it gone, kept in
+        the database so that a restart does not start the month over."""
+        if is_registered is None:
+            return False
+        try:
+            registered = is_registered(hotkey)
+        except Exception:  # noqa: BLE001 - the chain cannot be read now: keep everything
+            return False
+        with engine.begin() as c:
+            if registered:
+                c.execute(hotkeys_gone.delete().where(hotkeys_gone.c.hotkey == hotkey))
+                return False
+            since = c.execute(select(hotkeys_gone.c.since).where(hotkeys_gone.c.hotkey == hotkey)).scalar()
+            if since is None:
+                c.execute(insert(hotkeys_gone).values(hotkey=hotkey, since=now))
+                since = now
+        return now - float(since) > KEEP_LEFT_BUNDLES_S
+
+    def prune_bundles() -> int:
+        """Delete the bundles nobody can run any more: beyond a hotkey's newest KEEP_BUNDLES_PER_HOTKEY, and those of
+        a hotkey that left the subnet KEEP_LEFT_BUNDLES_S ago (counted from when pruning first found it gone); never
+        one an unreleased key copy names. Their records stay, and the hotkey can send the same bundle again.
+        Returns how many files were deleted."""
+        now, gone = clock(), 0
+        with engine.connect() as c:
+            needed = in_use(c)
+            rows = c.execute(
+                select(submissions.c.id, submissions.c.hotkey, submissions.c.submitted_at).order_by(
+                    submissions.c.hotkey, submissions.c.submitted_at.desc()
+                )
+            ).all()
+        rank: dict[str, int] = {}
+        for blob_id, hotkey, _ in rows:
+            rank[hotkey] = rank.get(hotkey, 0) + 1
+            path = data_dir / "bundles" / blob_id
+            if blob_id in needed or not path.exists():
+                continue
+            drop = rank[hotkey] > KEEP_BUNDLES_PER_HOTKEY or gone_long_enough(hotkey, now)
+            if drop:
+                path.unlink(missing_ok=True)
+                gone += 1
+        return gone
+
+    app.state.prune_bundles = prune_bundles
 
     @app.post("/agents")
     async def submit(request: Request) -> dict[str, Any]:
         """A bundle as the raw body, with `X-Kokoah-Hotkey`, `X-Kokoah-Bundle-Sha256` and `X-Kokoah-Signature` (the
-        hotkey's signature of `submit_message`). Everything about the sender is checked before the body is read; the
-        body is then streamed to disk under the size cap and must have the signed hash."""
+        hotkey's signature of `submit_message`, with its `X-Kokoah-Time`). Everything about the sender is checked
+        before the body is read, and the upload is counted; the body is then streamed to disk under the size cap and
+        must have the signed hash."""
         hotkey = request.headers.get("x-kokoah-hotkey", "")
         signature = request.headers.get("x-kokoah-signature", "")
         blob_id = request.headers.get("x-kokoah-bundle-sha256", "").lower()
@@ -265,12 +393,18 @@ def create_app(
                 status_code=400, detail="the hotkey, the bundle's sha256 and the signature are required"
             )
         try:
+            signed_at = int(request.headers.get("x-kokoah-time", ""))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="the signed time (X-Kokoah-Time) is required") from None
+        try:
             size = int(request.headers.get("content-length", ""))
         except ValueError:
             raise HTTPException(status_code=411, detail="the bundle's length is required") from None
         if not 0 < size <= MAX_BUNDLE_BYTES + 64:
             raise HTTPException(status_code=413, detail=f"bundle must be 1 to {MAX_BUNDLE_BYTES} bytes")
-        if not verify(submit_message(blob_id, hotkey), signature, hotkey):
+        if abs(clock() * 1000 - signed_at) > SIGNED_REQUEST_WINDOW_MS:
+            raise HTTPException(status_code=403, detail="the signed time is not within 5 minutes of now: sign again")
+        if not verify(submit_message(blob_id, hotkey, signed_at), signature, hotkey):
             raise HTTPException(status_code=403, detail="not signed by the hotkey")
         await run_in_threadpool(require_registered, hotkey)
         with engine.connect() as c:
@@ -281,7 +415,7 @@ def create_app(
                 .order_by(submissions.c.submitted_at.desc())
                 .limit(1)
             ).scalar()
-        if existing is not None:
+        if existing is not None and (data_dir / "bundles" / blob_id).exists():
             return {
                 "id": blob_id,
                 "encrypted": existing["encrypted"],
@@ -290,6 +424,22 @@ def create_app(
             }
         if last is not None and clock() - float(last) < SUBMIT_COOLDOWN_S:
             raise HTTPException(status_code=429, detail="one submission per hotkey per 12 hours")
+        if hotkey in receiving:
+            raise HTTPException(status_code=409, detail="an upload from this hotkey is already in progress")
+        if uploading.locked():
+            raise HTTPException(status_code=503, detail="the service is receiving other bundles: try again shortly")
+        async with uploading:
+            receiving.add(hotkey)
+            try:
+                count_attempt(hotkey)  # once it has a slot: a busy service costs nobody a try
+                async with asyncio.timeout(UPLOAD_DEADLINE_S):
+                    return await receive(request, hotkey, blob_id, size)
+            except TimeoutError:
+                raise HTTPException(status_code=408, detail="the bundle took too long to arrive") from None
+            finally:
+                receiving.discard(hotkey)
+
+    async def receive(request: Request, hotkey: str, blob_id: str, size: int) -> dict[str, Any]:
         incoming = data_dir / "bundles" / f".incoming-{secrets.token_hex(8)}"
         try:
             digest = hashlib.sha256()
@@ -308,13 +458,24 @@ def create_app(
             code = None
             if not encrypted:
                 try:
-                    check_zip(blob)
+                    await anyio.to_thread.run_sync(check_zip, blob, limiter=checking)
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=f"bundle refused: {exc}") from exc
                 code = blob_id
             async with submit_lock:  # the cooldown check and the insert together
                 with engine.begin() as c:
-                    if c.execute(select(submissions.c.id).where(submissions.c.id == blob_id)).first():
+                    owner = c.execute(select(submissions.c.hotkey).where(submissions.c.id == blob_id)).scalar()
+                    if owner is not None:
+                        target = data_dir / "bundles" / blob_id
+                        if not target.exists():  # a deleted bundle sent again by its own hotkey: a new submission
+                            if owner != hotkey:
+                                raise HTTPException(
+                                    status_code=409, detail="this bundle is another hotkey's submission"
+                                )
+                            incoming.replace(target)
+                            c.execute(
+                                submissions.update().where(submissions.c.id == blob_id).values(submitted_at=clock())
+                            )
                         return {"id": blob_id, "encrypted": encrypted, "code_sha256": code, "existing": True}
                     last = c.execute(
                         select(submissions.c.submitted_at)
@@ -349,13 +510,13 @@ def create_app(
         return dict(row)
 
     @app.get("/agents/{blob_id}/bundle")
-    def bundle(blob_id: str) -> Response:
+    def bundle(blob_id: str) -> FileResponse:
         if len(blob_id) != 64 or any(ch not in "0123456789abcdef" for ch in blob_id):
             raise HTTPException(status_code=400, detail="bad id")
         path = data_dir / "bundles" / blob_id
         if not path.exists():
-            raise HTTPException(status_code=404, detail="no such submission")
-        return Response(path.read_bytes(), media_type="application/octet-stream")
+            raise HTTPException(status_code=404, detail="no such submission (or no longer kept)")
+        return FileResponse(path, media_type="application/octet-stream")  # streamed, never read whole
 
     @app.get("/images")
     def approved_images() -> dict[str, list[str]]:
@@ -538,7 +699,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="bad hotkey")
         return hotkey
 
-    def unlink_row(row: Any) -> dict[str, Any]:
+    def unlink_row(row: Any, received_at: float | None = None) -> dict[str, Any]:
         u = Unlink(row.hotkey, row.address, int(row.time_ms), row.signature)
         return {
             "hotkey": u.hotkey,
@@ -546,7 +707,63 @@ def create_app(
             "time_ms": u.time_ms,
             "signature": u.signature,
             "effective_day": u.effective_day,
+            "received_at": getattr(row, "received_at", received_at),
         }
+
+    links_lock = threading.Lock()
+    unlink_lock = threading.Lock()
+    links_read = [float("-inf")]  # when the chain's bindings were last read (the service's clock), worked or not
+    links_known = [False]  # whether that read worked: only then is a link missing from them known to be missing
+
+    def read_links() -> None:
+        """The links the chain's bindings name now, added to those remembered."""
+        assert bound_pairs is not None
+        links_read[0] = clock()  # a failed read waits its turn too
+        links_known[0] = False
+        current = {(str(hk), str(a).lower()) for hk, a in bound_pairs()}
+        with engine.begin() as c:
+            seen = {(hk, a) for hk, a in c.execute(select(linked.c.hotkey, linked.c.address)).all()}
+            new = [{"hotkey": hk, "address": a, "seen_at": clock()} for hk, a in sorted(current - seen)]
+            if new:
+                c.execute(insert(linked), new)
+        links_known[0] = True  # only once they are recorded: until then a link not found is not known to be missing
+
+    def poll_links() -> None:
+        if bound_pairs is not None:
+            with links_lock:
+                read_links()
+
+    def link_seen(hotkey: str, address: str) -> bool:
+        """Whether a binding on chain has named this link (always, without `bound_pairs`: development)."""
+        if bound_pairs is None:
+            return True
+
+        def known() -> bool:
+            q = select(linked.c.hotkey).where(linked.c.hotkey == hotkey, linked.c.address == address)
+            with engine.connect() as c:
+                return c.execute(q).first() is not None
+
+        if known():
+            return True
+        unreadable = HTTPException(
+            status_code=503, detail="the subnet's bindings cannot be read now: try again shortly"
+        )
+        if clock() - links_read[0] >= BINDINGS_REFRESH_S:
+            if not links_lock.acquire(blocking=False):
+                raise unreadable  # another request is reading them: nothing is known yet
+            try:
+                read_links()
+            except Exception as exc:  # noqa: BLE001 - the chain could not be read
+                raise unreadable from exc
+            finally:
+                links_lock.release()
+        elif not links_known[0]:
+            raise unreadable  # the last read failed, and the next one waits its turn
+        return known()
+
+    def require_link(hotkey: str, address: str) -> None:
+        if not link_seen(hotkey, address):
+            raise HTTPException(status_code=403, detail="no binding on chain links this address to this hotkey")
 
     @app.get("/unlinks/message")
     def unlink_text(hotkey: str, address: str) -> dict[str, Any]:
@@ -554,6 +771,7 @@ def create_app(
             raise HTTPException(status_code=503, detail="this service serves no subnet")
         hk, a = check_hotkey(hotkey), check_address(address)
         require_registered(hk)
+        require_link(hk, a)
         now_ms = int(clock() * 1000)
         return {"message": unlink_message(netuid, hk, a, now_ms), "time_ms": now_ms}
 
@@ -574,22 +792,43 @@ def create_app(
         if not u.signed_by_address(netuid):
             raise HTTPException(status_code=403, detail="not signed by the address")
         require_registered(hk)
-        with engine.begin() as c:
+        require_link(hk, a)
+        # the time is taken and the row committed together, one at a time (on PostgreSQL the table is locked, so
+        # across processes too), and each row's time comes after every earlier row's even if the clock went back:
+        # rows are listed in the order they were committed, and a reader that keeps its place misses none
+        with unlink_lock, engine.begin() as c:
+            if c.dialect.name == "postgresql":
+                c.execute(text(f"LOCK TABLE {unlinks.name} IN SHARE ROW EXCLUSIVE MODE"))
             row = c.execute(select(unlinks).where(unlinks.c.hotkey == hk, unlinks.c.address == a)).first()
             if row is not None:
                 return {**unlink_row(row), "existing": True}
+            latest = c.execute(select(func.max(unlinks.c.received_at))).scalar()
+            received_at = clock() if latest is None else max(clock(), math.nextafter(float(latest), math.inf))
             c.execute(insert(unlinks).values(hotkey=hk, address=a, time_ms=u.time_ms, signature=u.signature,
-                                             received_at=clock()))  # fmt: skip
-        return {**unlink_row(u), "existing": False}
+                                             received_at=received_at))  # fmt: skip
+        return {**unlink_row(u, received_at), "existing": False}
 
     @app.get("/unlinks")
-    def unlink_list(address: str | None = None) -> dict[str, list[dict[str, Any]]]:
-        q = select(unlinks).order_by(unlinks.c.time_ms, unlinks.c.hotkey)
+    def unlink_list(address: str | None = None, after: str = "", limit: int = UNLINK_PAGE) -> dict[str, Any]:
+        """Oldest received first, at most `limit` (UNLINK_PAGE at most), after the row `after` names (`next` of
+        the page before: its received time, hotkey and address, which no other row shares); `next` is null on the
+        last page."""
+        limit = max(1, min(limit, UNLINK_PAGE))
+        order = tuple_(unlinks.c.received_at, unlinks.c.hotkey, unlinks.c.address)
+        q = select(unlinks).order_by(unlinks.c.received_at, unlinks.c.hotkey, unlinks.c.address).limit(limit)
+        if after:
+            try:
+                at, hk, a = after.split("|")
+                q = q.where(order > tuple_(literal(float(at)), literal(hk), literal(a)))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="bad cursor") from None
         if address is not None:
             q = q.where(unlinks.c.address == check_address(address))
         with engine.connect() as c:
             rows = c.execute(q).all()
-        return {"unlinks": [unlink_row(r) for r in rows]}
+        last = rows[-1] if len(rows) == limit else None
+        cursor = f"{last.received_at!r}|{last.hotkey}|{last.address}" if last is not None else None
+        return {"unlinks": [unlink_row(r) for r in rows], "next": cursor}
 
     @app.get("/key-store/released")
     def released() -> dict[str, list[dict[str, Any]]]:

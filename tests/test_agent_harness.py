@@ -153,6 +153,45 @@ def test_the_two_interfaces(setup: Any) -> None:
         "result": {"cancelled": 1},
     }
     assert public.post("/stop", json={"time_ms": t + 1, "signature": sig}).status_code == 403
+    posted = len(fake.posted)
+    after = agent.post("/call", json={"method": "cancel", "params": {"coin": "ETH", "oid": 6}}).json()
+    assert after == {"ok": False, "error": "the agent was stopped"} and len(fake.posted) == posted
+
+
+def test_a_stop_waits_for_an_order_already_on_its_way(setup: Any) -> None:
+    """An order the agent sent just before the stop is answered before the stop reads the open orders, so it is among
+    those cancelled and never left on the book."""
+    import threading
+
+    h, fake, master, _ = setup
+    order_sent, release = threading.Event(), threading.Event()
+    log: list[str] = []
+    answer: Callable[[httpx.Request], httpx.Response] = fake.handler
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if request.url.path == "/exchange" and body["action"]["type"] == "order":
+            order_sent.set()
+            release.wait(5)
+        log.append(body["action"]["type"] if request.url.path == "/exchange" else body["type"])
+        return answer(request)
+
+    h.http = httpx.Client(transport=httpx.MockTransport(slow), base_url="https://x")
+    placing = threading.Thread(
+        target=h.call, args=("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
+    )
+    placing.start()
+    assert order_sent.wait(5)
+    t = int(time.time() * 1000)
+    sig = "0x" + bytes(master.sign_message(encode_defunct(text=stop_message(h.address, t))).signature).hex()
+    stopping = threading.Thread(target=h.stop, args=(t, sig))
+    stopping.start()
+    time.sleep(0.2)
+    assert "openOrders" not in log and stopping.is_alive()  # the stop waits while the order is on its way
+    release.set()
+    placing.join(5)
+    stopping.join(5)
+    assert log.index("order") < log.index("openOrders") < log.index("cancel")
 
 
 def test_the_harness_binding_line_is_the_subnet_one() -> None:
@@ -360,3 +399,92 @@ def test_the_release_image_names_the_key_service_and_the_miner_cannot_override_i
     assert labels["log_redirect"] == "debugonly"
     dev = ImageSettings.load(root / "deploy" / "agent" / "image.dev.json")
     assert dev.development and development_mode(dev, {"KOKOAH_AGENT_DEV": "1"}) and not development_mode(dev, {})
+
+
+def test_the_throttle_limits_each_caller_and_everyone_and_refills() -> None:
+    t = harness_module.Throttle(per_caller=2, overall=3)
+    assert [t.allow("a", 0), t.allow("a", 0), t.allow("a", 0)] == [True, True, False]  # 2 a minute from one caller
+    assert [t.allow("b", 0), t.allow("c", 0)] == [True, False]  # 3 a minute from everyone
+    assert t.allow("a", 30) and not t.allow("a", 30)  # half a minute later: one more each (overall too)
+    small = harness_module.Throttle(per_caller=1, overall=1000, max_callers=4)
+    for i in range(10):  # callers seen once are forgotten when the table is full; the table stays small
+        assert small.allow(f"ip{i}", float(i))
+    assert len(small._callers) <= 4
+
+
+def test_the_public_interface_answers_too_many_requests_before_any_work(setup: Any) -> None:
+    h, _, master, _ = setup
+    asked: list[list[str]] = []
+    real = h.attestor.token
+
+    def counted(nonces: list[str], audience: str | None = None) -> str:
+        asked.append(nonces)
+        return str(real(nonces, audience))
+
+    h.attestor.token = counted
+    one = TestClient(public_app(h), client=("203.0.113.7", 5000))
+    codes = [one.get("/attestation", params={"challenge": "ab" * 32}).status_code for _ in range(8)]
+    assert codes == [200] * 6 + [429] * 2 and len(asked) == 6
+    other = TestClient(one.app, client=("203.0.113.8", 5000))
+    assert other.get("/attestation", params={"challenge": "ab" * 32}).status_code == 200  # another caller is served
+    t = int(time.time() * 1000)
+    sig = "0x" + bytes(master.sign_message(encode_defunct(text=stop_message(h.address, t))).signature).hex()
+    stops = [one.post("/stop", json={"time_ms": t, "signature": sig}).status_code for _ in range(11)]
+    assert stops[:10] == [200] + [403] * 9 and stops[10] == 429
+    assert one.get("/status").status_code == 200 and one.get("/binding").status_code == 200  # never limited
+
+
+def test_a_flood_of_attestations_holds_only_their_own_threads(setup: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import threading
+
+    h, _, _, _ = setup
+    monkeypatch.setattr(harness_module, "ATTESTATIONS_PER_MINUTE", 100)
+    release, lock = threading.Event(), threading.Lock()
+    inside = [0, 0]  # now, most at once
+
+    def stuck(nonces: list[str], audience: str | None = None) -> str:
+        with lock:
+            inside[0] += 1
+            inside[1] = max(inside)
+        release.wait(10)
+        with lock:
+            inside[0] -= 1
+        return "token"
+
+    h.attestor.token = stuck
+
+    async def flood() -> tuple[int, list[int]]:
+        public = httpx.AsyncClient(transport=httpx.ASGITransport(app=public_app(h)), base_url="http://m")
+        agent = httpx.AsyncClient(transport=httpx.ASGITransport(app=agent_app(h)), base_url="http://a")
+        async with public, agent:
+            waiting = [
+                asyncio.create_task(public.get("/attestation", params={"challenge": "ab" * 32})) for _ in range(30)
+            ]
+            await asyncio.sleep(0.3)
+            answered = await asyncio.wait_for(agent.post("/info", json={"request": {"type": "meta"}}), 5)
+            release.set()
+            done = await asyncio.gather(*waiting)
+        return answered.status_code, [r.status_code for r in done]
+
+    agent_code, codes = asyncio.run(flood())
+    assert agent_code == 200 and codes == [200] * 30
+    assert inside[1] == harness_module.ATTESTATION_WORKERS  # 30 waiting, only 4 threads held
+
+
+def test_nobody_s_requests_use_up_another_caller_s(setup: Any) -> None:
+    """Many callers sending bad signed requests or attestations: the miner's own stop and a validator's attestation
+    are still answered (there is no overall bucket for anyone to empty)."""
+    h, _, master, _ = setup
+    app = public_app(h)
+    for i in range(50):
+        noisy = TestClient(app, client=(f"198.51.100.{i}", 5000))
+        for _ in range(12):
+            noisy.post("/withdraw", json={"time_ms": 1, "signature": "0x00", "amount_usd": "1"})
+            noisy.get("/attestation", params={"challenge": "zz"})
+    t = int(time.time() * 1000)
+    sig = "0x" + bytes(master.sign_message(encode_defunct(text=stop_message(h.address, t))).signature).hex()
+    miner = TestClient(app, client=("203.0.113.50", 5000))
+    assert miner.post("/stop", json={"time_ms": t, "signature": sig}).json()["ok"] is True
+    validator = TestClient(app, client=("203.0.113.51", 5000))
+    assert validator.get("/attestation", params={"challenge": "ab" * 32}).status_code == 200

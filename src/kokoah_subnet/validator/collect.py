@@ -85,6 +85,7 @@ class ValidatorConfig:
     wallet_path: str | None = None
     start_day: str = "2026-10-20"  # the first day scored (the CLI: given, else remembered, else yesterday)
     hl_info_url: str = MAINNET_INFO
+    hl_budget: int = 1000  # Hyperliquid request weight a minute (the exchange allows 1,200 per IP address)
     builder_base_url: str = BASE_URL
     tao_coin: str = "TAO"  # the perp whose mark price gives TAO/USD
     tao_usd_fallback: float = 0.0  # used when the perp is not listed; 0 means refuse to score
@@ -228,7 +229,9 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
     }
 
 
-MAX_TX_LOOKUPS = 200  # per address and day: taker fills beyond it are not confirmed one by one
+# per address and day: taker fills beyond it are not confirmed one by one. A constant, so every validator confirms
+# the same fills whenever it scores; it bounds what one address can cost a validator in lookups
+MAX_TX_LOOKUPS = 100
 
 
 async def confirmed_builder_orders(
@@ -354,7 +357,8 @@ async def collect_and_score(
         own_unlink_http = agent_http is None
         unlink_http = agent_http or httpx.AsyncClient(timeout=20)
         try:
-            store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid))
+            kept = {(u.hotkey, u.address) for u in store.unlinks()}
+            store.put_unlinks(day, await fetch_unlinks(unlink_http, cfg.agent_service, cfg.netuid, kept))
         except Exception as exc:
             store.put_error(day, None, None, "unlinks", str(exc))
             if not past_deadline:

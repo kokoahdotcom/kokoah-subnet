@@ -206,6 +206,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="the first day scored, YYYY-MM-DD; default: the one the record remembers, else yesterday (UTC)",
     )
     vrun.add_argument("--hl-info-url", default=None)
+    vrun.add_argument(
+        "--hl-budget",
+        type=int,
+        default=1000,
+        help="Hyperliquid request weight a minute this validator uses (the exchange allows 1,200 per IP address: "
+        "lower it when other validators or services share the address)",
+    )
     vrun.add_argument("--builder-base-url", default=None)
     vrun.add_argument("--tao-usd-fallback", type=float, default=0.0, help="TAO/USD when no TAO perp is listed")
     vrun.add_argument("--poll-seconds", type=int, default=60)
@@ -367,6 +374,7 @@ def _validator(args: argparse.Namespace) -> int:
             wallet_path=args.wallet_path,
             start_day=args.start_day,
             hl_info_url=args.hl_info_url or MAINNET_INFO,
+            hl_budget=args.hl_budget,
             builder_base_url=args.builder_base_url or BASE_URL,
             tao_usd_fallback=args.tao_usd_fallback,
             poll_s=args.poll_seconds,
@@ -641,7 +649,8 @@ def _agent(args: argparse.Namespace) -> int:
             return 1
         wallet = _wallet(args)
         hotkey = wallet.hotkey.ss58_address
-        signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey).encode())).hex()
+        signed_at = int(time.time() * 1000)
+        signature = bytes(wallet.hotkey.sign(submit_message(sha256_hex(blob), hotkey, signed_at).encode())).hex()
         try:
             r = httpx.post(
                 f"{args.service.rstrip('/')}/agents",
@@ -651,6 +660,7 @@ def _agent(args: argparse.Namespace) -> int:
                     "x-kokoah-hotkey": hotkey,
                     "x-kokoah-bundle-sha256": sha256_hex(blob),
                     "x-kokoah-signature": signature,
+                    "x-kokoah-time": str(signed_at),
                 },
                 timeout=120,
             )
@@ -842,7 +852,7 @@ def _agent(args: argparse.Namespace) -> int:
 
         if args.dev_accept_any_machine:
             print("development mode: keys are accepted from any machine (never use this in production)")
-        from kokoah_subnet.chain import RegisteredHotkeys, registered_hotkeys
+        from kokoah_subnet.chain import RegisteredHotkeys, bound_links, registered_hotkeys
 
         network, netuid = args.network, args.netuid
         registered = RegisteredHotkeys(lambda: registered_hotkeys(network, netuid))
@@ -861,6 +871,7 @@ def _agent(args: argparse.Namespace) -> int:
             wrap_key=wrap_key,
             netuid=netuid,
             accept_unverified_machines=args.dev_accept_any_machine,
+            bound_pairs=lambda: asyncio.run(bound_links(network, netuid)),
         )
         uvicorn.run(app, host=args.host, port=args.port, log_level="info", limit_concurrency=64)
         return 0

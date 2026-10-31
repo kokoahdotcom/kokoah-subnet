@@ -23,6 +23,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import random
 import re
 import secrets
 import socket
@@ -76,12 +77,13 @@ async def public_address(host: str) -> str:
 
 
 async def fetch_answer(http: httpx.AsyncClient, agent: AgentRef, challenge: str) -> dict[str, Any]:
-    """The machine's answer to a challenge: a JSON object of at most MAX_ANSWER_BYTES, read within ANSWER_TIMEOUT_S."""
-    address = await public_address(agent.host)
-    host = f"[{address}]" if ":" in address else address
-    headers = {} if address == agent.host else {"Host": f"{agent.host}:{agent.port}"}
+    """The machine's answer to a challenge: a JSON object of at most MAX_ANSWER_BYTES, read within ANSWER_TIMEOUT_S
+    (the host name's lookup included)."""
 
     async def read() -> bytes:
+        address = await public_address(agent.host)
+        host = f"[{address}]" if ":" in address else address
+        headers = {} if address == agent.host else {"Host": f"{agent.host}:{agent.port}"}
         async with http.stream(
             "GET",
             f"http://{host}:{agent.port}/attestation",
@@ -194,19 +196,34 @@ async def _check_agent(
     )
 
 
-async def fetch_unlinks(http: httpx.AsyncClient, service: str, netuid: int) -> list[Unlink]:
-    """The unlinks the subnet's service published (`GET /unlinks`), keeping only those the address itself signed for
-    this subnet: the service cannot make one up."""
-    r = await http.get(f"{service.rstrip('/')}/unlinks", timeout=20)
-    r.raise_for_status()
-    out = []
-    for x in r.json()["unlinks"]:
-        try:
-            u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if u.signed_by_address(netuid):
-            out.append(u)
+UNLINK_PAGES = 1000  # the most pages read in one go
+
+
+async def fetch_unlinks(
+    http: httpx.AsyncClient, service: str, netuid: int, known: Iterable[tuple[str, str]] = ()
+) -> list[Unlink]:
+    """The unlinks the subnet's service published (`GET /unlinks`, page by page), keeping only those the address
+    itself signed for this subnet: the service cannot make one up. Pairs in `known` (hotkey, address: unlinks already
+    kept, of which only the first per pair counts) are skipped unchecked, so each signature is checked once."""
+    out: list[Unlink] = []
+    seen = set(known)
+    after = ""
+    for _ in range(UNLINK_PAGES):
+        r = await http.get(f"{service.rstrip('/')}/unlinks", params={"after": after}, timeout=20)
+        r.raise_for_status()
+        page = r.json()
+        for x in page["unlinks"]:
+            try:
+                u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (u.hotkey, u.address) not in seen and u.signed_by_address(netuid):
+                seen.add((u.hotkey, u.address))
+                out.append(u)
+        following = page.get("next")
+        if not following or following == after:
+            break
+        after = str(following)
     return out
 
 
@@ -256,18 +273,27 @@ async def check_agents(
     agents = {hk: b for hk, b in agents.items() if b.address not in released}
     if not agents:
         return out
+    approved = list(images)
+    if not approved:  # no machine can pass: nothing to ask
+        refused = [
+            AgentCheck(hk, b.address, b.agent.code_sha256, b.agent.url, False, "no harness image is approved")
+            for hk, b in agents.items()
+            if b.agent is not None
+        ]
+        return sorted([*out, *refused], key=lambda c: c.hotkey)
     if keys is None:
         from kokoah_subnet.agent.attest import google_keys
 
         keys = await asyncio.to_thread(google_keys)
-    approved = list(images)
     gate = asyncio.Semaphore(CONCURRENCY)
 
     async def bounded(hk: str, b: Binding) -> AgentCheck:
         async with gate:
             return await check_agent(hk, b, netuid, keys, approved, http, extra_agents)
 
-    tasks = {hk: asyncio.create_task(bounded(hk, b)) for hk, b in sorted(agents.items())}
+    order = sorted(agents.items())
+    random.SystemRandom().shuffle(order)  # no account is always last in line when the batch deadline comes
+    tasks = {hk: asyncio.create_task(bounded(hk, b)) for hk, b in order}
     done, pending = await asyncio.wait(tasks.values(), timeout=BATCH_TIMEOUT_S)
     for task in pending:
         task.cancel()
