@@ -407,18 +407,19 @@ def test_an_agent_that_kills_whatever_it_can_still_ends() -> None:
         pytest.skip(f"uid {uid} is in use here")
     home = Path(tempfile.mkdtemp(dir="/tmp"))
     os.chmod(home, 0o777)
-    killer = "import os\\nwhile True:\\n    try:\\n        os.kill(-1, 9)\\n    except OSError:\\n        pass\\n"
+    killer = "import os\nwhile True:\n    try:\n        os.kill(-1, 9)\n    except OSError:\n        pass\n"
     runner = supervisor.AgentRunner(
         supervisor.agent_command(1024, uid, uid, program=["/usr/bin/python3", "-c", killer]), home, uid=uid
     )
     try:
         proc = runner.start()
         assert proc is not None
-        for _ in range(100):  # until it runs as the agent's user
-            if supervisor.processes_of(uid):
-                break
+        for _ in range(100):  # until it has been killing for a while as the agent's user
             time.sleep(0.05)
-        assert supervisor.processes_of(uid)
+            if supervisor.processes_of(uid) and proc.poll() is None:
+                break
+        time.sleep(0.2)
+        assert supervisor.processes_of(uid) == [proc.pid]
         runner.stop()
         assert supervisor.processes_of(uid) == [] and proc.poll() is not None
     finally:
