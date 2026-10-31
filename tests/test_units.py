@@ -74,3 +74,24 @@ def test_the_timers_name_their_services() -> None:
         parser.read_string(timer.read_text())
         assert parser.has_option("Timer", "OnCalendar"), timer.name
         assert (UNITS / timer.name.replace(".timer", ".service")).exists(), timer.name
+
+
+def test_every_shell_command_in_a_unit_is_valid() -> None:
+    """A unit's `bash -c '…'` as the shell will see it ($$ and %% unescaped) parses, and holds no number where a
+    shell variable belongs (a `$$` expanded when the file was written)."""
+    import re
+    import subprocess
+
+    found = 0
+    for name in services():
+        for command in [v for k, vs in service(name).items() if k.startswith("Exec") for v in vs]:
+            shell = re.fullmatch(r"/bin/(?:ba)?sh -c '(.*)'", command)
+            if not shell:
+                continue
+            found += 1
+            assert "$$" in shell.group(1) or "$" not in shell.group(1), (name, "a variable systemd would expand")
+            body = shell.group(1).replace("$$", "$").replace("%%", "%")
+            assert not re.search(r"\b\d{4,}(?:\(|day|done|stamp|KOKOAH)", body), (name, body)
+            check = subprocess.run(["bash", "-n", "-c", body], capture_output=True, text=True)
+            assert check.returncode == 0, (name, check.stderr)
+    assert found  # the operator step at least
