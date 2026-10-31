@@ -1,8 +1,8 @@
-Unit files for a validator host (systemd). The validator, its interface, its health check and the operator step run
-as a dedicated user, `kokoah-subnet`, with systemd's sandboxing: no new privileges, a read-only system, no access to
-other users' homes, a private `/tmp`, no devices or kernel settings, and a memory cap. They can write only to
-`/var/lib/kokoah-subnet` (the operator step to its own state folder). The wallet folder in it is read-only to the
-validator and the operator step and hidden from the interface and the health check, which never need the hotkey.
+Unit files for a validator host (systemd). The validator, its interface and its health check run as a dedicated
+user, `kokoah-subnet`, with systemd's sandboxing: no new privileges, a read-only system, no access to other users'
+homes, a private `/tmp`, no devices or kernel settings, and a memory cap. They can write only to
+`/var/lib/kokoah-subnet`. The wallet folder in it is read-only to the validator and hidden from the interface and
+the health check, which never need the hotkey.
 Everything runs from the pinned install in `/opt`, never from a working copy of the repository.
 
 The owner's services, where the owner runs them, have users of their own and the same sandboxing:
@@ -13,8 +13,9 @@ The owner's services, where the owner runs them, have users of their own and the
   registered. Its wallet stays in `/etc/kokoah-subnet/burn-wallet` (root's alone; a link to the wallet folder will
   do), and systemd hands its key files to each run in a private place (`LoadCredential`), so the user never owns
   them.
-- `kokoah-subnet-operator.timer`: the daily file-hash commitment from the owner hotkey (its hotkey file in the
-  wallet folder).
+- `kokoah-subnet-operator.timer` (user `kokoah-subnet-operator`): the daily file-hash commitment from the owner
+  hotkey, every hour until it is made. The hotkey stays in `/etc/kokoah-subnet/operator-wallet/hotkey` (root's
+  alone; a link to the hotkey file will do) and reaches each run the same way, so the validator never reads it.
 
 | Path | What |
 |---|---|
@@ -29,7 +30,7 @@ The owner's services, where the owner runs them, have users of their own and the
 | `/etc/kokoah-subnet/alert.env` | optional: `KOKOAH_SUBNET_ALERT_WEBHOOK=...` |
 | `/etc/kokoah-subnet/agent-service.env` | `KOKOAH_SUBNET_AGENT_DB_URL=...` (the `kokoah_agents` role) and `KOKOAH_SUBNET_AGENT_ARGS=...`, readable by `kokoah-subnet-agents` |
 | `/etc/kokoah-subnet/burn.env`, `burn-wallet/` | `KOKOAH_SUBNET_BURN_ARGS=--network ... --netuid ...`; the burn wallet (coldkey, `coldkeypub.txt`, `hotkeys/default`) |
-| `/etc/kokoah-subnet/operator.env` | `KOKOAH_SUBNET_OPERATOR_ARGS=--network ... --netuid ... --builder ... --wallet ... --wallet-hotkey ... --wallet-path /var/lib/kokoah-subnet/wallets` |
+| `/etc/kokoah-subnet/operator.env`, `operator-wallet/hotkey` | `KOKOAH_SUBNET_OPERATOR_ARGS=--network ... --netuid ... --builder ...`; the owner hotkey's file |
 | `/var/log/kokoah-subnet/` | the logs |
 | `/var/backups/kokoah-subnet/` | the daily backups of the record (14 kept), readable by root only |
 
