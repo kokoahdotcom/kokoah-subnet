@@ -1,0 +1,48 @@
+[Unit]
+Description=Kokoah subnet agent service (127.0.0.1:48130, public behind the site's reverse proxy)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kokoah-subnet-agents
+Group=kokoah-subnet-agents
+Environment=HOME=/var/lib/kokoah-subnet-agents
+# KOKOAH_SUBNET_AGENT_DB_URL (the role that owns the agents database, never the container's superuser: scripts/db.sh
+# owner-role) and KOKOAH_SUBNET_AGENT_ARGS (--netuid, --network, --wrap-key-file)
+EnvironmentFile=/etc/kokoah-subnet/agent-service.env
+WorkingDirectory=/var/lib/kokoah-subnet-agents
+ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet agent service --data-dir /var/lib/kokoah-subnet-agents/agents --host 127.0.0.1 --port 48130 $KOKOAH_SUBNET_AGENT_ARGS
+Restart=always
+RestartSec=10
+MemoryMax=1G
+TasksMax=128
+ReadWritePaths=/var/lib/kokoah-subnet-agents
+# the validator's record, its connection and its hotkey are none of this service's business
+InaccessiblePaths=-/var/lib/kokoah-subnet -/etc/kokoah-subnet/db.env -/etc/kokoah-subnet/db-reader.env
+StandardOutput=append:/var/log/kokoah-subnet/agent-service.log
+StandardError=append:/var/log/kokoah-subnet/agent-service.log
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+RemoveIPC=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
