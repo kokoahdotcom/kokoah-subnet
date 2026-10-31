@@ -466,6 +466,24 @@ def test_a_collected_group_leader_counts_as_gone(monkeypatch: pytest.MonkeyPatch
     supervisor._kill_if_owned(os.getpid(), os.getuid())  # no error
 
 
+def test_one_process_that_cannot_be_killed_never_spares_the_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.agent import supervisor
+
+    running = {11, 12, 13}
+    killed: list[int] = []
+
+    def kill(pid: int, uid: int) -> None:
+        killed.append(pid)
+        if pid == 11 and len(killed) == 1:
+            raise supervisor.KillFailed("refused once")
+        running.discard(pid)
+
+    monkeypatch.setattr(supervisor, "processes_of", lambda uid: sorted(running))
+    monkeypatch.setattr(supervisor, "_kill_if_owned", kill)
+    supervisor.kill_user_processes(1234)
+    assert killed[:3] == [11, 12, 13] and not running  # the round went on, and the next one took the first
+
+
 def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import ctypes
     import errno
@@ -481,6 +499,8 @@ def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.
     me = os.getuid()
     with pytest.raises(supervisor.KillFailed, match="pidfd_open"):  # not a PermissionError: no 403 on a signed stop
         supervisor.kill_user_processes(me, rounds=1)
+    kill = supervisor.kill_user_processes
+    monkeypatch.setattr(supervisor, "kill_user_processes", lambda uid: kill(uid, rounds=2))  # not 1000 slow rounds
     runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=me)
     with pytest.raises(supervisor.KillFailed):
         runner.start()  # no new agent beside processes that could not be ended

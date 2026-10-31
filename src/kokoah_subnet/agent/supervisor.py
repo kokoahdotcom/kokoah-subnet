@@ -319,15 +319,23 @@ def _kill_if_owned(pid: int, uid: int) -> None:
 def kill_user_processes(uid: int, rounds: int = 1000) -> None:
     """Every process of the agent's user ends, whatever it names itself or whichever group it moved to. The
     supervisor kills them itself (root: nothing the agent's user does can stop it), round after round until none is
-    left: a process forked meanwhile is caught on the next round."""
+    left: a process forked meanwhile is caught on the next round. One process that cannot be killed never spares the
+    rest of a round; it fails the whole only once the rounds run out with it still there."""
+    failed: KillFailed | None = None
     for _ in range(rounds):
         pids = processes_of(uid)
         if not pids:
             return
         for pid in pids:
-            _kill_if_owned(pid, uid)
+            try:
+                _kill_if_owned(pid, uid)
+            except KillFailed as exc:
+                failed = exc
         time.sleep(0.005)
-    raise RuntimeError(f"processes of uid {uid} still running after {rounds} rounds: {processes_of(uid)}")
+    left = processes_of(uid)
+    if not left:
+        return
+    raise KillFailed(f"processes of uid {uid} still running after {rounds} rounds: {left} (last error: {failed})")
 
 
 class AgentRunner:
