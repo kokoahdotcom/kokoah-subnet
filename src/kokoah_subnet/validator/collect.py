@@ -533,6 +533,23 @@ async def collect_and_score(
                 day_end_cache[coin] = hours[max(hours)] if hours else None
         return day_end_cache[coin]
 
+    async def record_positions(hk: str, address: str, state: dict[str, Any]) -> None:
+        """The address's positions at the day's end, the same whenever a validator reads them: the state, and the
+        fills since the day ended up to the state's time. A failed read fails the day until the deadline, like the
+        other reads; after it, the day's positions are left out (a gap in the series)."""
+        state_ms = int(state.get("time") or clock * 1000)
+        try:
+            later = await hl.fills_by_time(address, end_ms, state_ms + 1)
+        except Exception as exc:  # noqa: BLE001
+            store.put_error(day, hk, address, "positions", f"fills since the day's end: {exc}")
+            if not past_deadline:
+                raise RuntimeError(f"fills of {address} since the day's end unavailable: {exc}") from exc
+            return
+        held = {str(ap.get("position", {}).get("coin")) for ap in state.get("assetPositions", [])}
+        held |= {f.coin for f in later}
+        prices = {coin: await day_end_price(coin) for coin in sorted(held) if is_perp(coin) and ":" not in coin}
+        store.put_positions(address, day, end_of_day_positions(state, later, prices))
+
     async def one(hk: str, address: str) -> None:
         """Everything for one bound address. A failed read of the account's recorded history, the fill history, the
         explorer, the minute candles or a linked account fails the day (retried within the hour) until the deadline;
@@ -696,8 +713,10 @@ async def collect_and_score(
         if change.value_start is not None and change.value_end is None:
             if not past_deadline:
                 raise RuntimeError(f"the recorded history of {address} does not reach the end of {day} yet")
+        read_state: dict[str, Any] | None = None
         try:
             state = await hl.account_state(address)
+            read_state = state
             live = float(state["marginSummary"]["accountValue"])
             try:
                 updates = await hl.ledger_updates(address, start_ms, end_ms)
@@ -742,20 +761,11 @@ async def collect_and_score(
                     for u in updates
                 ],
             )
-            # positions at the day's end, the same whenever a validator reads them: the state less the fills since
-            state_ms = int(state.get("time") or clock * 1000)
-            try:
-                later = await hl.fills_by_time(address, end_ms, state_ms + 1)
-            except Exception as exc:  # noqa: BLE001 - no positions today: the position series has a gap
-                store.put_error(day, hk, address, "positions", f"fills since the day's end: {exc}")
-            else:
-                held = {str(ap.get("position", {}).get("coin")) for ap in state.get("assetPositions", [])}
-                held |= {f.coin for f in later}
-                prices = {coin: await day_end_price(coin) for coin in sorted(held) if is_perp(coin)}
-                store.put_positions(address, day, end_of_day_positions(state, later, prices))
         except Exception as exc:  # noqa: BLE001 - no account value today: the return series has a gap, nothing else
             errors[hk] = f"account state: {str(exc)[:160]}"
             store.put_error(day, hk, address, "account state", str(exc))
+        if read_state is not None:
+            await record_positions(hk, address, read_state)
         try:
             fee_raw = await hl.fee_rates_raw(address)
             rates = (float(fee_raw["userCrossRate"]) * 1e4, float(fee_raw["userAddRate"]) * 1e4)
