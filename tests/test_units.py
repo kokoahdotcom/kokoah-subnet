@@ -2,7 +2,11 @@
 the backup run as a user of their own with the sandbox settings; secrets reach each service only as it needs them."""
 
 import configparser
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 UNITS = Path(__file__).resolve().parent.parent / "deploy" / "systemd"
 SANDBOX = {
@@ -118,3 +122,22 @@ def test_the_operator_wallet_flags_come_last() -> None:
     own = command.index("$$KOKOAH_SUBNET_OPERATOR_ARGS")
     for flag in ("--wallet owner", "--wallet-hotkey default", "--wallet-path %t/kokoah-subnet-operator/wallets"):
         assert command.index(flag) > own, flag
+
+
+@pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="needs systemd-analyze")
+def test_systemd_accepts_every_unit(tmp_path: Path) -> None:
+    """systemd's own check finds no bad setting or specifier in any unit (a missing program is fine here: the release
+    is not installed on a test machine)."""
+    for unit in [*UNITS.glob("*.service"), *UNITS.glob("*.timer")]:
+        shutil.copy(unit, tmp_path / unit.name)
+    check = subprocess.run(
+        ["systemd-analyze", "verify", "--man=no", *sorted(str(u) for u in tmp_path.iterdir())],
+        capture_output=True,
+        text=True,
+    )
+    complaints = [
+        line
+        for line in (check.stdout + check.stderr).splitlines()
+        if "kokoah-subnet" in line and "is not executable" not in line
+    ]
+    assert not complaints, complaints
