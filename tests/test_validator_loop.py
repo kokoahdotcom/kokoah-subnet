@@ -1662,27 +1662,35 @@ async def test_a_day_the_exchange_may_have_cut_counts_its_loss_but_not_its_profi
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Thousands of fills after the day ends can push the day's own fills beyond what the exchange keeps, and the
-    thin-coin and off-market checks with them: such a day keeps its loss and loses its profit, like a thin one."""
+    thin-coin and off-market checks with them: such a day keeps its loss and loses its profit, like a thin one; its
+    orders are not kept for the copy rule (they may be partial); its positions still are (the fills since are few)."""
     from kokoah_subnet.validator import collect
 
-    monkeypatch.setattr(collect, "FILLS_KEPT", 2)  # the day's one fill and one since make two: possibly cut
-    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    monkeypatch.setattr(collect, "FILLS_KEPT", 2)  # the day's one fill and one in the hour after make two
     end = DAY_MS + 86_400_000
-    later = [{"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 60_000, "crossed": True,
-              "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10}]  # fmt: skip
+    # the recorded profit, and what the return counts of it (the 2,000-dollar off-market gift is removed first)
+    for pnl, expected in ((5_000.0, 0.0), (-1_500.0, -3_500.0)):
+        sub = tmp_path / f"pnl{int(pnl)}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+        later = [{"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 60_000, "crossed": True,
+                  "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10}]  # fmt: skip
 
-    def busy(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == addr_a:
-            return httpx.Response(200, json=later)
-        return _info_handler(request)
+        def busy(request: httpx.Request, a: str = addr_a, fills: list[Any] = later) -> httpx.Response:
+            body = json.loads(request.content)
+            if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == a:
+                return httpx.Response(200, json=fills)
+            return _info_handler(request)
 
-    PNL_DAY[addr_a] = 5_000.0
-    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
-    try:
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
-    finally:
-        PNL_DAY.pop(addr_a, None)
-        await hl.close()
-    (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
-    assert v1 - v0 - moved == pytest.approx(0.0, abs=1e-6)  # 5,000 made, less the 2,000 gift: 3,000 not counted
+        PNL_DAY[addr_a] = pnl
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
+        try:
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)  # a profit not counted, a loss kept
+        assert store.history_orders(addr_a, store.day_after(DAY), 3) == []
+        assert store.history_orders(addr_b, store.day_after(DAY), 3) != []
+        assert store.position_series([addr_a], [DAY])[addr_a] != {}
