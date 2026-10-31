@@ -170,24 +170,28 @@ def test_only_a_link_a_binding_on_chain_named_can_be_unlinked_and_it_is_remember
     assert unlink(owner) == 200 and c.get("/unlinks").json()["unlinks"][0]["address"] == owner.address.lower()
 
 
-def test_the_unlink_list_comes_in_pages_oldest_first(tmp_path: Path) -> None:
+def test_the_unlink_list_comes_in_pages_oldest_first_and_misses_none(tmp_path: Path) -> None:
     clock = Clock()
     keys = [Account.create() for _ in range(5)]
     app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
                      netuid=NETUID)  # fmt: skip
     c = TestClient(app)
-    for key in keys:
+    for i, key in enumerate(keys):
         t = int(clock.now * 1000)
         body = {"hotkey": H1, "address": key.address, "time_ms": t,
                 "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
         assert c.post("/unlinks", json=body).status_code == 200
-        clock.now += 1
-    first = c.get("/unlinks", params={"limit": 2}).json()
-    assert len(first["unlinks"]) == 2 and first["next"] == first["unlinks"][-1]["received_at"]
-    rest = c.get("/unlinks", params={"since": first["next"], "limit": 10}).json()
-    assert len(rest["unlinks"]) == 4 and rest["next"] is None  # the boundary row again, then the rest
-    every = {u["address"] for u in first["unlinks"] + rest["unlinks"]}
-    assert every == {k.address.lower() for k in keys}
+        clock.now += 1 if i == 0 else 0  # four of them received at the very same time
+    seen, after, pages = [], "", 0
+    while True:
+        page = c.get("/unlinks", params={"after": after, "limit": 2}).json()
+        seen += [u["address"] for u in page["unlinks"]]
+        pages += 1
+        if page["next"] is None:
+            break
+        after = page["next"]
+    assert sorted(seen) == sorted(k.address.lower() for k in keys) and len(seen) == 5 and pages == 3
+    assert c.get("/unlinks", params={"after": "nonsense"}).status_code == 400
 
 
 async def test_a_validator_reads_every_page_and_checks_each_signature_once(monkeypatch: Any) -> None:

@@ -13,7 +13,7 @@ sealed machines fetch it, and where they keep their account key encrypted with t
     GET  /unlinks/message?hotkey=&address=      the text a linked address signs to end its link (with the time)
     POST /unlinks                                an address's signed unlink (spec section 14), of a link a binding
                                                  on chain has named
-    GET  /unlinks[?address=][&since=&limit=]     every unlink accepted, oldest received first, in pages, for
+    GET  /unlinks[?address=][&after=&limit=]     every unlink accepted, oldest received first, in pages, for
                                                  validators (they check each signature)
 
 A submission's id is the sha256 of the stored bytes (encrypted or not), so a machine can check it fetched exactly
@@ -65,7 +65,9 @@ from sqlalchemy import (
     create_engine,
     func,
     insert,
+    literal,
     select,
+    tuple_,
 )
 from starlette.concurrency import run_in_threadpool
 
@@ -801,22 +803,26 @@ def create_app(
         return {**unlink_row(u, received_at), "existing": False}
 
     @app.get("/unlinks")
-    def unlink_list(address: str | None = None, since: float = 0.0, limit: int = UNLINK_PAGE) -> dict[str, Any]:
-        """Oldest received first, from `since` (a `received_at`, included), at most `limit` (UNLINK_PAGE at most);
-        `next` is the `since` of the next page, or null on the last one."""
+    def unlink_list(address: str | None = None, after: str = "", limit: int = UNLINK_PAGE) -> dict[str, Any]:
+        """Oldest received first, at most `limit` (UNLINK_PAGE at most), after the row `after` names (`next` of
+        the page before: its received time, hotkey and address, which no other row shares); `next` is null on the
+        last page."""
         limit = max(1, min(limit, UNLINK_PAGE))
-        q = (
-            select(unlinks)
-            .where(unlinks.c.received_at >= since)
-            .order_by(unlinks.c.received_at, unlinks.c.hotkey, unlinks.c.address)
-            .limit(limit)
-        )
+        order = tuple_(unlinks.c.received_at, unlinks.c.hotkey, unlinks.c.address)
+        q = select(unlinks).order_by(unlinks.c.received_at, unlinks.c.hotkey, unlinks.c.address).limit(limit)
+        if after:
+            try:
+                at, hk, a = after.split("|")
+                q = q.where(order > tuple_(literal(float(at)), literal(hk), literal(a)))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="bad cursor") from None
         if address is not None:
             q = q.where(unlinks.c.address == check_address(address))
         with engine.connect() as c:
             rows = c.execute(q).all()
-        more = len(rows) == limit
-        return {"unlinks": [unlink_row(r) for r in rows], "next": rows[-1].received_at if more else None}
+        last = rows[-1] if len(rows) == limit else None
+        cursor = f"{last.received_at!r}|{last.hotkey}|{last.address}" if last is not None else None
+        return {"unlinks": [unlink_row(r) for r in rows], "next": cursor}
 
     @app.get("/key-store/released")
     def released() -> dict[str, list[dict[str, Any]]]:
