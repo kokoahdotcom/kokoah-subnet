@@ -19,6 +19,15 @@ The owner's services, where the owner runs them, have users of their own and the
   On a host set up before, take the `--wallet` flags out of `operator.env` and move the owner hotkey's file from the
   validator's wallet folder to that place; copy it instead only if the validator also signs with that hotkey.
 
+Each of these users is created once, before its unit is enabled:
+
+```bash
+for user in kokoah-subnet-agents kokoah-subnet-burn kokoah-subnet-operator; do
+    id "$user" >/dev/null 2>&1 || sudo useradd --system --home-dir "/var/lib/$user" --create-home \
+        --shell /usr/sbin/nologin "$user"
+done
+```
+
 | Path | What |
 |---|---|
 | `/opt/kokoah-subnet/venv` | the installed release (the validator guide's `uv sync` command, with `UV_PROJECT_ENVIRONMENT`) |
