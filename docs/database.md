@@ -30,10 +30,11 @@ lowercase; `raw` columns keep the source record as JSON. Registration and bindin
 heights at 12 seconds a block; epoch and submission times are wall-clock at the validator.
 
 Connect: `scripts/db.sh psql` opens a shell; the URLs are in `~/.local/share/kokoah/subnet-db.env`:
-`KOKOAH_SUBNET_DB_URL`, which the validator and the burn command read when `--db-url` is not given, and
+`KOKOAH_SUBNET_DB_URL`, which the validator reads when `--db-url` is not given;
 `KOKOAH_SUBNET_DB_READER_URL`, the read-only role `kokoah_reader` that the interface, the health check and Grafana
 use (they read the record and never change it; the role can read this database's tables only, and no other database
-in the container accepts it).
+in the container accepts it); and, once `scripts/db.sh burn-role` has made it, `KOKOAH_SUBNET_DB_BURNER_URL`, the role
+`kokoah_burner` the burn command records with (it can add rows to `burns` and read the schema version, nothing else).
 Back up with `scripts/db.sh backup file.dump`.
 
 Schema changes: `create_all` adds new tables; column changes are numbered steps in
