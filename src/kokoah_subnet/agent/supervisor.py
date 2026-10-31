@@ -33,6 +33,7 @@ run the agent in the sandbox, restarting it when it exits (the agent restarts, t
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
@@ -245,44 +246,63 @@ def visible_to_agent(directories: list[str], uid: int | None, gid: int | None) -
     return [line for line in out.stdout.splitlines() if line]
 
 
+def _status(pid: int | str) -> dict[bytes, bytes] | None:
+    """A process's real user and state from /proc (read as bytes: a process names itself); None once it is gone."""
+    try:
+        status = Path(f"/proc/{pid}/status").read_bytes()
+    except OSError:
+        return None
+    return dict(line.split(b":", 1) for line in status.splitlines() if line.startswith((b"Uid:", b"State:", b"PPid:")))
+
+
+def _real_uid(fields: dict[bytes, bytes]) -> int | None:
+    uids = fields.get(b"Uid", b"").split()
+    try:
+        return int(uids[0]) if uids else None
+    except ValueError:
+        return None
+
+
 def processes_of(uid: int) -> list[int]:
-    """The live (not yet exited) processes whose real user is `uid` (read as bytes: a process names itself)."""
+    """The live (not yet exited) processes whose real user is `uid`."""
     found = []
     for entry in os.scandir("/proc"):
-        if not entry.name.isdigit():
-            continue
-        try:
-            status = Path(f"/proc/{entry.name}/status").read_bytes()
-        except OSError:
-            continue
-        fields = dict(line.split(b":", 1) for line in status.splitlines() if line.startswith((b"Uid:", b"State:")))
-        uids = fields.get(b"Uid", b"").split()
-        try:
-            real = int(uids[0]) if uids else None
-        except ValueError:
-            continue
-        if real == uid and not fields.get(b"State", b"").strip().startswith((b"Z", b"X")):
-            found.append(int(entry.name))
+        if entry.name.isdigit() and (fields := _status(entry.name)) is not None:
+            if _real_uid(fields) == uid and not fields.get(b"State", b"").strip().startswith((b"Z", b"X")):
+                found.append(int(entry.name))
     return found
 
 
-# Run as the agent's user: signals every process of that user (but itself) until none is left; a process that forks
-# meanwhile is caught on the next round. The shell's own kill: nothing the agent's user cannot run.
-_KILL_ALL = "i=0; while kill -9 -1 2>/dev/null && [ $i -lt 10000 ]; do i=$((i+1)); done"
+_libc = ctypes.CDLL(None, use_errno=True)
+SYS_PIDFD_OPEN, SYS_PIDFD_SEND_SIGNAL = 434, 424  # the same on x86_64 and arm64
 
 
-def kill_user_processes(uid: int, gid: int | None) -> None:
-    """Every process of the agent's user ends, whatever it names itself or whichever group it moved to."""
-    subprocess.run(
-        ["/bin/sh", "-c", _KILL_ALL],
-        user=uid,
-        group=gid if gid is not None else uid,
-        extra_groups=[],
-        env=LAUNCHER_ENV,
-        cwd="/",
-        timeout=60,
-        check=False,
-    )
+def _kill_if_owned(pid: int, uid: int) -> None:
+    """SIGKILL `pid` when its real user is still `uid`, through a pidfd: the signal goes to the process that was
+    looked at, never to another that got its id since."""
+    fd = _libc.syscall(SYS_PIDFD_OPEN, pid, 0)
+    if fd < 0:
+        return  # gone already
+    try:
+        fields = _status(pid)
+        if fields is not None and _real_uid(fields) == uid:
+            _libc.syscall(SYS_PIDFD_SEND_SIGNAL, fd, signal.SIGKILL, None, 0)
+    finally:
+        os.close(fd)
+
+
+def kill_user_processes(uid: int, rounds: int = 1000) -> None:
+    """Every process of the agent's user ends, whatever it names itself or whichever group it moved to. The
+    supervisor kills them itself (root: nothing the agent's user does can stop it), round after round until none is
+    left: a process forked meanwhile is caught on the next round."""
+    for _ in range(rounds):
+        pids = processes_of(uid)
+        if not pids:
+            return
+        for pid in pids:
+            _kill_if_owned(pid, uid)
+        time.sleep(0.005)
+    log.warning("processes of uid %d still alive after %d rounds", uid, rounds)
 
 
 class AgentRunner:
@@ -313,7 +333,7 @@ class AgentRunner:
                 pass
             proc.wait()
         if self.uid is not None:
-            kill_user_processes(self.uid, self.gid)
+            kill_user_processes(self.uid)
         reap_orphans()
 
     def end_all(self) -> None:
