@@ -104,3 +104,26 @@ def test_a_set_but_missing_agent_folder_fails_the_backup(tmp_path: Path) -> None
     missing = env | {"KOKOAH_SUBNET_AGENT_DATA": str(tmp_path / "no-such-folder")}
     failed = subprocess.run(["bash", str(scripts / "backup.sh")], env=missing, capture_output=True, text=True)
     assert failed.returncode != 0 and "no bundles" in failed.stderr
+
+
+def test_a_service_role_owns_its_database_and_nothing_else(tmp_path: Path) -> None:
+    sent = _run_db(tmp_path, "owner-role", "kokoah_agents", "kokoah_subnet_agents")
+    assert "ALTER ROLE kokoah_agents WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" in sent
+    assert "ALTER DATABASE kokoah_subnet_agents OWNER TO kokoah_agents;" in sent
+    assert "EXECUTE 'ALTER TABLE ' || t || ' OWNER TO kokoah_agents'" in sent  # the tables already there
+    assert "REVOKE ALL ON DATABASE %I FROM PUBLIC, kokoah_agents" in sent  # every other database refuses it
+    env = (tmp_path / "db.env").read_text()
+    assert "KOKOAH_SUBNET_ROLE_KOKOAH_AGENTS_URL=postgresql+psycopg://kokoah_agents:" in env
+    password = next(line for line in env.splitlines() if line.startswith("KOKOAH_SUBNET_ROLE_KOKOAH_AGENTS_PASSWORD="))
+    commands = [line for line in sent.splitlines() if line.startswith(("exec ", "ps", "run ", "start "))]
+    assert commands and not any(password.split("=", 1)[1] in line for line in commands)  # never an argument
+    again = _run_db(tmp_path, "owner-role", "kokoah_agents", "kokoah_subnet_agents")
+    assert (tmp_path / "db.env").read_text() == env and "OWNER TO kokoah_agents" in again  # the same password kept
+
+
+def test_a_service_role_never_takes_a_reserved_or_odd_name(tmp_path: Path) -> None:
+    import pytest
+
+    for args in (("kokoah", "kokoah_subnet_agents"), ("kokoah_reader", "x"), ("bad-name", "x"), ("ok", "bad;db")):
+        with pytest.raises(subprocess.CalledProcessError):
+            _run_db(tmp_path, "owner-role", *args)
