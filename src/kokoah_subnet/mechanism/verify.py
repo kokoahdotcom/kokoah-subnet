@@ -114,7 +114,7 @@ def copy_rule() -> None:
     parts = {f"x{i}": skill_weight(0.9, P.skill_volume_cap_usd, False, P) for i in range(10)}
     noisy = {k: {d: v + rng.gauss(0, 0.0005) for d, v in r.items()} for k in parts}
     groups = copy_groups(noisy, P)
-    total = sum(apply_copy_groups(parts, groups, {tuple(g): copy_leader(g, {}, {}) for g in groups}).values())
+    total = sum(apply_copy_groups(parts, groups, {tuple(g): copy_leader(g, {}, {}, P) for g in groups}).values())
     check("ten copies of one $10M trader", abs(total - single) < 1e-9, f"{total:.3f} vs {single:.3f}")
     independent = {f"y{i}": {d: rng.gauss(0.002, 0.01) for d in days} for i in range(10)}
     check("independent traders are never grouped", copy_groups(independent, P) == [])

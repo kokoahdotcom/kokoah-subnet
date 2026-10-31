@@ -10,7 +10,7 @@ shared by `Φ̂` among eligible miners, the skill pool shared by skill weight am
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from .credit import DayFees, day_fees
@@ -80,6 +80,9 @@ class DayInputs:
     # address -> its owner's group (hotkeys on one coldkey, a master and its sub-accounts): the position mirror rule
     # compares only addresses in one group
     owner_group_of: Mapping[str, str] = field(default_factory=dict)
+    # address -> its counted fills of the `copy_lookback_days` days before (the copy rule's leader); read only for
+    # members of a copy group
+    earlier_fills: Callable[[str], Sequence[Fill]] | None = None
     pool_alpha: float | None = None
     penalized_until: Mapping[str, int] = field(default_factory=dict)  # address -> day index: a report follows it
 
@@ -259,13 +262,15 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
     group_of = {k: tuple(g) for g in groups for k in g}
     fills_of = {w.m.hotkey: bound_fills.get(w.m.address, []) for w in work}
+    address_of = {w.m.hotkey: w.m.address for w in work}
     today_leads: dict[str, dict[str, float]] = {}
     for members in groups:
-        for x, row in copy_leads(members, fills_of).items():
+        earlier = {k: inputs.earlier_fills(address_of[k]) for k in members} if inputs.earlier_fills else {}
+        for x, row in copy_leads(members, fills_of, earlier, params.copy_lookback_days * 86_400.0).items():
             today_leads.setdefault(x, {}).update(row)
     led = smoothed_leads({w.m.hotkey: dict(w.state.led) for w in work}, today_leads, params)
     registered = {w.m.hotkey: w.m.registered_block or w.state.registered_block for w in work}
-    leaders = {tuple(g): copy_leader(g, led, registered) for g in groups}
+    leaders = {tuple(g): copy_leader(g, led, registered, params) for g in groups}
     skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}
     allocation = allocate(volume_weights, skill_weights, inputs.price_usd, params, inputs.pool_alpha)

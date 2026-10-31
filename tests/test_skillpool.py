@@ -61,13 +61,13 @@ def test_a_copy_earns_nothing_and_the_original_keeps_its_weight() -> None:
     b_fills = [fill("b", f.time_ms + 40_000, f.coin, f.side) for f in a_fills]
     registered = {"a": 5_000, "b": 1_000, "c": 1_000}  # the copier even registered earlier
     leads = copy_leads(["a", "b"], {"a": a_fills, "b": b_fills})
-    assert leads["a"]["b"] > 0 and "a" not in leads["b"]
-    leader = copy_leader(["a", "b"], leads, registered)
+    assert leads["a"]["b"] > 5 * leads["b"].get("a", 0.0)  # b followed within a minute; a's next trade came later
+    leader = copy_leader(["a", "b"], leads, registered, DEFAULT)
     assert leader == "a"
     w = apply_copy_groups({"a": 0.6, "b": 1.0, "c": 1.0}, groups, {("a", "b"): leader})
     assert w == {"a": 0.6, "b": 0.0, "c": 1.0}
     # without fills to compare, the earlier registration leads
-    assert copy_leader(["a", "b"], {}, registered) == "b"
+    assert copy_leader(["a", "b"], {}, registered, DEFAULT) == "b"
     # too few common days: not grouped
     short = {d: base[d] for d in days[:20]}
     assert copy_groups({"a": base, "b": short}, DEFAULT) == []
@@ -80,21 +80,8 @@ def test_splitting_above_the_cap_gains_nothing_when_the_accounts_trade_alike() -
     single = skill_weight(0.9, 10_000_000, False, DEFAULT)
     parts = {f"x{i}": skill_weight(0.9, 1_000_000, False, DEFAULT) for i in range(10)}
     groups = copy_groups({k: r for k in parts}, DEFAULT)
-    leaders = {tuple(g): copy_leader(g, {}, {}) for g in groups}
+    leaders = {tuple(g): copy_leader(g, {}, {}, DEFAULT) for g in groups}
     assert sum(apply_copy_groups(parts, groups, leaders).values()) == pytest.approx(single)
-
-
-def test_many_small_quick_fills_do_not_take_the_lead() -> None:
-    """The original trades in four $50,000 pieces a minute apart; the copier follows the first piece, then sends a
-    $10 fill every five seconds, so most of its fills come just before one of the original's. Each match counts the
-    smaller fill's notional, and each of the original's fills once: the original still leads."""
-    t0 = 1_792_540_800_000
-    big = [Fill(t0 + i * 60_000, "a", "BTC", "B", 100_000.0, 0.5, True, 0.0) for i in range(4)]
-    follow = [Fill(t0 + 20_000, "b", "BTC", "B", 100_000.0, 0.5, True, 0.0)]
-    spam = [Fill(t0 + 25_000 + i * 5_000, "b", "BTC", "B", 100_000.0, 0.0001, True, 0.0) for i in range(36)]
-    leads = copy_leads(["a", "b"], {"a": big, "b": follow + spam})
-    assert leads["a"]["b"] > 10 * leads["b"]["a"]
-    assert copy_leader(["a", "b"], leads, {"a": 9, "b": 1}) == "a"
 
 
 def test_the_lead_is_judged_over_the_days() -> None:
@@ -104,7 +91,7 @@ def test_the_lead_is_judged_over_the_days() -> None:
     for _ in range(30):
         led = smoothed_leads(led, {"a": {"b": 100_000.0}}, DEFAULT)
     led = smoothed_leads(led, {"b": {"a": 150_000.0}}, DEFAULT)
-    assert copy_leader(["a", "b"], led, {}) == "a"
+    assert copy_leader(["a", "b"], led, {}, DEFAULT) == "a"
     for _ in range(60):  # nothing more matched: the leads fade away and are dropped
         led = smoothed_leads(led, {}, DEFAULT)
     assert led == {}

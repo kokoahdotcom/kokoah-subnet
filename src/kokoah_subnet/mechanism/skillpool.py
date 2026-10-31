@@ -85,42 +85,51 @@ def copy_groups(dated_returns: Mapping[str, Mapping[str, float]], params: Params
     return sorted((sorted(g) for g in groups.values() if len(g) > 1), key=lambda g: g[0])
 
 
+def _orders(fills: Sequence[Fill]) -> dict[tuple[str, str], tuple[list[int], list[float]]]:
+    """One member's orders by coin and side: the pieces filled in one millisecond are one order (their notional
+    summed), in time order."""
+    by_key: dict[tuple[str, str], dict[int, float]] = {}
+    for f in fills:
+        at = by_key.setdefault((f.coin, f.side), {})
+        at[f.time_ms] = at.get(f.time_ms, 0.0) + f.notional
+    return {key: (sorted(at), [at[t] for t in sorted(at)]) for key, at in by_key.items()}
+
+
 def copy_leads(
-    group: Sequence[str], fills_of: Mapping[str, Sequence[Fill]], window_s: float = 600.0
+    group: Sequence[str],
+    fills_of: Mapping[str, Sequence[Fill]],
+    earlier_of: Mapping[str, Sequence[Fill]] | None = None,
+    window_s: float = 3 * 86_400.0,
+    reaction_s: float = 600.0,
 ) -> dict[str, dict[str, float]]:
-    """`leads[x][y]`: the notional by which member `x` traded before member `y` today. Every fill of `x` is matched
-    with the nearest fill of `y` on the same coin and side; when `y`'s fill comes after it within `window_s`, the
-    pair counts the smaller of the two fills' notional, and each fill of `y` counts once, for its largest match
-    (a copier always trades after what it copies, and many small fills weigh no more than their size)."""
-    index: dict[str, dict[tuple[str, str], tuple[list[int], list[float]]]] = {}
-    for k in group:
-        by_key: dict[tuple[str, str], list[tuple[int, float]]] = {}
-        for f in fills_of.get(k, ()):
-            by_key.setdefault((f.coin, f.side), []).append((f.time_ms, f.notional))
-        index[k] = {key: ([t for t, _ in sorted(v)], [n for _, n in sorted(v)]) for key, v in by_key.items()}
-    window_ms = window_s * 1000
+    """`leads[x][y]`: the notional by which member `x` traded before member `y` today. Each of `y`'s orders today
+    (`fills_of`) is matched with `x`'s most recent earlier order on the same coin and side within `window_s`, today's
+    or from the days before (`earlier_of`). The match counts the smaller of the two orders' notional for `x`, in full
+    when `y` followed within `reaction_s` and less the longer it waited (`reaction_s / wait`), and each of `x`'s
+    orders gives at most its own notional in all. A copier trades soon after what it copies, while the original's
+    next trade comes on its own schedule; small orders placed just before weigh no more than their size, and a copy
+    made hours later still counts, a little."""
+    earlier_of = earlier_of or {}
+    window_ms, reaction_ms = window_s * 1000, reaction_s * 1000
+    today = {k: _orders(fills_of.get(k, ())) for k in group}
+    known = {k: _orders([*earlier_of.get(k, ()), *fills_of.get(k, ())]) for k in group}
     leads: dict[str, dict[str, float]] = {x: {} for x in group}
     for x in group:
         for y in group:
             if x == y:
                 continue
             total = 0.0
-            for key, (times, sizes) in index[x].items():
-                if key not in index[y]:
+            for key, (times, sizes) in today[y].items():
+                if key not in known[x]:
                     continue
-                other_times, other_sizes = index[y][key]
-                best: dict[int, float] = {}  # y's fill -> its largest match
+                lead_times, lead_sizes = known[x][key]
+                left = list(lead_sizes)  # what each of x's orders can still give
                 for t, n in zip(times, sizes, strict=True):
-                    i = bisect.bisect_left(other_times, t)
-                    # the nearest of y's fills: the last before t or the first at or after it (ties go to the earlier)
-                    near = min(
-                        (j for j in (i - 1, i) if 0 <= j < len(other_times)),
-                        key=lambda j: (abs(other_times[j] - t), other_times[j]),
-                        default=None,
-                    )
-                    if near is not None and 0 < other_times[near] - t <= window_ms:
-                        best[near] = max(best.get(near, 0.0), min(n, other_sizes[near]))
-                total += sum(best.values())
+                    i = bisect.bisect_left(lead_times, t) - 1  # x's most recent order strictly before t
+                    if i >= 0 and t - lead_times[i] <= window_ms:
+                        given = min(left[i], n)
+                        left[i] -= given
+                        total += given * min(1.0, reaction_ms / (t - lead_times[i]))
             if total > 0:
                 leads[x][y] = total
     return leads
@@ -130,15 +139,18 @@ def copy_leader(
     group: Sequence[str],
     led: Mapping[str, Mapping[str, float]],
     registered_block: Mapping[str, int | None],
+    params: Params,
 ) -> str:
     """The member a copy group follows: the one that led the most notional (`led[x][y]`: smoothed over the days, see
-    `copy_leads`), when it led strictly the most. Without that, the earliest registration on the subnet (the same on
-    every validator, and no later account can have an earlier one), then the hotkey order."""
+    `copy_leads`), when that lead is at least `copy_lead_min_usd` and `copy_lead_margin` times the next member's.
+    Without such a lead, the earliest registration on the subnet (the same on every validator, and no later account
+    can have an earlier one), then the hotkey order."""
     totals = {k: sum(v for y, v in led.get(k, {}).items() if y in group and y != k) for k in group}
-    best = max(totals.values(), default=0.0)
-    top = [k for k in group if totals[k] == best]
-    if best > 0 and len(top) == 1:
-        return top[0]
+    ranked = sorted(group, key=lambda k: totals[k], reverse=True)
+    best = totals[ranked[0]]
+    runner_up = totals[ranked[1]] if len(ranked) > 1 else 0.0
+    if best >= params.copy_lead_min_usd and best >= params.copy_lead_margin * runner_up:
+        return ranked[0]
     return min(group, key=lambda k: (registered_block.get(k) is None, registered_block.get(k) or 0, k))
 
 
