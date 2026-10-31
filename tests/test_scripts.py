@@ -126,6 +126,34 @@ def test_a_service_role_owns_its_database_and_nothing_else(tmp_path: Path) -> No
 def test_a_service_role_never_takes_a_reserved_or_odd_name(tmp_path: Path) -> None:
     import pytest
 
-    for args in (("kokoah", "kokoah_subnet_agents"), ("kokoah_reader", "x"), ("bad-name", "x"), ("ok", "bad;db")):
+    for args in (
+        ("kokoah", "kokoah_subnet_agents"),
+        ("kokoah_reader", "x"),
+        ("kokoah_burner", "x"),
+        ("bad-name", "x"),
+        ("ok", "bad;db"),
+    ):
         with pytest.raises(subprocess.CalledProcessError):
             _run_db(tmp_path, "owner-role", *args)
+
+
+def test_the_burn_role_adds_burns_and_nothing_else(tmp_path: Path) -> None:
+    sent = _run_db(tmp_path, "burn-role")
+    assert "ALTER ROLE kokoah_burner WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" in sent
+    for grant in (
+        "GRANT CONNECT ON DATABASE kokoah_subnet TO kokoah_burner;",
+        "REVOKE ALL ON ALL TABLES IN SCHEMA public FROM kokoah_burner;",  # whatever it was given before
+        "GRANT SELECT ON meta TO kokoah_burner;",  # the schema version, checked before writing
+        "GRANT INSERT, SELECT (id) ON burns TO kokoah_burner;",
+    ):
+        assert grant in sent
+    granted = [line for line in sent.splitlines() if line.startswith("GRANT") and "kokoah_burner" in line]
+    assert len(granted) == 4 and not any("ALL TABLES" in line for line in granted)
+    assert "REVOKE ALL ON DATABASE %I FROM PUBLIC, kokoah_burner" in sent  # every other database refuses it
+    env = (tmp_path / "db.env").read_text()
+    assert "KOKOAH_SUBNET_DB_BURNER_URL=postgresql+psycopg://kokoah_burner:" in env
+    password = next(line for line in env.splitlines() if line.startswith("KOKOAH_SUBNET_DB_BURNER_PASSWORD="))
+    commands = [line for line in sent.splitlines() if line.startswith(("exec ", "ps", "run ", "start "))]
+    assert commands and not any(password.split("=", 1)[1] in line for line in commands)  # never an argument
+    _run_db(tmp_path, "burn-role")
+    assert (tmp_path / "db.env").read_text() == env  # the same password kept

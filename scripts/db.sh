@@ -11,6 +11,9 @@
 #   scripts/db.sh owner-role ROLE DB   a login role that owns database DB and its tables, and nothing else: for a
 #                                 service that must not connect as the container's superuser (the agent service);
 #                                 its URL goes in the env file as KOKOAH_SUBNET_ROLE_<ROLE>_URL
+#   scripts/db.sh burn-role       the burn's login (kokoah_burner): adds rows to the record's burns table and reads
+#                                 its schema version, nothing else; run once the validator has created the record;
+#                                 its URL goes in the env file as KOKOAH_SUBNET_DB_BURNER_URL
 #
 # Listens on 127.0.0.1:48110 only. The passwords are generated once and kept in the env file (outside the repo):
 # $KOKOAH_SUBNET_DB_ENV, default ~/.local/share/kokoah/subnet-db.env, as KOKOAH_SUBNET_DB_URL=... for the validator
@@ -26,6 +29,7 @@ DB="kokoah_subnet"
 USER="kokoah"
 
 READER="kokoah_reader"
+BURNER="kokoah_burner"
 
 new_password() { head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32; }
 
@@ -113,7 +117,7 @@ case "${1:-status}" in
   owner-role)
     ensure_env; role="${2:?role name}"; db="${3:?database name}"
     [[ "$role" =~ ^[a-z_][a-z0-9_]*$ && "$db" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "bad role or database name" >&2; exit 1; }
-    [ "$role" != "$USER" ] && [ "$role" != "$READER" ] || { echo "$role is taken" >&2; exit 1; }
+    [ "$role" != "$USER" ] && [ "$role" != "$READER" ] && [ "$role" != "$BURNER" ] || { echo "$role is taken" >&2; exit 1; }
     key="KOKOAH_SUBNET_ROLE_${role^^}"
     if ! grep -q "^${key}_URL=" "$ENV_FILE"; then
       pw="$(new_password)"
@@ -143,5 +147,37 @@ DO \$\$ DECLARE d text; BEGIN
 END \$\$;
 SQL
     echo "$role owns $db (URL in $ENV_FILE as ${key}_URL)" >&2 ;;
-  *) sed -n 2,14p "$0" ;;
+  burn-role)
+    ensure_env
+    if ! grep -q '^KOKOAH_SUBNET_DB_BURNER_URL=' "$ENV_FILE"; then
+      pw="$(new_password)"
+      printf 'KOKOAH_SUBNET_DB_BURNER_PASSWORD=%s\nKOKOAH_SUBNET_DB_BURNER_URL=postgresql+psycopg://%s:%s@127.0.0.1:%s/%s\n' "$pw" "$BURNER" "$pw" "$PORT" "$DB" >> "$ENV_FILE"
+      # shellcheck disable=SC1090
+      . "$ENV_FILE"
+    fi
+    # the password goes in on stdin, never as an argument; the inserted row's id comes back to the burn (RETURNING),
+    # so that one column is readable too
+    docker exec -i "$NAME" psql -U "$USER" -d "$DB" -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
+DO \$\$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$BURNER') THEN CREATE ROLE $BURNER LOGIN; END IF;
+END \$\$;
+ALTER ROLE $BURNER WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '$KOKOAH_SUBNET_DB_BURNER_PASSWORD';
+DO \$\$ DECLARE d text; BEGIN
+  FOR d IN SELECT datname FROM pg_database WHERE datallowconn AND datname <> '$DB' LOOP
+    EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC, $BURNER', d);
+  END LOOP;
+END \$\$;
+REVOKE ALL ON DATABASE $DB FROM PUBLIC;
+GRANT CONNECT ON DATABASE $DB TO $BURNER;
+GRANT USAGE ON SCHEMA public TO $BURNER;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM $BURNER;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM $BURNER;
+GRANT SELECT ON meta TO $BURNER;
+GRANT INSERT, SELECT (id) ON burns TO $BURNER;
+DO \$\$ BEGIN
+  EXECUTE format('GRANT USAGE ON SEQUENCE %s TO $BURNER', pg_get_serial_sequence('public.burns', 'id'));
+END \$\$;
+SQL
+    echo "$BURNER adds burns to $DB (URL in $ENV_FILE as KOKOAH_SUBNET_DB_BURNER_URL)" >&2 ;;
+  *) sed -n 2,17p "$0" ;;
 esac
