@@ -47,7 +47,6 @@ def window_fills(user: str) -> list[Fill]:
 
 
 def miner(hotkey: str, address: str, returns: list[float], agent: bool = False, volume: float = 2e6) -> MinerInputs:
-    days = [f"d{i:03d}" for i in range(len(returns))]
     return MinerInputs(
         hotkey=hotkey,
         address=address,
@@ -56,7 +55,6 @@ def miner(hotkey: str, address: str, returns: list[float], agent: bool = False, 
         avg_equity_usd=50_000.0,
         window_fills=window_fills(address),
         credited_notional_prior_usd=volume,
-        dated_returns=dict(zip(days, returns, strict=True)),
         agent_verified=agent,
     )
 
@@ -107,32 +105,6 @@ def test_agent_bonus_is_ten_percent_more_skill_weight() -> None:
     assert ra.agent_verified and ra.entry_pass and rb.entry_pass
     assert ra.skill_weight / (1.1 * ra.skill_adjusted * ra.volume_factor) == pytest.approx(1.0)
     assert ra.skill_weight == pytest.approx(1.1 * rb.skill_weight * ra.skill_adjusted / rb.skill_adjusted)
-
-
-def test_copies_share_one_skill_weight_through_the_day() -> None:
-    rec = strong_record(1)
-    fills = taker_fills(A, 10, 100_000.0) + taker_fills(B, 10, 100_000.0, coin="ETH")
-    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
-    inputs = DayInputs(
-        day_index=5, price_usd=1.0, fills=fills, states=states,
-        miners=[miner("hkA", A, rec), miner("hkB", B, list(rec))],
-    )  # fmt: skip
-    ra, rb = score_day(inputs, DEFAULT).records
-    assert ra.copy_group == ("hkA", "hkB") == rb.copy_group
-    assert ra.skill_weight + rb.skill_weight == pytest.approx(ra.skill_adjusted * ra.volume_factor)
-
-
-def test_the_earlier_registration_leads_a_copy_group_without_matched_fills() -> None:
-    """Two correlated records, no fills to tell who trades first: the hotkey registered on the subnet earlier keeps
-    the weight (not the older exchange account, which can be bought), though the copier's hotkey sorts first."""
-    rec = strong_record(1)
-    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
-    copier = replace(miner("hkA", A, list(rec)), record_start="2020-01-01", registered_block=9_000)
-    original = replace(miner("hkB", B, rec), record_start="2026-03-15", registered_block=1_000)
-    inputs = DayInputs(day_index=5, price_usd=1.0, fills=[], states=states, miners=[copier, original])
-    ra, rb = score_day(inputs, DEFAULT).records
-    assert ra.copy_group == ("hkA", "hkB")
-    assert ra.skill_weight == 0.0 and rb.skill_weight > 0
 
 
 def test_fresh_miner_earns_volume_pay_but_not_yet_skill_pay() -> None:
@@ -215,28 +187,6 @@ def test_a_penalty_that_follows_the_address_keeps_it_out_of_the_skill_pool() -> 
     assert r.volume_pay_alpha > 0  # the volume pool still pays its builder fees
 
 
-def test_a_copy_placed_outside_kokoah_is_still_seen() -> None:
-    """The copier routes its copies through another app (no builder code) and does its Kokoah volume on another
-    coin: judged on the builder fills alone, nobody would lead and its earlier registration would win. Judged on
-    each account's whole fill history, the original leads."""
-    rec = strong_record(1)
-    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
-    original_trades = taker_fills(B, 10, 100_000.0)  # the original, through Kokoah
-    copies = [replace(f, user=A, time_ms=f.time_ms + 30_000, builder_fee=0.0) for f in original_trades]
-    kokoah_volume = taker_fills(A, 10, 100_000.0, coin="ETH")  # the copier's builder volume, elsewhere
-    copier = replace(miner("hkA", A, list(rec)), registered_block=1_000)
-    original = replace(miner("hkB", B, rec), registered_block=9_000)
-    inputs = DayInputs(
-        day_index=5, price_usd=1.0, fills=original_trades + kokoah_volume, states=states, miners=[copier, original],
-        history_fills={A: copies + kokoah_volume, B: original_trades},
-    )  # fmt: skip
-    ra, rb = score_day(inputs, DEFAULT).records
-    assert ra.copy_group == ("hkA", "hkB")
-    assert rb.skill_weight > 0 and ra.skill_weight == 0.0
-    without_history = score_day(replace(inputs, history_fills={}), DEFAULT).records
-    assert without_history[0].skill_weight > 0  # what the builder fills alone would have decided
-
-
 def test_a_hotkey_swap_keeps_its_place_in_the_other_members_leads() -> None:
     from kokoah_subnet.mechanism.state import renamed_in_leads
 
@@ -244,3 +194,18 @@ def test_a_hotkey_swap_keeps_its_place_in_the_other_members_leads() -> None:
     moved = renamed_in_leads(copier, "hkOld", "hkNew")
     assert moved.led == (("hkNew", 70_000.0),) and moved.matched == (("hkNew", 90_000.0), ("hkX", 5.0))
     assert renamed_in_leads(moved, "hkOld", "hkNew") is moved  # nothing to rename: the same state
+
+
+def test_accounts_that_trade_alike_each_keep_their_own_skill_weight() -> None:
+    """Copy trading is never punished: two accounts with the very same record, one copying the other, are each
+    weighed on their own."""
+    rec = strong_record(1)
+    fills = taker_fills(A, 10, 100_000.0) + taker_fills(B, 10, 100_000.0, coin="ETH")
+    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
+    inputs = DayInputs(
+        day_index=5, price_usd=1.0, fills=fills, states=states,
+        miners=[miner("hkA", A, rec), miner("hkB", B, list(rec))],
+    )  # fmt: skip
+    ra, rb = score_day(inputs, DEFAULT).records
+    assert ra.skill_weight > 0 and ra.skill_weight == pytest.approx(ra.skill_adjusted * ra.volume_factor)
+    assert rb.skill_weight == pytest.approx(ra.skill_weight)

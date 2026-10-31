@@ -10,7 +10,7 @@ shared by `Φ̂` among eligible miners, the skill pool shared by skill weight am
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from .credit import DayFees, day_fees
@@ -30,13 +30,8 @@ from .payout import Allocation, allocate, weights
 from .skill import SkillParts, skill_factor, skill_raw
 from .skillpool import (
     adjusted_skill,
-    apply_copy_groups,
-    copy_groups,
-    copy_leader,
-    copy_matches,
     entry_psr,
     skill_weight,
-    smoothed_leads,
     volume_factor,
 )
 from .state import MinerState, advance
@@ -63,9 +58,7 @@ class MinerInputs:
     registered_block: int | None = None  # the hotkey's registration block (a new registration is a fresh identity)
     # skill pool
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days
-    dated_returns: Mapping[str, float] = field(default_factory=dict)  # day -> return, for the copy rule
     agent_verified: bool = False  # a verified sealed-machine agent account (the skill bonus)
-    record_start: str | None = None  # the day the address's exchange history begins (recorded)
 
 
 @dataclass(frozen=True)
@@ -80,11 +73,6 @@ class DayInputs:
     # address -> its owner's group (hotkeys on one coldkey, a master and its sub-accounts): the position mirror rule
     # compares only addresses in one group
     owner_group_of: Mapping[str, str] = field(default_factory=dict)
-    # the copy rule's leader is judged on each address's whole fill history (builder code or not), so a copy placed
-    # elsewhere is seen too: the day's (`history_fills`; an address missing from it is judged on its builder fills)
-    # and the `copy_lookback_days` days before (`earlier_fills`, read only for members of a copy group)
-    history_fills: Mapping[str, Sequence[Fill]] = field(default_factory=dict)
-    earlier_fills: Callable[[str], Sequence[Fill]] | None = None
     pool_alpha: float | None = None
     penalized_until: Mapping[str, int] = field(default_factory=dict)  # address -> day index: a report follows it
 
@@ -128,8 +116,7 @@ class MinerRecord:
     volume_window_usd: float  # V over the window
     volume_factor: float  # v
     agent_verified: bool
-    copy_group: tuple[str, ...]
-    skill_weight: float  # after the copy rule
+    skill_weight: float
     skill_pool_reason: str | None  # why not in the skill pool
     # pay
     volume_pay_alpha: float
@@ -261,29 +248,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             )
         )  # fmt: skip
 
-    groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
-    group_of = {k: tuple(g) for g in groups for k in g}
-    fills_of = {
-        w.m.hotkey: inputs.history_fills[w.m.address]
-        if w.m.address in inputs.history_fills
-        else bound_fills.get(w.m.address, [])
-        for w in work
-    }
-    address_of = {w.m.hotkey: w.m.address for w in work}
-    today_leads: dict[str, dict[str, float]] = {}
-    today_matched: dict[str, dict[str, float]] = {}
-    for members in groups:
-        earlier = {k: inputs.earlier_fills(address_of[k]) for k in members} if inputs.earlier_fills else {}
-        leads_today, matched_today = copy_matches(members, fills_of, earlier, params.copy_lookback_days * 86_400.0)
-        for x, row in leads_today.items():
-            today_leads.setdefault(x, {}).update(row)
-        for x, row in matched_today.items():
-            today_matched.setdefault(x, {}).update(row)
-    led = smoothed_leads({w.m.hotkey: dict(w.state.led) for w in work}, today_leads, params)
-    matched = smoothed_leads({w.m.hotkey: dict(w.state.matched) for w in work}, today_matched, params)
-    registered = {w.m.hotkey: w.m.registered_block or w.state.registered_block for w in work}
-    leaders = {tuple(g): copy_leader(g, led, registered, params, matched) for g in groups}
-    skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
+    skill_weights = {w.m.hotkey: w.weight for w in work}
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}
     allocation = allocate(volume_weights, skill_weights, inputs.price_usd, params, inputs.pool_alpha)
 
@@ -328,7 +293,6 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 volume_window_usd=w.volume_window,
                 volume_factor=w.v,
                 agent_verified=w.m.agent_verified,
-                copy_group=group_of.get(w.m.hotkey, ()),
                 skill_weight=skill_weights.get(w.m.hotkey, 0.0),
                 skill_pool_reason=w.pool_reason,
                 volume_pay_alpha=vp,
@@ -355,8 +319,6 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             qual_notional=q.notional,
             address=w.m.address,
             registered_block=w.m.registered_block or w.state.registered_block,
-            led=tuple(sorted(led.get(w.m.hotkey, {}).items())),
-            matched=tuple(sorted(matched.get(w.m.hotkey, {}).items())),
         )
 
     return DayResult(inputs.day_index, allocation, records, states)

@@ -877,13 +877,7 @@ async def collect_and_score(
                 avg_equity_usd=avg.value,
                 registered_block=registered_block.get(hk),
                 credited_notional_prior_usd=store.credited_notional(hk, day, params.skill_volume_days - 1),
-                dated_returns=store.dated_returns(address, max(params.confidence_days, params.entry_days), day),
                 agent_verified=bool(agent_status.get(hk, False)),
-                # the copy rule's longest record: where the account's history on the exchange begins, which every
-                # validator reads the same (not the days this validator happens to have scored)
-                record_start=(
-                    datetime.fromtimestamp(origin / 1000, tz=UTC).strftime("%Y-%m-%d") if origin is not None else day
-                ),
             )
         )
 
@@ -960,8 +954,6 @@ async def collect_and_score(
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         owner_group_of=owner_group_of,
-        history_fills=history_of,
-        earlier_fills=lambda a: store.history_orders(a, day, params.copy_lookback_days),
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)
@@ -1044,7 +1036,6 @@ async def collect_and_score(
                 "entry_psr": r.entry_psr,
                 "entry_pass": r.entry_pass,
                 "agent_verified": r.agent_verified,
-                "copy_group": ",".join(r.copy_group) or None,
                 "skill_pool_reason": r.skill_pool_reason,
                 "pay_usd": r.pay_alpha * price_usd,
                 "exchange_taker_bps": rates_of.get(r.address, (None, None))[0],
