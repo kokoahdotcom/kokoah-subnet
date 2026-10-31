@@ -46,7 +46,8 @@ Trades with yourself or your linked accounts never count, and neither do trades 
 miners (they report no one, since anyone can trade against anyone's orders). When two accounts of one owner (on one
 coldkey, or a master and its sub-accounts) keep opposite positions for weeks, the mirrored part earns no credit when
 it is more than a quarter of the account's positions; above half, both accounts also leave the skill reward for 30
-days. A day's profit made in a coin that hardly anyone else traded does not count for skill. The skill reward needs
+days. A day's profit made in a coin that hardly anyone else traded does not count for skill, though a loss there
+does. The skill reward needs
 a real edge, proven over 90 days.
 
 ## Agents
