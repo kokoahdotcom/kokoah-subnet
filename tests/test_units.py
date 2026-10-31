@@ -95,3 +95,17 @@ def test_every_shell_command_in_a_unit_is_valid() -> None:
             check = subprocess.run(["bash", "-n", "-c", body], capture_output=True, text=True)
             assert check.returncode == 0, (name, check.stderr)
     assert found  # the operator step at least
+
+
+def test_the_owner_hotkey_reaches_only_the_operator_step() -> None:
+    operator = service("kokoah-subnet-operator.service")
+    assert operator["User"] == ["kokoah-subnet-operator"]  # not the validator's user
+    assert [c.split(":", 1)[0] for c in operator["LoadCredential"]] == ["hotkey"]
+    assert all(
+        "/var/lib/kokoah-subnet " in f" {v} " or "/var/lib/kokoah-subnet" in v for v in operator["InaccessiblePaths"]
+    )
+    for name in services():
+        if name != "kokoah-subnet-operator.service":
+            assert not any("operator-wallet" in v for vs in service(name).values() for v in vs), name
+    for name in ("kokoah-subnet-operator.service", "kokoah-subnet-burn.service"):  # jobs that talk to the chain
+        assert service(name).get("TimeoutStartSec"), name
