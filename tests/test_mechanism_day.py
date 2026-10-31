@@ -213,3 +213,25 @@ def test_a_penalty_that_follows_the_address_keeps_it_out_of_the_skill_pool() -> 
     r = res.records[0]
     assert r.zeroed and r.skill_pool_reason == "mirror penalty" and r.skill_pay_alpha == 0.0
     assert r.volume_pay_alpha > 0  # the volume pool still pays its builder fees
+
+
+def test_a_copy_placed_outside_kokoah_is_still_seen() -> None:
+    """The copier routes its copies through another app (no builder code) and does its Kokoah volume on another
+    coin: judged on the builder fills alone, nobody would lead and its earlier registration would win. Judged on
+    each account's whole fill history, the original leads."""
+    rec = strong_record(1)
+    states = {"hkA": established(A, 0.65), "hkB": established(B, 0.65)}
+    original_trades = taker_fills(B, 10, 100_000.0)  # the original, through Kokoah
+    copies = [replace(f, user=A, time_ms=f.time_ms + 30_000, builder_fee=0.0) for f in original_trades]
+    kokoah_volume = taker_fills(A, 10, 100_000.0, coin="ETH")  # the copier's builder volume, elsewhere
+    copier = replace(miner("hkA", A, list(rec)), registered_block=1_000)
+    original = replace(miner("hkB", B, rec), registered_block=9_000)
+    inputs = DayInputs(
+        day_index=5, price_usd=1.0, fills=original_trades + kokoah_volume, states=states, miners=[copier, original],
+        history_fills={A: copies + kokoah_volume, B: original_trades},
+    )  # fmt: skip
+    ra, rb = score_day(inputs, DEFAULT).records
+    assert ra.copy_group == ("hkA", "hkB")
+    assert rb.skill_weight > 0 and ra.skill_weight == 0.0
+    without_history = score_day(replace(inputs, history_fills={}), DEFAULT).records
+    assert without_history[0].skill_weight > 0  # what the builder fills alone would have decided
