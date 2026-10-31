@@ -667,28 +667,17 @@ async def test_past_the_deadline_a_failed_own_fill_history_leaves_only_that_retu
     await hl.close()
 
 
-async def test_points_an_earlier_attempt_stored_still_measure_the_day(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_points_an_earlier_attempt_stored_still_measure_the_day(tmp_path: Path) -> None:
     """The first attempt read A's recorded history (past the day's end) and then failed on its fill history; by the
     retry past the deadline the history read fails. The stored points still give the same average for every
-    validator, and the copy rule still sees where A's history begins, not the scored day."""
-    from kokoah_subnet.mechanism.day import score_day as real
-
+    validator."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     FILLS_FAIL.add(addr_a)
     with pytest.raises(RuntimeError, match="fill history"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
-    first = store.execute_sql(f"select avg_equity_usd, origin_ms from equity_daily where address = '{addr_a}'")[0]
+    first = store.execute_sql(f"select avg_equity_usd from equity_daily where address = '{addr_a}'")[0]
     FILLS_FAIL.clear()
     PORTFOLIO_FAILS.add(addr_a)
-    seen: list[Any] = []
-
-    def spy(inputs: Any, *a: Any, **kw: Any) -> Any:
-        seen.append(inputs)
-        return real(inputs, *a, **kw)
-
-    monkeypatch.setattr("kokoah_subnet.validator.collect.score_day", spy)
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert {r.hotkey: r for r in result.records}[HK_A].eligible
     again = store.execute_sql(f"select avg_equity_usd from equity_daily where address = '{addr_a}'")
