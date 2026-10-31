@@ -136,6 +136,18 @@ def test_a_few_tiny_orders_decide_nothing() -> None:
     assert copy_leader(["orig", "copier"], {"orig": {"copier": 9_000.0}}, REGISTERED, DEFAULT) == "orig"
 
 
+def test_an_original_that_sends_its_orders_in_slices_keeps_the_lead() -> None:
+    """The original buys $100,000 as twenty $5,000 slices over ten minutes, every one, two or four hours; the copier
+    buys the whole $100,000 at once a minute after each burst. The copy is matched against every slice it follows."""
+    for every_h in (1, 2, 4):
+        bursts = [T0 + b * every_h * 3_600_000 for b in range(24 // every_h)]
+        orig = [f for b in bursts for k in range(20) for f in order("orig", b + k * 30_000, 5_000.0)]
+        copies = [f for b in bursts for f in order("copier", b + 11 * 60_000, 100_000.0)]
+        leads = copy_leads(["orig", "copier"], {"orig": orig, "copier": copies})
+        assert leads["orig"]["copier"] > 3 * leads["copier"].get("orig", 0.0), every_h
+        assert copy_leader(["orig", "copier"], leads, REGISTERED, DEFAULT) == "orig"
+
+
 def test_the_lead_is_judged_over_the_days() -> None:
     """A month of the original leading is not undone by one day on which the copier, by chance or on purpose, trades
     first: the leads are smoothed like credit and skill."""
