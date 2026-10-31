@@ -235,3 +235,12 @@ def test_a_copy_placed_outside_kokoah_is_still_seen() -> None:
     assert rb.skill_weight > 0 and ra.skill_weight == 0.0
     without_history = score_day(replace(inputs, history_fills={}), DEFAULT).records
     assert without_history[0].skill_weight > 0  # what the builder fills alone would have decided
+
+
+def test_a_hotkey_swap_keeps_its_place_in_the_other_members_leads() -> None:
+    from kokoah_subnet.mechanism.state import renamed_in_leads
+
+    copier = MinerState(led=(("hkOld", 70_000.0),), matched=(("hkOld", 90_000.0), ("hkX", 5.0)))
+    moved = renamed_in_leads(copier, "hkOld", "hkNew")
+    assert moved.led == (("hkNew", 70_000.0),) and moved.matched == (("hkNew", 90_000.0), ("hkX", 5.0))
+    assert renamed_in_leads(moved, "hkOld", "hkNew") is moved  # nothing to rename: the same state
