@@ -112,8 +112,9 @@ Removed before anything is computed:
    keeps only its latest 5000 minute candles (about three and a half days): a day scored later, whose candles no
    longer reach back to its start, is settled at once the same way, never clipped in part. In a coin in which an
    address made more than 25% of the day's traded notional (the same minute candles' volume at their close), the
-   marks are its own prices and its counterparty's, so they tell nothing about what it made there: its day's return
-   is unknown (its builder fills still count);
+   marks are its own prices and its counterparty's, so they tell nothing about what it made there. The day stays
+   known (a day left out would hide a loss): its loss counts in full, its profit counts as nothing (removed like
+   money moved in), and its builder fills still count;
 3. **bound counterparties:** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill) are removed from credit: the subnet does not pay for volume between its own miners.
    They report no one: any miner can take another's resting orders, so who traded with whom says nothing about who
@@ -305,7 +306,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; copy rule: correlation > 0.9 over ≥ 30 common days; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
-| mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: return unknown; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
+| mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 12 h after the day: scored from the histories |
 | migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero |
