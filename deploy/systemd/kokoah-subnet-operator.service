@@ -8,7 +8,7 @@ Type=oneshot
 User=kokoah-subnet-operator
 Group=kokoah-subnet-operator
 Environment=HOME=/var/lib/kokoah-subnet-operator
-# KOKOAH_SUBNET_OPERATOR_ARGS: --network, --netuid and --builder
+# KOKOAH_SUBNET_OPERATOR_ARGS: --network, --netuid and --builder (the wallet flags come after them and win)
 EnvironmentFile=/etc/kokoah-subnet/operator.env
 # the owner hotkey stays where it is (/etc/kokoah-subnet/operator-wallet/hotkey, root's alone): systemd hands it to
 # this run only, in a private place, and it is put together as a wallet named "owner"; no validator can read it
@@ -19,7 +19,7 @@ WorkingDirectory=/var/lib/kokoah-subnet-operator
 ExecStartPre=/bin/mkdir -p %t/kokoah-subnet-operator/wallets/owner/hotkeys
 ExecStartPre=/bin/ln -sfn /run/credentials/%n/hotkey %t/kokoah-subnet-operator/wallets/owner/hotkeys/default
 # once a day's hash is committed, the later runs that day do nothing
-ExecStart=/bin/bash -c 'day=$$(date -u -d yesterday +%%F); stamp=/var/lib/kokoah-subnet-operator/$${day}.done; [ -f "$$stamp" ] && exit 0; /opt/kokoah-subnet/venv/bin/kokoah-subnet owner commit-file --day "$$day" --wallet owner --wallet-hotkey default --wallet-path %t/kokoah-subnet-operator/wallets $$KOKOAH_SUBNET_OPERATOR_ARGS && touch "$$stamp"'
+ExecStart=/bin/bash -c 'day=$$(date -u -d yesterday +%%F); stamp=/var/lib/kokoah-subnet-operator/$${day}.done; [ -f "$$stamp" ] && exit 0; /opt/kokoah-subnet/venv/bin/kokoah-subnet owner commit-file --day "$$day" $$KOKOAH_SUBNET_OPERATOR_ARGS --wallet owner --wallet-hotkey default --wallet-path %t/kokoah-subnet-operator/wallets && touch "$$stamp"'
 MemoryMax=1G
 TasksMax=64
 TimeoutStartSec=15min
