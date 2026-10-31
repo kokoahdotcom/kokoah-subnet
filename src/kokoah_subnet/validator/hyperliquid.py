@@ -18,7 +18,8 @@ from kokoah_subnet.mechanism.fills import Fill, parse_user_fills
 
 MAINNET_INFO = "https://api.hyperliquid.xyz/info"
 MAINNET_EXPLORER = "https://rpc.hyperliquid.xyz/explorer"
-PAGE = 2000  # fills per response; the API keeps the most recent 10,000 per address
+PAGE = 2000  # fills per response
+FILLS_KEPT = 10_000  # the API keeps the most recent 10,000 fills per address
 CANDLES_KEPT = 5000  # candles per coin and interval the API keeps (minute candles: about three and a half days)
 
 # request weights per info type (the exchange budgets 1,200 weight per minute per address; documented values,

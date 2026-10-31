@@ -47,6 +47,7 @@ from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
 from .clusters import OWNER_LINKS, clusters, coldkey_edges, penalty_reach
 from .hyperliquid import (
+    FILLS_KEPT,
     MAINNET_INFO,
     HyperliquidInfo,
     daily_equity_from_portfolio,
@@ -544,6 +545,11 @@ async def collect_and_score(
             store.put_error(day, hk, address, "positions", f"fills since the day's end: {exc}")
             if not past_deadline:
                 raise RuntimeError(f"fills of {address} since the day's end unavailable: {exc}") from exc
+            return
+        if len(later) >= FILLS_KEPT:  # the exchange may no longer hold the first fills since the day ended
+            store.put_note(
+                day, hk, address, "positions", f"{len(later)} fills since the day's end: its positions are left out"
+            )
             return
         held = {str(ap.get("position", {}).get("coin")) for ap in state.get("assetPositions", [])}
         held |= {f.coin for f in later}
