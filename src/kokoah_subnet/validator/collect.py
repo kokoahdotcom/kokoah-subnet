@@ -525,7 +525,8 @@ async def collect_and_score(
         async with lock:
             if coin not in day_end_cache:
                 try:
-                    hours = mark_by_minute(await hl.candles(coin, "1h", start_ms, end_ms))
+                    hourly = mark_by_minute(await hl.candles(coin, "1h", start_ms, end_ms))
+                    hours = {t: px for t, px in hourly.items() if t < end_ms}  # never the next day's first hour
                 except Exception as exc:  # noqa: BLE001
                     store.put_error(day, None, None, "positions", f"hourly candles of {coin}: {exc}")
                     if not past_deadline:
