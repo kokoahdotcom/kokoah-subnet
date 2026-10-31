@@ -534,27 +534,29 @@ async def collect_and_score(
                 day_end_cache[coin] = hours[max(hours)] if hours else None
         return day_end_cache[coin]
 
-    async def record_positions(hk: str, address: str, state: dict[str, Any]) -> None:
-        """The address's positions at the day's end, the same whenever a validator reads them: the state, and the
-        fills since the day ended up to the state's time. A failed read fails the day until the deadline, like the
-        other reads; after it, the day's positions are left out (a gap in the series)."""
+    async def fills_since_end(hk: str, address: str, state: dict[str, Any]) -> list[Fill] | None:
+        """The address's fills since the day ended, up to the state's time (for its day-end positions, and to tell
+        whether the exchange still holds all of the day's own fills). A failed read fails the day until the
+        deadline, like the other reads; after it, None."""
         state_ms = int(state.get("time") or clock * 1000)
         try:
-            later = await hl.fills_by_time(address, end_ms, state_ms + 1)
+            return await hl.fills_by_time(address, end_ms, state_ms + 1)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "positions", f"fills since the day's end: {exc}")
             if not past_deadline:
                 raise RuntimeError(f"fills of {address} since the day's end unavailable: {exc}") from exc
-            return
-        if len(later) >= FILLS_KEPT:  # the exchange may no longer hold the first fills since the day ended
-            store.put_note(
-                day, hk, address, "positions", f"{len(later)} fills since the day's end: its positions are left out"
-            )
-            return
-        held = {str(ap.get("position", {}).get("coin")) for ap in state.get("assetPositions", [])}
-        held |= {f.coin for f in later}
-        prices = {coin: await day_end_price(coin) for coin in sorted(held) if is_perp(coin) and ":" not in coin}
-        store.put_positions(address, day, end_of_day_positions(state, later, prices))
+            return None
+
+    async def record_positions(hk: str, address: str, state: dict[str, Any], later: list[Fill]) -> None:
+        """The address's positions at the day's end, the same whenever a validator reads them (a state that cannot
+        be read as positions is recorded and leaves them out)."""
+        try:
+            held = {str(ap.get("position", {}).get("coin")) for ap in state.get("assetPositions") or []}
+            held |= {f.coin for f in later}
+            prices = {coin: await day_end_price(coin) for coin in sorted(held) if is_perp(coin) and ":" not in coin}
+            store.put_positions(address, day, end_of_day_positions(state, later, prices))
+        except (AttributeError, TypeError, ValueError, KeyError) as exc:
+            store.put_error(day, hk, address, "positions", f"the account state: {exc}")
 
     async def one(hk: str, address: str) -> None:
         """Everything for one bound address. A failed read of the account's recorded history, the fill history, the
@@ -721,8 +723,26 @@ async def collect_and_score(
                 raise RuntimeError(f"the recorded history of {address} does not reach the end of {day} yet")
         read_state: dict[str, Any] | None = None
         try:
-            state = await hl.account_state(address)
-            read_state = state
+            read_state = await hl.account_state(address)
+        except Exception as exc:  # noqa: BLE001 - no account value today: the return series has a gap, nothing else
+            errors[hk] = f"account state: {str(exc)[:160]}"
+            store.put_error(day, hk, address, "account state", str(exc))
+        later = await fills_since_end(hk, address, read_state) if read_state is not None else None
+        # the exchange keeps an address's latest FILLS_KEPT fills: with that many since the day began, part of the
+        # day's own history may be gone, and with it what the thin-coin and off-market checks look at. Such a day is
+        # treated like a thin one: its loss counts, its profit does not
+        since_start = len(public) + len(later) if later is not None else 0
+        cut = since_start >= FILLS_KEPT
+        if cut:
+            store.put_note(
+                day, hk, address, "fill history",
+                f"{since_start} fills since the day began: the exchange may no longer hold all of the "
+                "day's, so its profit is not counted (a loss is) and its positions are left out",
+            )  # fmt: skip
+        try:
+            if read_state is None:
+                raise RuntimeError("no account state")
+            state = read_state
             live = float(state["marginSummary"]["accountValue"])
             try:
                 updates = await hl.ledger_updates(address, start_ms, end_ms)
@@ -738,7 +758,7 @@ async def collect_and_score(
                 base = previous if previous is not None else change.value_start or 0.0
                 flows = (change.value_end - base) - change.profit
                 held_back = offmarket  # removed from the return like money moved in
-                if thin:
+                if thin or cut:
                     held_back += max(0.0, change.profit - offmarket)
                 store.put_equity(
                     address,
@@ -768,10 +788,11 @@ async def collect_and_score(
                 ],
             )
         except Exception as exc:  # noqa: BLE001 - no account value today: the return series has a gap, nothing else
-            errors[hk] = f"account state: {str(exc)[:160]}"
-            store.put_error(day, hk, address, "account state", str(exc))
-        if read_state is not None:
-            await record_positions(hk, address, read_state)
+            if read_state is not None:
+                errors[hk] = f"account state: {str(exc)[:160]}"
+                store.put_error(day, hk, address, "account state", str(exc))
+        if read_state is not None and later is not None and not cut:
+            await record_positions(hk, address, read_state, later)
         try:
             fee_raw = await hl.fee_rates_raw(address)
             rates = (float(fee_raw["userCrossRate"]) * 1e4, float(fee_raw["userAddRate"]) * 1e4)

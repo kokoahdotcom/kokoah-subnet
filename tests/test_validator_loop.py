@@ -1652,6 +1652,6 @@ async def test_positions_are_left_out_when_the_fills_since_the_day_s_end_may_be_
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
     await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert store.position_series([addr_a], [DAY])[addr_a] == {}
-    notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'positions'")
-    assert any("left out" in n["message"] for n in notes)
+    notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'fill history'")
+    assert any("positions are left out" in n["message"] for n in notes)
     await hl.close()
