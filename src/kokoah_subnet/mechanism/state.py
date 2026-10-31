@@ -28,9 +28,6 @@ class MinerState:
     qual_notional: float = 0.0
     address: str | None = None  # the bound address the credit was earned with
     registered_block: int | None = None  # the hotkey's registration the credit was earned under
-    led: tuple[tuple[str, float], ...] = ()  # (other hotkey, smoothed USD this one traded before it, weighed by how
-    # soon the other followed): the copy rule
-    matched: tuple[tuple[str, float], ...] = ()  # the same, unweighed: how much there is to go by
 
     def paid_window(self, day_index: int | None = None, days: int = 60) -> float:
         """Alpha paid in the last `days` calendar days before `day_index` (all stored days when no index is given)."""
@@ -42,22 +39,6 @@ class MinerState:
 
     def is_zeroed(self, day_index: int) -> bool:
         return self.zero_until_day is not None and day_index < self.zero_until_day
-
-
-def renamed_in_leads(state: MinerState, old: str, new: str) -> MinerState:
-    """A hotkey swapped on chain keeps its place in the other members' copy-rule leads (rows that named the old
-    hotkey name the new one)."""
-
-    def rename(rows: tuple[tuple[str, float], ...]) -> tuple[tuple[str, float], ...]:
-        merged: dict[str, float] = {}
-        for hk, v in rows:
-            key = new if hk == old else hk
-            merged[key] = merged.get(key, 0.0) + v
-        return tuple(sorted(merged.items()))
-
-    if not any(hk == old for hk, _ in (*state.led, *state.matched)):
-        return state
-    return replace(state, led=rename(state.led), matched=rename(state.matched))
 
 
 def advance(

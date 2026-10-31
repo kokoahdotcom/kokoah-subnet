@@ -187,15 +187,6 @@ def test_a_penalty_that_follows_the_address_keeps_it_out_of_the_skill_pool() -> 
     assert r.volume_pay_alpha > 0  # the volume pool still pays its builder fees
 
 
-def test_a_hotkey_swap_keeps_its_place_in_the_other_members_leads() -> None:
-    from kokoah_subnet.mechanism.state import renamed_in_leads
-
-    copier = MinerState(led=(("hkOld", 70_000.0),), matched=(("hkOld", 90_000.0), ("hkX", 5.0)))
-    moved = renamed_in_leads(copier, "hkOld", "hkNew")
-    assert moved.led == (("hkNew", 70_000.0),) and moved.matched == (("hkNew", 90_000.0), ("hkX", 5.0))
-    assert renamed_in_leads(moved, "hkOld", "hkNew") is moved  # nothing to rename: the same state
-
-
 def test_accounts_that_trade_alike_each_keep_their_own_skill_weight() -> None:
     """Copy trading is never punished: two accounts with the very same record, one copying the other, are each
     weighed on their own."""

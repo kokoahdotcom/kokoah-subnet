@@ -254,11 +254,3 @@ def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
         c.execute(text("UPDATE meta SET value = '1' WHERE key = 'schema_version'"))
     with pytest.raises(RuntimeError, match="start the validator of this release first"):
         Store(path, create=False)
-
-
-def test_the_copy_rule_s_leads_survive_the_record(tmp_path: Path) -> None:
-    s = Store(tmp_path / "v.sqlite")
-    state = MinerState(g=0.2, led=(("hkB", 1234.5),), matched=(("hkB", 9876.0), ("hkC", 12.0)))
-    s.put_states({"hkA": state}, "2026-10-30")
-    assert s.states()["hkA"] == state
-    assert s.states_before("2026-10-31")["hkA"] == state

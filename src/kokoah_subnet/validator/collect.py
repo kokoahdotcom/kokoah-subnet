@@ -41,7 +41,6 @@ from kokoah_subnet.mechanism.fills import (
     confirm_builder,
     merge_sources,
 )
-from kokoah_subnet.mechanism.state import renamed_in_leads
 
 from .agents import check_agents, fetch_unlinks
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
@@ -940,7 +939,6 @@ async def collect_and_score(
     for _, old_hk, new_hk in store.swaps_through(day):
         if old_hk in states and new_hk not in states:
             states[new_hk] = fresh_identity(states.pop(old_hk))
-        states = {hk: renamed_in_leads(st, old_hk, new_hk) for hk, st in states.items()}
     inputs = DayInputs(
         day_index=day_index(cfg, day, params),
         price_usd=price_usd,
