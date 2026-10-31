@@ -316,7 +316,6 @@ def test_what_the_agent_forked_ends_with_it(tmp_path: Path) -> None:
     assert not _alive(child)
 
 
-@needs_root_and_namespaces
 def _end_from_outside(runner: object, uid: int) -> None:
     """A test's last cleanup, not through the code under test: whatever that code left of the agent's user is
     killed with pkill, so a failing test never leaves a process on the host for the next run to trip over."""
@@ -335,6 +334,7 @@ def _end_from_outside(runner: object, uid: int) -> None:
         time.sleep(0.05)
 
 
+@needs_root_and_namespaces
 def test_every_process_of_the_agent_user_ends_even_one_that_left_its_group() -> None:
     import shutil
     import tempfile
