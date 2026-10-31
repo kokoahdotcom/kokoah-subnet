@@ -263,3 +263,26 @@ def test_registrations_that_cannot_be_read_are_retried_after_a_pause_and_never_c
     up[0], now[0] = False, 700.0  # the list is old and the chain is down: the old list still answers for a while
     assert hk.check(H1) and len(reads) == 3
     assert hk.check(H1) and len(reads) == 3
+
+
+async def test_a_validator_reads_every_unlink_the_service_kept_across_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real service and the validator's reader together: more unlinks than fit on a page, many received at the
+    same moment, each read once."""
+    from kokoah_subnet.agent import service as service_module
+
+    monkeypatch.setattr(service_module, "UNLINK_PAGE", 3)
+    clock, owners = Clock(), [Account.create() for _ in range(8)]
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
+                     netuid=NETUID)  # fmt: skip
+    c = TestClient(app)
+    for i, key in enumerate(owners):
+        t = int(clock.now * 1000)
+        body = {"hotkey": H1 if i % 2 else H2, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1 if i % 2 else H2, key.address, t)}  # fmt: skip
+        assert c.post("/unlinks", json=body).status_code == 200
+        clock.now += 1 if i % 3 == 0 else 0
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as http:
+        found = await fetch_unlinks(http, "http://svc", NETUID)
+    assert sorted(u.address for u in found) == sorted(k.address.lower() for k in owners)
