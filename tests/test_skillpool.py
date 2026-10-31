@@ -148,6 +148,20 @@ def test_an_original_that_sends_its_orders_in_slices_keeps_the_lead() -> None:
         assert copy_leader(["orig", "copier"], leads, REGISTERED, DEFAULT) == "orig"
 
 
+def test_a_copier_s_second_account_makes_up_no_lead() -> None:
+    """C copies the original an hour late on a two-hour rhythm, and C's second account S copies C a second later:
+    C's lead over S says nothing about the original. Head to head neither C nor the original is clearly ahead, so
+    the earlier registration decides, here the original's."""
+    trades = [T0 + h * 2 * 3_600_000 for h in range(12)]
+    orig = [f for t in trades for f in order("orig", t, 10_000.0)]
+    c = [f for t in trades for f in order("c", t + 3_600_000, 10_000.0)]
+    second = [f for t in trades for f in order("s", t + 3_601_000, 10_000.0)]
+    leads = copy_leads(["orig", "c", "s"], {"orig": orig, "c": c, "s": second})
+    assert sum(leads["c"].values()) > sum(leads["orig"].values())  # added up, C would look like the leader
+    registered = {"orig": 1_000, "c": 5_000, "s": 6_000}
+    assert copy_leader(["orig", "c", "s"], leads, registered, DEFAULT) == "orig"
+
+
 def test_the_lead_is_judged_over_the_days() -> None:
     """A month of the original leading is not undone by one day on which the copier, by chance or on purpose, trades
     first: the leads are smoothed like credit and skill."""
