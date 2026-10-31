@@ -84,6 +84,58 @@ def test_splitting_above_the_cap_gains_nothing_when_the_accounts_trade_alike() -
     assert sum(apply_copy_groups(parts, groups, leaders).values()) == pytest.approx(single)
 
 
+T0 = 1_792_540_800_000
+REGISTERED = {"orig": 9_000, "copier": 1_000}  # the copier registered first: only a real lead may beat that
+
+
+def order(user: str, t: int, notional: float, side: str = "B", pieces: int = 1) -> list[Fill]:
+    return [Fill(t, user, "BTC", side, 100_000.0, notional / pieces / 100_000.0, True, 0.0) for _ in range(pieces)]
+
+
+def test_small_orders_placed_just_before_do_not_take_the_lead() -> None:
+    """The copier sends a $10 order every minute all day and copies each of the original's $50,000 orders a quarter
+    of an hour later: most of the original's orders have a copier order just before them, but each match is worth
+    the smaller order, and the real copies all follow the original."""
+    trades = [T0 + h * 3 * 3_600_000 for h in range(8)]
+    orig = [f for t in trades for f in order("orig", t, 50_000.0)]
+    spam = [f for m in range(1440) for f in order("copier", T0 - 30_000 + m * 60_000, 10.0)]
+    copies = [f for t in trades for f in order("copier", t + 15 * 60_000, 50_000.0)]
+    leads = copy_leads(["orig", "copier"], {"orig": orig, "copier": spam + copies})
+    assert leads["orig"]["copier"] > 100 * leads["copier"]["orig"]
+    assert copy_leader(["orig", "copier"], leads, REGISTERED, DEFAULT) == "orig"
+
+
+def test_an_order_filled_in_pieces_is_one_order() -> None:
+    copy = order("copier", T0 + 60_000, 400_000.0, pieces=8)  # one copy, filled against eight resting orders
+    leads = copy_leads(["orig", "copier"], {"orig": order("orig", T0, 400_000.0), "copier": copy})
+    assert leads["orig"]["copier"] == pytest.approx(400_000.0)
+
+
+def test_a_late_copy_is_still_seen_even_from_the_day_before() -> None:
+    """Copying hours late, or the next day, leaves the copier no way to fall back on its earlier registration: the
+    match looks back three days, and counts less the longer the copier waited."""
+    late = copy_leads(["orig", "copier"], {"orig": order("orig", T0, 100_000.0),
+                                            "copier": order("copier", T0 + 6 * 3_600_000, 100_000.0)})  # fmt: skip
+    assert late["orig"]["copier"] == pytest.approx(100_000.0 * 600 / (6 * 3_600))
+    next_day = copy_leads(
+        ["orig", "copier"],
+        {"orig": [], "copier": order("copier", T0 + 20 * 3_600_000, 300_000.0)},
+        earlier_of={"orig": order("orig", T0, 300_000.0)},
+    )
+    assert next_day["orig"]["copier"] > 0
+    assert copy_leader(["orig", "copier"], next_day, REGISTERED, DEFAULT) == "orig"
+
+
+def test_a_few_tiny_orders_decide_nothing() -> None:
+    """A copier copying late adds a few $1 orders just before the original usually trades: a lead that small
+    decides nothing, and without a real lead the earlier registration keeps the weight."""
+    leads = {"copier": {"orig": 3.0}}
+    assert copy_leader(["orig", "copier"], leads, {"orig": 1_000, "copier": 9_000}, DEFAULT) == "orig"
+    close = {"orig": {"copier": 5_000.0}, "copier": {"orig": 4_000.0}}  # neither clearly ahead: registration
+    assert copy_leader(["orig", "copier"], close, {"orig": 9_000, "copier": 1_000}, DEFAULT) == "copier"
+    assert copy_leader(["orig", "copier"], {"orig": {"copier": 9_000.0}}, REGISTERED, DEFAULT) == "orig"
+
+
 def test_the_lead_is_judged_over_the_days() -> None:
     """A month of the original leading is not undone by one day on which the copier, by chance or on purpose, trades
     first: the leads are smoothed like credit and skill."""
