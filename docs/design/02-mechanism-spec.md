@@ -121,8 +121,11 @@ Removed before anything is computed:
    meant to (their share of the address's notional is recorded);
 4. **mirror rule (positions):** for every pair of bound addresses one owner tied together (hotkeys on one coldkey, a
    master and its sub-accounts: the links only the owner can create, §14a) and active in the same coin, the net
-   position at each day's end (the position the validator reads, less the fills since the day ended, at the coin's
-   last minute mark of the day: the same whenever a validator reads it) over the last 30 days; correlation below
+   position at each day's end over the last 30 days. The size is what the exchange records just before the first
+   fill since the day ended (else the size the validator reads), valued at the close of the coin's last hourly
+   candle of the day, so it is the same whenever a validator reads it; main perpetuals only. A failed read fails the
+   day until the deadline, and an address with 10,000 fills or more since the day ended (the exchange keeps no
+   more) has no positions that day; correlation below
    −0.8 on at least 10 overlapping days marks the overlapping notional as mirrored. Pairs without such a link are
    not compared, since anyone can hold the opposite of another trader's position. Mirrored notional above 25% of an
    address's position notional is removed from its credit; an address with more than 50% mirrored is reported, and
