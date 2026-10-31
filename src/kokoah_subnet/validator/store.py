@@ -725,23 +725,47 @@ class Store:
             for i in range(0, len(batch), 500):
                 c.execute(insert(S.fills), batch[i : i + 500])
 
-    def counted_fills(self, address: str, day: str, days: int) -> list[Fill]:
-        """The address's fills that counted (none excluded) on the `days` days before `day`, oldest first: what the
-        copy rule looks back on."""
+    HISTORY_ORDER_DAYS = 7  # days of history orders kept per address
+
+    def put_history_orders(self, address: str, day: str, fills: Iterable[Fill]) -> None:
+        """The address's orders of `day` from its own fill history: the fills of one coin, side and millisecond as one
+        order. Days older than a week are dropped."""
+        a = address.lower()
+        orders: dict[tuple[str, str, int], float] = {}
+        for f in fills:
+            key = (f.coin, f.side, f.time_ms)
+            orders[key] = orders.get(key, 0.0) + f.notional
+        rows = [
+            {"address": a, "day": day, "coin": coin, "side": side, "time_ms": t, "notional": n}
+            for (coin, side, t), n in sorted(orders.items(), key=lambda kv: (kv[0][2], kv[0][0], kv[0][1]))
+        ]
+        with self._engine.begin() as c:
+            c.execute(
+                delete(S.history_orders).where(
+                    S.history_orders.c.address == a,
+                    (S.history_orders.c.day == day)
+                    | (S.history_orders.c.day < _days_before(day, self.HISTORY_ORDER_DAYS)),
+                )
+            )
+            for i in range(0, len(rows), 500):
+                c.execute(insert(S.history_orders), rows[i : i + 500])
+
+    def history_orders(self, address: str, day: str, days: int) -> list[Fill]:
+        """The address's orders of the `days` days before `day` (each as one fill of its notional), oldest first:
+        what the copy rule looks back on."""
         with self._engine.connect() as c:
             rows = c.execute(
-                select(S.fills.c.time_ms, S.fills.c.coin, S.fills.c.side, S.fills.c.px, S.fills.c.sz, S.fills.c.crossed)
+                select(S.history_orders.c.time_ms, S.history_orders.c.coin, S.history_orders.c.side,
+                       S.history_orders.c.notional)
                 .where(
-                    S.fills.c.address == address.lower(),
-                    S.fills.c.day >= _days_before(day, days),
-                    S.fills.c.day < day,
-                    S.fills.c.excluded.is_(None),
+                    S.history_orders.c.address == address.lower(),
+                    S.history_orders.c.day >= _days_before(day, days),
+                    S.history_orders.c.day < day,
                 )
-                .order_by(S.fills.c.time_ms)
-            ).all()
+                .order_by(S.history_orders.c.time_ms)
+            ).all()  # fmt: skip
         return [
-            Fill(int(t), address.lower(), str(coin), str(side), float(px), float(sz), bool(crossed), 0.0)
-            for t, coin, side, px, sz, crossed in rows
+            Fill(int(t), address.lower(), str(coin), str(side), float(n), 1.0, True, 0.0) for t, coin, side, n in rows
         ]
 
     def put_miner_days(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:

@@ -411,6 +411,7 @@ async def collect_and_score(
     price_usd = price_tao * tao_usd
 
     fills_by_address = by_user(fills)
+    history_of: dict[str, list[Fill]] = {}  # each address's own fill history of the day (main perpetuals)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
     # agent accounts: challenge every sealed machine and verify its attestation (the skill bonus)
     if agent_status is None:
@@ -618,6 +619,9 @@ async def collect_and_score(
                 raise RuntimeError(f"fill history for {address} unavailable: {exc}") from exc
             public = []
             history_read = False  # off-market fills cannot be checked, so the day's return is unknown
+        if history_read:  # the copy rule's look back: the day's own orders, builder code or not
+            history_of[address] = [f for f in public if is_perp(f.coin) and ":" not in f.coin]
+            store.put_history_orders(address, day, history_of[address])
         if gaps:
             store.put_note(
                 day,
@@ -944,7 +948,8 @@ async def collect_and_score(
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         owner_group_of=owner_group_of,
-        earlier_fills=lambda a: store.counted_fills(a, day, params.copy_lookback_days),
+        history_fills=history_of,
+        earlier_fills=lambda a: store.history_orders(a, day, params.copy_lookback_days),
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)

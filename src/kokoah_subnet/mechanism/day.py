@@ -80,8 +80,10 @@ class DayInputs:
     # address -> its owner's group (hotkeys on one coldkey, a master and its sub-accounts): the position mirror rule
     # compares only addresses in one group
     owner_group_of: Mapping[str, str] = field(default_factory=dict)
-    # address -> its counted fills of the `copy_lookback_days` days before (the copy rule's leader); read only for
-    # members of a copy group
+    # the copy rule's leader is judged on each address's whole fill history (builder code or not), so a copy placed
+    # elsewhere is seen too: the day's (`history_fills`; an address missing from it is judged on its builder fills)
+    # and the `copy_lookback_days` days before (`earlier_fills`, read only for members of a copy group)
+    history_fills: Mapping[str, Sequence[Fill]] = field(default_factory=dict)
     earlier_fills: Callable[[str], Sequence[Fill]] | None = None
     pool_alpha: float | None = None
     penalized_until: Mapping[str, int] = field(default_factory=dict)  # address -> day index: a report follows it
@@ -261,7 +263,12 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
 
     groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
     group_of = {k: tuple(g) for g in groups for k in g}
-    fills_of = {w.m.hotkey: bound_fills.get(w.m.address, []) for w in work}
+    fills_of = {
+        w.m.hotkey: inputs.history_fills[w.m.address]
+        if w.m.address in inputs.history_fills
+        else bound_fills.get(w.m.address, [])
+        for w in work
+    }
     address_of = {w.m.hotkey: w.m.address for w in work}
     today_leads: dict[str, dict[str, float]] = {}
     for members in groups:
