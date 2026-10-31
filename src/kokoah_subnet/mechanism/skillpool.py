@@ -112,17 +112,19 @@ def copy_leads(
     earlier_of: Mapping[str, Sequence[Fill]] | None = None,
     window_s: float = 3 * 86_400.0,
     reaction_s: float = 600.0,
+    scale_s: float = 60.0,
 ) -> dict[str, dict[str, float]]:
     """`leads[x][y]`: the notional by which member `x` traded before member `y` today. Each of `y`'s orders today
     (`fills_of`) is matched with `x`'s most recent earlier order on the same coin and side within `window_s`, today's
     or from the days before (`earlier_of`), and when that one is smaller, with the ones before it within
     `reaction_s` in turn until `y`'s order is matched in full (an order the original sent in slices is copied as a
-    whole). Each piece counts for `x`, in full when `y` followed within `reaction_s` and less the longer it waited
-    (`reaction_s / wait`), and each of `x`'s orders gives at most its own notional in a day's matching. A copier
-    trades soon after what it copies, while the original's next trade comes on its own schedule; small orders placed
-    just before weigh no more than their size, and a copy made hours later still counts, a little."""
+    whole). Each piece counts for `x` weighed by how soon `y` followed, `scale_s / (scale_s + wait)` (half at a
+    minute), and each of `x`'s orders gives at most its own notional in a day's matching. A copier trades soon after
+    what it copies, while the original's next trade comes on its own schedule, later: the shorter waits decide.
+    Small orders placed just before weigh no more than their size, and a copy made hours later still counts, a
+    little."""
     earlier_of = earlier_of or {}
-    window_ms, reaction_ms = window_s * 1000, reaction_s * 1000
+    window_ms, reaction_ms, scale_ms = window_s * 1000, reaction_s * 1000, scale_s * 1000
     today = {k: _orders(fills_of.get(k, ())) for k in group}
     known = {k: _orders([*earlier_of.get(k, ()), *fills_of.get(k, ())]) for k in group}
     leads: dict[str, dict[str, float]] = {x: {} for x in group}
@@ -148,7 +150,7 @@ def copy_leads(
                         given = min(left[j], need)
                         left[j] -= given
                         need -= given
-                        total += given * min(1.0, reaction_ms / (t - lead_times[j]))
+                        total += given * scale_ms / (scale_ms + t - lead_times[j])
                         if left[j] <= 0:
                             spent[j] = j - 1
                             j = _last_unspent(spent, j - 1)

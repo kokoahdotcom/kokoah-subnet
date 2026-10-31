@@ -108,7 +108,7 @@ def test_small_orders_placed_just_before_do_not_take_the_lead() -> None:
 def test_an_order_filled_in_pieces_is_one_order() -> None:
     copy = order("copier", T0 + 60_000, 400_000.0, pieces=8)  # one copy, filled against eight resting orders
     leads = copy_leads(["orig", "copier"], {"orig": order("orig", T0, 400_000.0), "copier": copy})
-    assert leads["orig"]["copier"] == pytest.approx(400_000.0)
+    assert leads["orig"]["copier"] == pytest.approx(400_000.0 * 60 / (60 + 60))  # whole, weighed by its minute
 
 
 def test_a_late_copy_is_still_seen_even_from_the_day_before() -> None:
@@ -116,7 +116,7 @@ def test_a_late_copy_is_still_seen_even_from_the_day_before() -> None:
     match looks back three days, and counts less the longer the copier waited."""
     late = copy_leads(["orig", "copier"], {"orig": order("orig", T0, 100_000.0),
                                             "copier": order("copier", T0 + 6 * 3_600_000, 100_000.0)})  # fmt: skip
-    assert late["orig"]["copier"] == pytest.approx(100_000.0 * 600 / (6 * 3_600))
+    assert late["orig"]["copier"] == pytest.approx(100_000.0 * 60 / (60 + 6 * 3_600))
     next_day = copy_leads(
         ["orig", "copier"],
         {"orig": [], "copier": order("copier", T0 + 20 * 3_600_000, 300_000.0)},
