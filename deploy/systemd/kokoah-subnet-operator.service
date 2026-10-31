@@ -14,7 +14,7 @@ EnvironmentFile=/etc/kokoah-subnet/operator.env
 StateDirectory=kokoah-subnet-operator
 WorkingDirectory=/var/lib/kokoah-subnet-operator
 # once a day's hash is committed, the later runs that day do nothing
-ExecStart=/bin/bash -c 'day=$$(date -u -d yesterday +%%F); done=/var/lib/kokoah-subnet-operator/$${day}.done; [ -f "$$done" ] && exit 0; /opt/kokoah-subnet/venv/bin/kokoah-subnet owner commit-file --day "$$day" $$KOKOAH_SUBNET_OPERATOR_ARGS && touch "$$done"'
+ExecStart=/bin/bash -c 'day=$$(date -u -d yesterday +%%F); stamp=/var/lib/kokoah-subnet-operator/$${day}.done; [ -f "$$stamp" ] && exit 0; /opt/kokoah-subnet/venv/bin/kokoah-subnet owner commit-file --day "$$day" $$KOKOAH_SUBNET_OPERATOR_ARGS && touch "$$stamp"'
 MemoryMax=1G
 TasksMax=64
 # the hotkey is read and never changed; the validator's record and connection are not this step's
