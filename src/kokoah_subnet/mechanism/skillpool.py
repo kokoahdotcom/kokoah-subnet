@@ -95,6 +95,17 @@ def _orders(fills: Sequence[Fill]) -> dict[tuple[str, str], tuple[list[int], lis
     return {key: (sorted(at), [at[t] for t in sorted(at)]) for key, at in by_key.items()}
 
 
+def _last_unspent(spent: list[int], j: int) -> int:
+    """The nearest order at or before `j` with notional left, or -1 (each spent order points to the one before it;
+    paths are shortened as they are walked)."""
+    root = j
+    while root >= 0 and spent[root] != root:
+        root = spent[root]
+    while j >= 0 and spent[j] != j:
+        spent[j], j = root, spent[j]
+    return root
+
+
 def copy_leads(
     group: Sequence[str],
     fills_of: Mapping[str, Sequence[Fill]],
@@ -104,11 +115,12 @@ def copy_leads(
 ) -> dict[str, dict[str, float]]:
     """`leads[x][y]`: the notional by which member `x` traded before member `y` today. Each of `y`'s orders today
     (`fills_of`) is matched with `x`'s most recent earlier order on the same coin and side within `window_s`, today's
-    or from the days before (`earlier_of`). The match counts the smaller of the two orders' notional for `x`, in full
-    when `y` followed within `reaction_s` and less the longer it waited (`reaction_s / wait`), and each of `x`'s
-    orders gives at most its own notional in all. A copier trades soon after what it copies, while the original's
-    next trade comes on its own schedule; small orders placed just before weigh no more than their size, and a copy
-    made hours later still counts, a little."""
+    or from the days before (`earlier_of`), and when that one is smaller, with the ones before it within
+    `reaction_s` in turn until `y`'s order is matched in full (an order the original sent in slices is copied as a
+    whole). Each piece counts for `x`, in full when `y` followed within `reaction_s` and less the longer it waited
+    (`reaction_s / wait`), and each of `x`'s orders gives at most its own notional in a day's matching. A copier
+    trades soon after what it copies, while the original's next trade comes on its own schedule; small orders placed
+    just before weigh no more than their size, and a copy made hours later still counts, a little."""
     earlier_of = earlier_of or {}
     window_ms, reaction_ms = window_s * 1000, reaction_s * 1000
     today = {k: _orders(fills_of.get(k, ())) for k in group}
@@ -124,12 +136,22 @@ def copy_leads(
                     continue
                 lead_times, lead_sizes = known[x][key]
                 left = list(lead_sizes)  # what each of x's orders can still give
+                spent = list(range(len(left)))  # a skip list over x's orders with nothing left
                 for t, n in zip(times, sizes, strict=True):
-                    i = bisect.bisect_left(lead_times, t) - 1  # x's most recent order strictly before t
-                    if i >= 0 and t - lead_times[i] <= window_ms:
-                        given = min(left[i], n)
-                        left[i] -= given
-                        total += given * min(1.0, reaction_ms / (t - lead_times[i]))
+                    # walk back through x's orders before t until this order's notional is matched: through
+                    # those within the reaction time, else just the most recent one
+                    need = n
+                    j = _last_unspent(spent, bisect.bisect_left(lead_times, t) - 1)
+                    while need > 0 and j >= 0 and t - lead_times[j] <= window_ms:
+                        if need < n and t - lead_times[j] > reaction_ms:
+                            break
+                        given = min(left[j], need)
+                        left[j] -= given
+                        need -= given
+                        total += given * min(1.0, reaction_ms / (t - lead_times[j]))
+                        if left[j] <= 0:
+                            spent[j] = j - 1
+                            j = _last_unspent(spent, j - 1)
             if total > 0:
                 leads[x][y] = total
     return leads
