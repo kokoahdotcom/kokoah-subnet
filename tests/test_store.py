@@ -274,3 +274,11 @@ def test_the_copy_rule_looks_back_on_each_day_s_own_orders(tmp_path: Path) -> No
     assert [(f.time_ms, f.coin, f.notional) for f in got] == [(2, "BTC", 300.0), (3, "ETH", 200.0), (4, "BTC", 200.0)]
     s.put_history_orders(a, "2026-11-08", [fill(7)])  # a week on: the old days are gone
     assert [(f.time_ms, f.notional) for f in s.history_orders(a, "2026-11-09", 30)] == [(7, 200.0)]
+
+
+def test_the_copy_rule_s_leads_survive_the_record(tmp_path: Path) -> None:
+    s = Store(tmp_path / "v.sqlite")
+    state = MinerState(g=0.2, led=(("hkB", 1234.5),), matched=(("hkB", 9876.0), ("hkC", 12.0)))
+    s.put_states({"hkA": state}, "2026-10-30")
+    assert s.states()["hkA"] == state
+    assert s.states_before("2026-10-31")["hkA"] == state
