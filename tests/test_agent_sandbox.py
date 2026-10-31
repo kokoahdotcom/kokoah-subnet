@@ -391,3 +391,36 @@ def test_a_stop_while_the_sandbox_is_still_root_ends_the_agent() -> None:
     finally:
         runner.stop()
         shutil.rmtree(home, ignore_errors=True)
+
+
+@needs_root_and_namespaces
+def test_an_agent_that_kills_whatever_it_can_still_ends() -> None:
+    """An agent process that keeps sending SIGKILL to every process its user can reach: the cleanup runs as the
+    supervisor, which no agent can signal, so it still ends."""
+    import shutil
+    import tempfile
+
+    from kokoah_subnet.agent import supervisor
+
+    uid = 61236
+    if supervisor.processes_of(uid):
+        pytest.skip(f"uid {uid} is in use here")
+    home = Path(tempfile.mkdtemp(dir="/tmp"))
+    os.chmod(home, 0o777)
+    killer = "import os\\nwhile True:\\n    try:\\n        os.kill(-1, 9)\\n    except OSError:\\n        pass\\n"
+    runner = supervisor.AgentRunner(
+        supervisor.agent_command(1024, uid, uid, program=["/usr/bin/python3", "-c", killer]), home, uid=uid
+    )
+    try:
+        proc = runner.start()
+        assert proc is not None
+        for _ in range(100):  # until it runs as the agent's user
+            if supervisor.processes_of(uid):
+                break
+            time.sleep(0.05)
+        assert supervisor.processes_of(uid)
+        runner.stop()
+        assert supervisor.processes_of(uid) == [] and proc.poll() is not None
+    finally:
+        runner.stop()
+        shutil.rmtree(home, ignore_errors=True)
