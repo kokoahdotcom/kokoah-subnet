@@ -11,6 +11,7 @@ from kokoah_subnet.mechanism.skillpool import (
     copy_groups,
     copy_leader,
     copy_leads,
+    copy_matches,
     entry_psr,
     passes_entry,
     skill_weight,
@@ -117,13 +118,14 @@ def test_a_late_copy_is_still_seen_even_from_the_day_before() -> None:
     late = copy_leads(["orig", "copier"], {"orig": order("orig", T0, 100_000.0),
                                             "copier": order("copier", T0 + 6 * 3_600_000, 100_000.0)})  # fmt: skip
     assert late["orig"]["copier"] == pytest.approx(100_000.0 * 60 / (60 + 6 * 3_600))
-    next_day = copy_leads(
+    next_day, matched = copy_matches(
         ["orig", "copier"],
         {"orig": [], "copier": order("copier", T0 + 20 * 3_600_000, 300_000.0)},
         earlier_of={"orig": order("orig", T0, 300_000.0)},
     )
-    assert next_day["orig"]["copier"] > 0
-    assert copy_leader(["orig", "copier"], next_day, REGISTERED, DEFAULT) == "orig"
+    assert next_day["orig"]["copier"] > 0 and matched["orig"]["copier"] == pytest.approx(300_000.0)
+    # weighed, the late copy is a small lead; unweighed, it is plenty to go by
+    assert copy_leader(["orig", "copier"], next_day, REGISTERED, DEFAULT, matched) == "orig"
 
 
 def test_a_few_tiny_orders_decide_nothing() -> None:

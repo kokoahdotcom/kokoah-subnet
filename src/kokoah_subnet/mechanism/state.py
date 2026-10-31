@@ -28,7 +28,9 @@ class MinerState:
     qual_notional: float = 0.0
     address: str | None = None  # the bound address the credit was earned with
     registered_block: int | None = None  # the hotkey's registration the credit was earned under
-    led: tuple[tuple[str, float], ...] = ()  # (other hotkey, smoothed USD this one traded before it): the copy rule
+    led: tuple[tuple[str, float], ...] = ()  # (other hotkey, smoothed USD this one traded before it, weighed by how
+    # soon the other followed): the copy rule
+    matched: tuple[tuple[str, float], ...] = ()  # the same, unweighed: how much there is to go by
 
     def paid_window(self, day_index: int | None = None, days: int = 60) -> float:
         """Alpha paid in the last `days` calendar days before `day_index` (all stored days when no index is given)."""

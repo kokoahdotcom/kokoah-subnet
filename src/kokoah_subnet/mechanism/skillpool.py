@@ -106,19 +106,20 @@ def _last_unspent(spent: list[int], j: int) -> int:
     return root
 
 
-def copy_leads(
+def copy_matches(
     group: Sequence[str],
     fills_of: Mapping[str, Sequence[Fill]],
     earlier_of: Mapping[str, Sequence[Fill]] | None = None,
     window_s: float = 3 * 86_400.0,
     reaction_s: float = 600.0,
     scale_s: float = 60.0,
-) -> dict[str, dict[str, float]]:
-    """`leads[x][y]`: the notional by which member `x` traded before member `y` today. Each of `y`'s orders today
-    (`fills_of`) is matched with `x`'s most recent earlier order on the same coin and side within `window_s`, today's
-    or from the days before (`earlier_of`), and when that one is smaller, with the ones before it within
-    `reaction_s` in turn until `y`'s order is matched in full (an order the original sent in slices is copied as a
-    whole). Each piece counts for `x` weighed by how soon `y` followed, `scale_s / (scale_s + wait)` (half at a
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
+    """`(leads, matched)`: `leads[x][y]` is the notional by which member `x` traded before member `y` today, weighed by
+    how soon `y` followed; `matched[x][y]` the same notional unweighed (how much there is to go by). Each of `y`'s
+    orders today (`fills_of`) is matched with `x`'s most recent earlier order on the same coin and side within
+    `window_s`, today's or from the days before (`earlier_of`), and when that one is smaller, with the ones before it
+    within `reaction_s` in turn until `y`'s order is matched in full (an order the original sent in slices is copied
+    as a whole). Each piece counts for `x` weighed by how soon `y` followed, `scale_s / (scale_s + wait)` (half at a
     minute), and each of `x`'s orders gives at most its own notional in a day's matching. A copier trades soon after
     what it copies, while the original's next trade comes on its own schedule, later: the shorter waits decide.
     Small orders placed just before weigh no more than their size, and a copy made hours later still counts, a
@@ -128,11 +129,12 @@ def copy_leads(
     today = {k: _orders(fills_of.get(k, ())) for k in group}
     known = {k: _orders([*earlier_of.get(k, ()), *fills_of.get(k, ())]) for k in group}
     leads: dict[str, dict[str, float]] = {x: {} for x in group}
+    matched: dict[str, dict[str, float]] = {x: {} for x in group}
     for x in group:
         for y in group:
             if x == y:
                 continue
-            total = 0.0
+            total, plain = 0.0, 0.0
             for key, (times, sizes) in today[y].items():
                 if key not in known[x]:
                     continue
@@ -151,12 +153,23 @@ def copy_leads(
                         left[j] -= given
                         need -= given
                         total += given * scale_ms / (scale_ms + t - lead_times[j])
+                        plain += given
                         if left[j] <= 0:
                             spent[j] = j - 1
                             j = _last_unspent(spent, j - 1)
             if total > 0:
-                leads[x][y] = total
-    return leads
+                leads[x][y], matched[x][y] = total, plain
+    return leads, matched
+
+
+def copy_leads(
+    group: Sequence[str],
+    fills_of: Mapping[str, Sequence[Fill]],
+    earlier_of: Mapping[str, Sequence[Fill]] | None = None,
+    window_s: float = 3 * 86_400.0,
+) -> dict[str, dict[str, float]]:
+    """The weighed leads of `copy_matches`."""
+    return copy_matches(group, fills_of, earlier_of, window_s)[0]
 
 
 def copy_leader(
@@ -164,16 +177,20 @@ def copy_leader(
     led: Mapping[str, Mapping[str, float]],
     registered_block: Mapping[str, int | None],
     params: Params,
+    matched: Mapping[str, Mapping[str, float]] | None = None,
 ) -> str:
-    """The member a copy group follows: the one that leads every other member head to head (`led[x][y]`: smoothed
-    over the days, see `copy_leads`) by at least `copy_lead_min_usd` and `copy_lead_margin` times what that member
-    led it by, so a copier's second account copying the copier makes up no lead. Without such a member, the earliest
-    registration on the subnet (the same on every validator, and no later account can have an earlier one), then the
-    hotkey order."""
+    """The member a copy group follows: the one that leads every other member head to head, with at least
+    `copy_lead_min_usd` of notional matched in its favour (`matched`, unweighed: enough to go by; `led` when not
+    given) and a weighed lead (`led`: smoothed over the days, see `copy_matches`) at least `copy_lead_margin` times
+    what that member led it by, so a copier's second account copying the copier makes up no lead. Without such a
+    member, the earliest registration on the subnet (the same on every validator, and no later account can have an
+    earlier one), then the hotkey order."""
+    evidence = led if matched is None else matched
 
     def beats(x: str, y: str) -> bool:
         ahead, behind = led.get(x, {}).get(y, 0.0), led.get(y, {}).get(x, 0.0)
-        return ahead >= params.copy_lead_min_usd and ahead >= params.copy_lead_margin * behind
+        enough = evidence.get(x, {}).get(y, 0.0) >= params.copy_lead_min_usd
+        return enough and ahead > 0 and ahead >= params.copy_lead_margin * behind
 
     ahead_of_all = [x for x in group if all(beats(x, y) for y in group if y != x)]
     if len(ahead_of_all) == 1:

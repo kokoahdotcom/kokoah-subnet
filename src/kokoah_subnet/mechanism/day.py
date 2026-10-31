@@ -33,7 +33,7 @@ from .skillpool import (
     apply_copy_groups,
     copy_groups,
     copy_leader,
-    copy_leads,
+    copy_matches,
     entry_psr,
     skill_weight,
     smoothed_leads,
@@ -271,13 +271,18 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     }
     address_of = {w.m.hotkey: w.m.address for w in work}
     today_leads: dict[str, dict[str, float]] = {}
+    today_matched: dict[str, dict[str, float]] = {}
     for members in groups:
         earlier = {k: inputs.earlier_fills(address_of[k]) for k in members} if inputs.earlier_fills else {}
-        for x, row in copy_leads(members, fills_of, earlier, params.copy_lookback_days * 86_400.0).items():
+        leads_today, matched_today = copy_matches(members, fills_of, earlier, params.copy_lookback_days * 86_400.0)
+        for x, row in leads_today.items():
             today_leads.setdefault(x, {}).update(row)
+        for x, row in matched_today.items():
+            today_matched.setdefault(x, {}).update(row)
     led = smoothed_leads({w.m.hotkey: dict(w.state.led) for w in work}, today_leads, params)
+    matched = smoothed_leads({w.m.hotkey: dict(w.state.matched) for w in work}, today_matched, params)
     registered = {w.m.hotkey: w.m.registered_block or w.state.registered_block for w in work}
-    leaders = {tuple(g): copy_leader(g, led, registered, params) for g in groups}
+    leaders = {tuple(g): copy_leader(g, led, registered, params, matched) for g in groups}
     skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}
     allocation = allocate(volume_weights, skill_weights, inputs.price_usd, params, inputs.pool_alpha)
@@ -351,6 +356,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             address=w.m.address,
             registered_block=w.m.registered_block or w.state.registered_block,
             led=tuple(sorted(led.get(w.m.hotkey, {}).items())),
+            matched=tuple(sorted(matched.get(w.m.hotkey, {}).items())),
         )
 
     return DayResult(inputs.day_index, allocation, records, states)

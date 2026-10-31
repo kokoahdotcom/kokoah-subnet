@@ -24,6 +24,7 @@ def load_states(path: Path | None) -> dict[str, MinerState]:
                 "paid": tuple(v.get("paid", ())),
                 "paid_days": tuple((int(d), float(a)) for d, a in v.get("paid_days", ())),
                 "led": tuple((str(k), float(x)) for k, x in v.get("led", ())),
+                "matched": tuple((str(k), float(x)) for k, x in v.get("matched", ())),
             }
         )
         for hk, v in raw.items()
