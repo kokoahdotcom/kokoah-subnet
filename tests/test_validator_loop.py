@@ -1576,25 +1576,37 @@ async def test_a_file_published_after_scoring_is_recorded_as_such(
     await hl.close()
 
 
-async def test_a_coin_whose_volume_is_mostly_the_address_s_own_leaves_its_return_unknown(tmp_path: Path) -> None:
+async def test_a_coin_whose_volume_is_mostly_the_address_s_own_counts_its_loss_but_not_its_profit(
+    tmp_path: Path,
+) -> None:
     """In a coin almost nobody else traded, the minute marks are the address's own prices (and its counterparty's),
-    so they say nothing about what the account made there: its day's return is unknown, its fees still count."""
-    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    so they say nothing about what the account made there. The day stays known, since a day left out would hide a
+    loss: a profit counts as nothing, a loss counts in full; its fees still count."""
+    # the recorded profit, and what the return counts of it (the 2,000-dollar off-market gift is removed first)
+    for pnl, expected in ((5_000.0, 0.0), (-1_500.0, -3_500.0)):
+        sub = tmp_path / f"pnl{int(pnl)}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+        PNL_DAY[addr_a] = pnl
 
-    def thin_btc(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        req = body.get("req", {})
-        if body["type"] == "candleSnapshot" and req.get("interval") == "1m" and req.get("coin") == "BTC":
-            candles = [{"t": req["startTime"] + m * 60_000, "c": "100000", "v": "0.00001"} for m in range(1440)]
-            return httpx.Response(200, json=candles)  # about $1,440 of BTC traded all day
-        return _info_handler(request)
+        def thin_btc(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            req = body.get("req", {})
+            if body["type"] == "candleSnapshot" and req.get("interval") == "1m" and req.get("coin") == "BTC":
+                candles = [{"t": req["startTime"] + m * 60_000, "c": "100000", "v": "0.00001"} for m in range(1440)]
+                return httpx.Response(200, json=candles)  # about $1,440 of BTC traded all day
+            return _info_handler(request)
 
-    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(thin_btc))
-    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
-    records = {r.hotkey: r for r in result.records}
-    assert records[HK_A].fees.fills > 0  # the builder fees were paid: they count
-    known = store.execute_sql(f"select address, return_known from equity where day = '{DAY}' order by address")
-    assert {r["address"]: bool(r["return_known"]) for r in known}[addr_a] is False
-    notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'marks'")
-    assert any("over 25% of the day's volume in BTC" in n["message"] for n in notes)
-    await hl.close()
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(thin_btc))
+        try:
+            result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        records = {r.hotkey: r for r in result.records}
+        assert records[HK_A].fees.fills > 0  # the builder fees were paid: they count
+        series = store.equity_series(addr_a, 5)
+        (_, v0, _), (_, v1, moved) = series[-2], series[-1]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)
+        notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'marks'")
+        assert any("profit not counted" in n["message"] for n in notes)

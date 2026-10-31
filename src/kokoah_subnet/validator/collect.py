@@ -653,7 +653,8 @@ async def collect_and_score(
             if mark:
                 offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
         # a coin in which this address made more than `thin_market_share` of the day's volume was priced by its own
-        # trades (and whoever it traded with): its marks tell nothing about what the account made there
+        # trades (and whoever it traded with): its marks tell nothing about what the account made there. The day
+        # stays known (a day left out would hide a loss): its loss counts, its profit does not
         thin = sorted(
             coin
             for coin in {f.coin for f in public if is_perp(f.coin)} - unmarked
@@ -663,11 +664,11 @@ async def collect_and_score(
         if thin:
             store.put_note(
                 day, hk, address, "marks",
-                f"the day's return unknown: its own trades made over {params.thin_market_share:.0%} of the day's "
-                f"volume in {', '.join(thin)}",
+                f"the day's profit not counted (a loss is): its own trades made over {params.thin_market_share:.0%} "
+                f"of the day's volume in {', '.join(thin)}",
             )  # fmt: skip
         # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
-        return_known = history_read and not thin and not any(f.coin in unmarked for f in public)
+        return_known = history_read and not any(f.coin in unmarked for f in public)
         if unmarked:
             store.put_note(
                 day,
@@ -707,13 +708,16 @@ async def collect_and_score(
                 previous = store.equity_value(address, store.day_before(day))
                 base = previous if previous is not None else change.value_start or 0.0
                 flows = (change.value_end - base) - change.profit
+                held_back = offmarket  # removed from the return like money moved in
+                if thin:
+                    held_back += max(0.0, change.profit - offmarket)
                 store.put_equity(
                     address,
                     day,
                     change.value_end,
                     flows,
                     raw=state.get("marginSummary"),
-                    offmarket_pnl=offmarket,
+                    offmarket_pnl=held_back,
                     known=return_known,
                 )
             else:
