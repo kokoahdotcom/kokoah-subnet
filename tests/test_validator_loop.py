@@ -1655,3 +1655,33 @@ async def test_positions_are_left_out_when_the_fills_since_the_day_s_end_may_be_
     notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'fill history'")
     assert any("positions are left out" in n["message"] for n in notes)
     await hl.close()
+
+
+async def test_a_day_the_exchange_may_have_cut_counts_its_loss_but_not_its_profit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thousands of fills after the day ends can push the day's own fills beyond what the exchange keeps, and the
+    thin-coin and off-market checks with them: such a day keeps its loss and loses its profit, like a thin one."""
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "FILLS_KEPT", 2)  # the day's one fill and one since make two: possibly cut
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+    later = [{"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 60_000, "crossed": True,
+              "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10}]  # fmt: skip
+
+    def busy(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == addr_a:
+            return httpx.Response(200, json=later)
+        return _info_handler(request)
+
+    PNL_DAY[addr_a] = 5_000.0
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
+    try:
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    finally:
+        PNL_DAY.pop(addr_a, None)
+        await hl.close()
+    (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+    assert v1 - v0 - moved == pytest.approx(0.0, abs=1e-6)  # 5,000 made, less the 2,000 gift: 3,000 not counted
