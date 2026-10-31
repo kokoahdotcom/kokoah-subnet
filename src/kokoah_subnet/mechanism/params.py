@@ -38,11 +38,6 @@ class Params:
     skill_volume_days: int = 30
     entry_days: int = 90  # entry test: PSR of the capped daily returns over this many days
     entry_psr: float = 0.95  # must reach this (benchmark `psr_benchmark`)
-    copy_correlation: float = 0.9  # bound accounts whose daily returns correlate above this
-    copy_min_days: int = 30  # over at least this many common days share one skill weight
-    copy_lookback_days: int = 3  # the leader rule matches today's orders with the other's orders this far back
-    copy_lead_min_usd: float = 1_000.0  # a smoothed lead below this decides nothing (the registration order does)
-    copy_lead_margin: float = 1.5  # and the leader's lead must be this many times the next member's
     agent_bonus: float = 0.10  # skill weight x (1 + bonus) for a verified sealed-machine agent account
     # activity gates (section 9): for the skill pool
     gate_days: int = 30
