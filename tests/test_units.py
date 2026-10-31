@@ -62,7 +62,7 @@ def test_secrets_reach_only_the_services_that_need_them() -> None:
         if name == "kokoah-subnet-agent-service.service":
             assert "/etc/kokoah-subnet/db.env" not in files
     burn = service("kokoah-subnet-burn.service")
-    assert {c.split(":", 1)[0] for c in burn["LoadCredential"]} == {"coldkey", "coldkeypub", "hotkey", "hotkeypub"}
+    assert {c.split(":", 1)[0] for c in burn["LoadCredential"]} == {"coldkey", "coldkeypub", "hotkey"}
     assert all(
         p.startswith("/etc/kokoah-subnet/burn-wallet/") for c in burn["LoadCredential"] for p in [c.split(":", 1)[1]]
     )
