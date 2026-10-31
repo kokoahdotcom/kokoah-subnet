@@ -89,8 +89,10 @@ def test_every_shell_command_in_a_unit_is_valid() -> None:
             if not shell:
                 continue
             found += 1
-            assert "$$" in shell.group(1) or "$" not in shell.group(1), (name, "a variable systemd would expand")
-            body = shell.group(1).replace("$$", "$").replace("%%", "%")
+            raw = shell.group(1)
+            assert "$" not in raw.replace("$$", ""), (name, "a $ systemd would expand: write $$")
+            assert set(re.findall(r"%.", raw)) <= {"%%", "%t", "%n"}, (name, "a % systemd would read: write %%")
+            body = raw.replace("$$", "$").replace("%%", "%")
             assert not re.search(r"\b\d{4,}(?:\(|day|done|stamp|KOKOAH)", body), (name, body)
             check = subprocess.run(["bash", "-n", "-c", body], capture_output=True, text=True)
             assert check.returncode == 0, (name, check.stderr)
