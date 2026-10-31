@@ -332,9 +332,12 @@ class AgentRunner:
             except ProcessLookupError:
                 pass
             proc.wait()
-        if self.uid is not None:
-            kill_user_processes(self.uid)
-        reap_orphans(keep=proc.pid if proc is not None and proc.returncode is None else None)
+        try:
+            if self.uid is not None:
+                kill_user_processes(self.uid)
+            reap_orphans(keep=proc.pid if proc is not None and proc.returncode is None else None)
+        except Exception:  # a cleanup that failed is tried again at the next start, exit or stop
+            log.exception("could not end the agent's processes")
 
     def end_all(self) -> None:
         with self._lock:
@@ -377,11 +380,15 @@ class AgentRunner:
         pause = 5.0
         while not self.stopped.is_set():
             started = time.time()
-            proc = self.start()
-            if proc is None:
-                break
-            code = proc.wait()
-            self._exited(proc)
+            try:
+                proc = self.start()
+                if proc is None:
+                    break
+                code: int | str = proc.wait()
+                self._exited(proc)
+            except Exception as exc:  # noqa: BLE001 - the agent could not be started: tried again after the pause
+                log.exception("the agent could not be run")
+                code = repr(exc)
             if self.stopped.is_set():
                 break
             pause = 5.0 if time.time() - started > 600 else min(pause * 2, 300.0)
