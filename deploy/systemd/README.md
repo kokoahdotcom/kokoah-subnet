@@ -16,6 +16,8 @@ The owner's services, where the owner runs them, have users of their own and the
 - `kokoah-subnet-operator.timer` (user `kokoah-subnet-operator`): the daily file-hash commitment from the owner
   hotkey, every hour until it is made. The hotkey stays in `/etc/kokoah-subnet/operator-wallet/hotkey` (root's
   alone; a link to the hotkey file will do) and reaches each run the same way, so the validator never reads it.
+  On a host set up before, take the `--wallet` flags out of `operator.env`, and remove the owner hotkey's copy from
+  the validator's wallet folder unless that hotkey is also the one the validator signs with.
 
 | Path | What |
 |---|---|
