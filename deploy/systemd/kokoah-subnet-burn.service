@@ -8,9 +8,9 @@ Type=oneshot
 User=kokoah-subnet-burn
 Group=kokoah-subnet-burn
 Environment=HOME=/var/lib/kokoah-subnet-burn
-# the record the burns are written to: the validator's connection (its writer role, which the burn needs to record
-# them), handed to the service in its environment; the file itself stays unreadable to it
-EnvironmentFile=/etc/kokoah-subnet/db.env
+# the record the burns are written to, as a login that can only add burns (scripts/db.sh burn-role:
+# KOKOAH_SUBNET_DB_URL=<its KOKOAH_SUBNET_DB_BURNER_URL>), never the validator's; the file stays unreadable to the run
+EnvironmentFile=/etc/kokoah-subnet/burn-db.env
 # KOKOAH_SUBNET_BURN_ARGS: --network and --netuid
 EnvironmentFile=/etc/kokoah-subnet/burn.env
 # the burn wallet stays where it is (/etc/kokoah-subnet/burn-wallet, root's alone): systemd hands its files to this run
@@ -29,7 +29,7 @@ ExecStart=/opt/kokoah-subnet/venv/bin/kokoah-subnet owner burn --wallet burn --w
 TimeoutStartSec=15min
 MemoryMax=1G
 TasksMax=64
-InaccessiblePaths=-/var/lib/kokoah-subnet -/var/lib/kokoah-subnet-agents -/etc/kokoah-subnet/agent-service.env -/etc/kokoah-subnet/agent-wrap.key
+InaccessiblePaths=-/var/lib/kokoah-subnet -/var/lib/kokoah-subnet-agents -/etc/kokoah-subnet/agent-service.env -/etc/kokoah-subnet/agent-wrap.key -/etc/kokoah-subnet/db.env -/etc/kokoah-subnet/db-reader.env
 StandardOutput=append:/var/log/kokoah-subnet/burn.log
 StandardError=append:/var/log/kokoah-subnet/burn.log
 NoNewPrivileges=yes
