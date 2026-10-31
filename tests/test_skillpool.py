@@ -175,6 +175,18 @@ def test_an_original_trading_by_twap_keeps_the_lead() -> None:
     assert copy_leader(["orig", "copier"], leads, REGISTERED, DEFAULT, matched) == "orig"
 
 
+def test_a_member_with_little_in_common_blocks_no_leader() -> None:
+    """The original leads the copier clearly; a third correlated member trades another coin only, so it has nothing
+    matched with either. It neither blocks the original nor makes a lead of its own."""
+    leads = {"orig": {"copier": 50_000.0}, "copier": {"orig": 2_000.0}}
+    matched = {"orig": {"copier": 400_000.0}, "copier": {"orig": 30_000.0}}
+    registered = {"orig": 9_000, "copier": 1_000, "eth": 500}
+    assert copy_leader(["orig", "copier"], leads, registered, DEFAULT, matched) == "orig"
+    assert copy_leader(["orig", "copier", "eth"], leads, registered, DEFAULT, matched) == "orig"
+    small = {**matched, "eth": {"orig": 300.0}}  # a few hundred dollars in common: still too little to count
+    assert copy_leader(["orig", "copier", "eth"], leads, registered, DEFAULT, small) == "orig"
+
+
 def test_the_lead_is_judged_over_the_days() -> None:
     """A month of the original leading is not undone by one day on which the copier, by chance or on purpose, trades
     first: the leads are smoothed like credit and skill."""
