@@ -196,20 +196,30 @@ def copy_leader(
     params: Params,
     matched: Mapping[str, Mapping[str, float]] | None = None,
 ) -> str:
-    """The member a copy group follows: the one that leads every other member head to head, with at least
-    `copy_lead_min_usd` of notional matched in its favour (`matched`, unweighed: enough to go by; `led` when not
-    given) and a weighed lead (`led`: smoothed over the days, see `copy_matches`) at least `copy_lead_margin` times
-    what that member led it by, so a copier's second account copying the copier makes up no lead. Without such a
+    """The member a copy group follows: the one that leads head to head every other member it has at least
+    `copy_lead_min_usd` matched with, whichever way (`matched`, unweighed: enough to go by; `led` when not given):
+    with that much matched in its favour and a weighed lead (`led`: smoothed over the days, see `copy_matches`) at
+    least `copy_lead_margin` times what that member led it by, so a copier's second account copying the copier makes
+    up no lead, and a member with too little in common blocks nothing. Without such a
     member, the earliest registration on the subnet (the same on every validator, and no later account can have an
     earlier one), then the hotkey order."""
     evidence = led if matched is None else matched
+
+    def comparable(x: str, y: str) -> bool:  # enough matched between them, whichever way
+        least = params.copy_lead_min_usd
+        return evidence.get(x, {}).get(y, 0.0) >= least or evidence.get(y, {}).get(x, 0.0) >= least
 
     def beats(x: str, y: str) -> bool:
         ahead, behind = led.get(x, {}).get(y, 0.0), led.get(y, {}).get(x, 0.0)
         enough = evidence.get(x, {}).get(y, 0.0) >= params.copy_lead_min_usd
         return enough and ahead > 0 and ahead >= params.copy_lead_margin * behind
 
-    ahead_of_all = [x for x in group if all(beats(x, y) for y in group if y != x)]
+    # a member with too little in common with another (another coin, small trades) neither blocks nor makes a lead
+    ahead_of_all = [
+        x
+        for x in group
+        if (others := [y for y in group if y != x and comparable(x, y)]) and all(beats(x, y) for y in others)
+    ]
     if len(ahead_of_all) == 1:
         return ahead_of_all[0]
     return min(group, key=lambda k: (registered_block.get(k) is None, registered_block.get(k) or 0, k))
