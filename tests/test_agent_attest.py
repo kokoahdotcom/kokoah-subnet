@@ -124,18 +124,25 @@ def test_a_known_key_is_answered_while_the_key_set_is_being_read() -> None:
         return pyjwt.encode({"x": 1}, rsa_key, algorithm="RS256", headers={"kid": kid})
 
     assert keys.get_signing_key_from_jwt(token("google-1")) is real
-    reading = threading.Thread(target=lambda: _refused(keys, token("google-2")))
+    outcome: list[str] = []
+
+    def unknown() -> None:
+        try:
+            keys.get_signing_key_from_jwt(token("google-2"))
+            outcome.append("accepted")
+        except pyjwt.PyJWKClientError:
+            outcome.append("refused")
+
+    reading = threading.Thread(target=unknown)
     reading.start()
-    clock.sleep(0.2)  # the read for google-2 is under way
+    for _ in range(100):  # until the read for google-2 is under way
+        if reads[0] == 2:
+            break
+        clock.sleep(0.01)
+    assert reads[0] == 2 and not slow.is_set()
     started = clock.monotonic()
     assert keys.get_signing_key_from_jwt(token("google-1")) is real
     assert clock.monotonic() - started < 1  # no waiting behind it
     slow.set()
     reading.join(timeout=10)
-
-
-def _refused(keys: Any, token: str) -> None:
-    import jwt as pyjwt
-
-    with pytest.raises(pyjwt.PyJWKClientError):
-        keys.get_signing_key_from_jwt(token)
+    assert outcome == ["refused"]  # a key Google does not publish is refused once the read is done

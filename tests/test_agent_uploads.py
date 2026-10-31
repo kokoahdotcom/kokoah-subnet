@@ -166,7 +166,7 @@ async def test_bundles_of_a_hotkey_that_left_are_deleted_after_a_month_and_can_b
                                is_registered=lambda hk: hk in registered)  # fmt: skip
         assert restarted.state.prune_bundles() == 0  # not a month yet, though the service restarted meanwhile
         clock.now += 2 * 86_400
-        assert application.state.prune_bundles() == 1
+        assert restarted.state.prune_bundles() == 1  # the month counted across the restart
         kept = {p.name for p in (tmp_path / "svc" / "bundles").iterdir()}
         assert kept == {sha256_hex(blobs["h1"]), sha256_hex(blobs["h3"])}  # registered, or named by a kept copy
         gone = sha256_hex(blobs["h2"])
