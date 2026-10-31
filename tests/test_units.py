@@ -109,3 +109,12 @@ def test_the_owner_hotkey_reaches_only_the_operator_step() -> None:
             assert not any("operator-wallet" in v for vs in service(name).values() for v in vs), name
     for name in ("kokoah-subnet-operator.service", "kokoah-subnet-burn.service"):  # jobs that talk to the chain
         assert service(name).get("TimeoutStartSec"), name
+
+
+def test_the_operator_wallet_flags_come_last() -> None:
+    """The unit's wallet flags follow the operator's own arguments, so an old operator.env that still names a wallet
+    (from before the hotkey moved) can never win over the hotkey systemd hands in."""
+    (command,) = service("kokoah-subnet-operator.service")["ExecStart"]
+    own = command.index("$$KOKOAH_SUBNET_OPERATOR_ARGS")
+    for flag in ("--wallet owner", "--wallet-hotkey default", "--wallet-path %t/kokoah-subnet-operator/wallets"):
+        assert command.index(flag) > own, flag
