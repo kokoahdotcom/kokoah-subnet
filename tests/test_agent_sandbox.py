@@ -450,6 +450,22 @@ def test_an_agent_child_that_left_its_group_and_kills_back_still_ends(how: str) 
         shutil.rmtree(home, ignore_errors=True)
 
 
+def test_a_collected_group_leader_counts_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pidfd_open answers EINVAL for a group leader collected while its group lives on: gone, not a failed kill."""
+    import ctypes
+    import errno
+
+    from kokoah_subnet.agent import supervisor
+
+    class Collected:
+        def syscall(self, *args: object) -> int:
+            ctypes.set_errno(errno.EINVAL)
+            return -1
+
+    monkeypatch.setattr(supervisor, "_libc", Collected())
+    supervisor._kill_if_owned(os.getpid(), os.getuid())  # no error
+
+
 def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import ctypes
     import errno
@@ -463,9 +479,9 @@ def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.
 
     monkeypatch.setattr(supervisor, "_libc", Refusing())
     me = os.getuid()
-    with pytest.raises(OSError, match="pidfd_open"):
+    with pytest.raises(supervisor.KillFailed, match="pidfd_open"):  # not a PermissionError: no 403 on a signed stop
         supervisor.kill_user_processes(me, rounds=1)
     runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=me)
-    with pytest.raises(OSError):
+    with pytest.raises(supervisor.KillFailed):
         runner.start()  # no new agent beside processes that could not be ended
     assert runner.proc is None

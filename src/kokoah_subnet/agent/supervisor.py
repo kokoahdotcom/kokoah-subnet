@@ -290,22 +290,28 @@ _libc = ctypes.CDLL(None, use_errno=True)
 SYS_PIDFD_OPEN, SYS_PIDFD_SEND_SIGNAL = 434, 424  # the same on x86_64 and arm64
 
 
+class KillFailed(RuntimeError):
+    """A process of the agent's user could not be killed (never a PermissionError: the request was signed)."""
+
+
 def _kill_if_owned(pid: int, uid: int) -> None:
     """SIGKILL `pid` when its real user is still `uid`, through a pidfd: the signal goes to the process that was
     looked at, never to another that got its id since."""
     fd = _libc.syscall(SYS_PIDFD_OPEN, pid, 0)
     if fd < 0:
         err = ctypes.get_errno()
-        if err == errno.ESRCH:
-            return  # gone already
-        raise OSError(err, f"pidfd_open of {pid}: {os.strerror(err)}")
+        # gone already: ESRCH, or EINVAL for a group leader that was collected while its group lives on (its id is
+        # still taken, but it is no longer a process)
+        if err in (errno.ESRCH, errno.EINVAL):
+            return
+        raise KillFailed(f"pidfd_open of {pid}: {os.strerror(err)}")
     try:
         fields = _status(pid)
         if fields is not None and _real_uid(fields) == uid:
             if _libc.syscall(SYS_PIDFD_SEND_SIGNAL, fd, signal.SIGKILL, None, 0) != 0:
                 err = ctypes.get_errno()
                 if err != errno.ESRCH:  # it exited meanwhile: fine; anything else is a kill that did not happen
-                    raise OSError(err, f"pidfd_send_signal to {pid}: {os.strerror(err)}")
+                    raise KillFailed(f"pidfd_send_signal to {pid}: {os.strerror(err)}")
     finally:
         os.close(fd)
 
