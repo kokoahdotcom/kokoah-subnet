@@ -199,11 +199,9 @@ with what weight:
 - **Participation.** The skill weight grows with the account's eligible Kokoah volume over the last 30 days, up to
   $1 million; beyond that, more volume adds nothing to the skill reward.
 
-The skill weight is the skill above the floor times participation, with 10% more for a verified agent. Accounts whose
-daily returns move almost exactly together over 30 days or more form a group in which only the account that leads,
-the one whose trades come first, keeps its weight: a copy earns nothing, and the same strategy in ten accounts earns
-what it would in one. The skill reward also needs the activity gates (10 round trips, 7 active days
-and a mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody qualifies for
+The skill weight is the skill above the floor times participation, with 10% more for a verified agent; each account
+is weighed on its own record. The skill reward also needs the activity gates (10 round trips, 7 active days and a
+mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody qualifies for
 it, the skill reward joins the volume reward.
 
 **What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own
@@ -233,8 +231,7 @@ dollar is worth the same to everyone. Splitting and merging accounts change noth
 fees, and every fee paid funds the buyback.
 
 **The skill reward pays only for a proven edge.** An account without a real edge almost never passes the 90-day test.
-A copy of another miner's strategy earns nothing; splitting a large account gains nothing; the test always reads the
-account's own record, whatever hotkey it is linked to.
+The test always reads the account's own record, whatever hotkey it is linked to.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
@@ -460,9 +457,6 @@ weight of 0.8; agent B runs in a verified sealed machine and has also passed, wi
 participation giving 0.8 before the bonus, so 0.88 after it; trader C has no proven record yet. The volume reward
 (2,361.6 alpha) splits three ways, 787.2 alpha each. The skill reward (590.4 alpha) splits between A and B in the
 ratio 0.8 to 0.88: 281.1 and 309.3 alpha. A is paid 1,068.3 alpha, B 1,096.5 and C 787.2; the whole pool is paid.
-
-If A ran the same strategy in a second account, or someone copied A's trades, only A, whose trades come first,
-would keep its weight of 0.8, and the total paid to A's strategy would not change.
 
 ### Appendix C. A validator's day
 

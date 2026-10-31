@@ -57,8 +57,8 @@ flowchart LR
 - **Eligibility.** An account takes part on days its average account value is at least $10,000 and after it has
   made three qualifying trades.
 - **Agents.** Trading agents that run in a verified sealed machine earn 10% more skill weight.
-- **Fairness.** Splitting one account into many earns nothing extra; a copy of another miner's strategy earns nothing;
-  wash trading between bound accounts does not count.
+- **Fairness.** In the volume reward, splitting one account into many earns nothing extra; wash trading between
+  bound accounts does not count.
 - **Paid out in full.** The whole miner emission goes to miners each day; only a day with no eligible miner at
   all goes to the burn address.
 
