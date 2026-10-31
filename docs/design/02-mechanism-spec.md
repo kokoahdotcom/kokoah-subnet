@@ -204,14 +204,16 @@ Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no 
 
 - **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
   (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
-  whose trades come first: each member's fills of the day are matched with the nearest fill of another member on the
-  same coin and side within 10 minutes; a match where the other's fill comes after counts the smaller of the two
-  fills' notional for the earlier one, each fill of the later member once (for its largest match), so many small
-  quick fills weigh no more than their size. Each member's lead over each other is smoothed over the days like the
-  credit (30% today), and the member that led the most notional leads (a copier trades after what it copies).
-  Without a lead, the member registered on the subnet first (the same on every validator) leads, then the hotkey
-  order. The same strategy in many accounts earns one weight, copying another miner
-  earns nothing, and splitting one account above the volume cap into several gains nothing.
+  whose trades come first. Each member's orders of the day (the pieces filled in one millisecond are one order) are
+  matched with the other member's most recent earlier order on the same coin and side, from that day or the 3 days
+  before; a match counts the smaller of the two orders' notional for the earlier member, in full when the later one
+  followed within 10 minutes and less the longer it waited (10 minutes over the wait), each order's notional used
+  once. Small orders placed just before weigh no more than their size, and a copy made hours later still counts, a
+  little. Each member's lead over each other is smoothed over the days like the credit (30% today), and the member
+  that led the most notional leads, when its lead is at least $1,000 and 1.5 times the next member's (a copier
+  trades after what it copies). Without such a lead, the member registered on the subnet first (the same on every
+  validator) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another
+  miner earns nothing, and splitting one account above the volume cap into several gains nothing.
 - **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
   pay; proving an edge from daily returns takes months by design.
 - **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
@@ -303,7 +305,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
-| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; copy rule: correlation > 0.9 over ≥ 30 common days; verified agents ×1.1 |
+| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; copy rule: correlation > 0.9 over ≥ 30 common days, the leader by orders that came first (3 days back, a lead of ≥ $1,000 and 1.5× the next) else the earliest registration; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
