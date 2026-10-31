@@ -1611,3 +1611,22 @@ async def test_a_coin_whose_volume_is_mostly_the_address_s_own_counts_its_loss_b
         assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)
         notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'marks'")
         assert any("profit not counted" in n["message"] for n in notes)
+
+
+async def test_failed_reads_of_the_day_s_end_wait_for_the_deadline_then_leave_the_positions_out(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+
+    def since_end_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == addr_a:
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(since_end_down))
+    with pytest.raises(RuntimeError, match="since the day's end"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    held = store.position_series([addr_a, addr_b], [DAY])
+    assert held[addr_a] == {} and held[addr_b] == {"BTC": [50000.0]}  # only the address that could not be read
+    await hl.close()
