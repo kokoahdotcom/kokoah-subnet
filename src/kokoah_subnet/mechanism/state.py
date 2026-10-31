@@ -44,6 +44,22 @@ class MinerState:
         return self.zero_until_day is not None and day_index < self.zero_until_day
 
 
+def renamed_in_leads(state: MinerState, old: str, new: str) -> MinerState:
+    """A hotkey swapped on chain keeps its place in the other members' copy-rule leads (rows that named the old
+    hotkey name the new one)."""
+
+    def rename(rows: tuple[tuple[str, float], ...]) -> tuple[tuple[str, float], ...]:
+        merged: dict[str, float] = {}
+        for hk, v in rows:
+            key = new if hk == old else hk
+            merged[key] = merged.get(key, 0.0) + v
+        return tuple(sorted(merged.items()))
+
+    if not any(hk == old for hk, _ in (*state.led, *state.matched)):
+        return state
+    return replace(state, led=rename(state.led), matched=rename(state.matched))
+
+
 def advance(
     state: MinerState,
     fees: DayFees,
