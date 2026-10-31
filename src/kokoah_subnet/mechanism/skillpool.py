@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import bisect
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from .fills import Fill
 from .params import Params
@@ -85,14 +85,31 @@ def copy_groups(dated_returns: Mapping[str, Mapping[str, float]], params: Params
     return sorted((sorted(g) for g in groups.values() if len(g) > 1), key=lambda g: g[0])
 
 
-def _orders(fills: Sequence[Fill]) -> dict[tuple[str, str], tuple[list[int], list[float]]]:
-    """One member's orders by coin and side: the pieces filled in one millisecond are one order (their notional
-    summed), in time order."""
-    by_key: dict[tuple[str, str], dict[int, float]] = {}
+def as_orders(fills: Iterable[Fill]) -> list[tuple[str, str, int, float]]:
+    """The orders behind fills, as (coin, side, time, notional) in time order: the pieces filled in one millisecond
+    are one order, and so are all the slices of one of the exchange's TWAP orders (at its first slice: its size and
+    length are public, so a copy of it follows its start)."""
+    fills = list(fills)
+    first: dict[tuple[str, str, int], int] = {}
     for f in fills:
-        at = by_key.setdefault((f.coin, f.side), {})
-        at[f.time_ms] = at.get(f.time_ms, 0.0) + f.notional
-    return {key: (sorted(at), [at[t] for t in sorted(at)]) for key, at in by_key.items()}
+        if f.twap_id is not None:
+            key = (f.coin, f.side, f.twap_id)
+            first[key] = min(first.get(key, f.time_ms), f.time_ms)
+    orders: dict[tuple[str, str, int], float] = {}
+    for f in fills:
+        t = first[(f.coin, f.side, f.twap_id)] if f.twap_id is not None else f.time_ms
+        orders[(f.coin, f.side, t)] = orders.get((f.coin, f.side, t), 0.0) + f.notional
+    return sorted(((coin, side, t, n) for (coin, side, t), n in orders.items()), key=lambda o: (o[2], o[0], o[1]))
+
+
+def _orders(fills: Sequence[Fill]) -> dict[tuple[str, str], tuple[list[int], list[float]]]:
+    """One member's orders by coin and side (`as_orders`), in time order."""
+    by_key: dict[tuple[str, str], tuple[list[int], list[float]]] = {}
+    for coin, side, t, n in as_orders(fills):
+        times, sizes = by_key.setdefault((coin, side), ([], []))
+        times.append(t)
+        sizes.append(n)
+    return by_key
 
 
 def _last_unspent(spent: list[int], j: int) -> int:

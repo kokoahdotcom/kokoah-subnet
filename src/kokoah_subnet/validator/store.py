@@ -728,16 +728,14 @@ class Store:
     HISTORY_ORDER_DAYS = 7  # days of history orders kept per address
 
     def put_history_orders(self, address: str, day: str, fills: Iterable[Fill]) -> None:
-        """The address's orders of `day` from its own fill history: the fills of one coin, side and millisecond as one
-        order. Days older than a week are dropped."""
+        """The address's orders of `day` from its own fill history (`as_orders`: the fills of one millisecond, or of
+        one TWAP order, as one order). Days older than a week are dropped."""
+        from kokoah_subnet.mechanism.skillpool import as_orders
+
         a = address.lower()
-        orders: dict[tuple[str, str, int], float] = {}
-        for f in fills:
-            key = (f.coin, f.side, f.time_ms)
-            orders[key] = orders.get(key, 0.0) + f.notional
         rows = [
             {"address": a, "day": day, "coin": coin, "side": side, "time_ms": t, "notional": n}
-            for (coin, side, t), n in sorted(orders.items(), key=lambda kv: (kv[0][2], kv[0][0], kv[0][1]))
+            for coin, side, t, n in as_orders(fills)
         ]
         with self._engine.begin() as c:
             c.execute(
