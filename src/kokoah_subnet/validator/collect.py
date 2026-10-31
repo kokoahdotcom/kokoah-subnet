@@ -468,6 +468,7 @@ async def collect_and_score(
     marks_cache: dict[str, dict[int, float] | None] = {}
     volume_of: dict[str, float | None] = {}  # a coin's traded notional over the day, from the same candles
     day_end_cache: dict[str, float | None] = {}
+    day_end_locks: dict[str, asyncio.Lock] = {}
     marks_locks: dict[str, asyncio.Lock] = {}
     listings: dict[str, set[str] | None] = {}
     listing_locks: dict[str, asyncio.Lock] = {}
@@ -515,18 +516,21 @@ async def collect_and_score(
         return marks_cache[coin]
 
     async def day_end_price(coin: str) -> float | None:
-        """The coin's last minute mark of the day (the minute marks when they were read, else that one candle);
-        None when it cannot be read."""
-        lock = marks_locks.setdefault(coin, asyncio.Lock())
+        """The coin's last price of the day: the close of its last hourly candle of the day, one source for every
+        validator however late it scores (the exchange keeps hourly candles for months). None when the coin did not
+        trade all day (its position is left out). A failed read fails the day until the deadline, like the other
+        reads; after it, the coin's position is left out."""
+        lock = day_end_locks.setdefault(coin, asyncio.Lock())
         async with lock:
             if coin not in day_end_cache:
-                marks = marks_cache.get(coin)
-                if not marks:
-                    try:
-                        marks = mark_by_minute(await hl.candles(coin, "1m", end_ms - 60_000, end_ms))
-                    except Exception:  # noqa: BLE001 - the coin's position is left out of the day
-                        marks = {}
-                day_end_cache[coin] = marks[max(marks)] if marks else None
+                try:
+                    hours = mark_by_minute(await hl.candles(coin, "1h", start_ms, end_ms))
+                except Exception as exc:  # noqa: BLE001
+                    store.put_error(day, None, None, "positions", f"hourly candles of {coin}: {exc}")
+                    if not past_deadline:
+                        raise RuntimeError(f"hourly candles of {coin} unavailable: {exc}") from exc
+                    hours = {}
+                day_end_cache[coin] = hours[max(hours)] if hours else None
         return day_end_cache[coin]
 
     async def one(hk: str, address: str) -> None:

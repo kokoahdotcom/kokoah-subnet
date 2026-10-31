@@ -215,7 +215,8 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
     if t == "candleSnapshot":
         req = body["req"]
         if req["interval"] == "1h":
-            return httpx.Response(200, json=[{"t": req["startTime"] + h * 3_600_000, "c": "400"} for h in range(24)])
+            hour_px = {"BTC": "100000", "ETH": "4000"}.get(req["coin"], "400")  # TAO otherwise
+            return httpx.Response(200, json=[{"t": req["startTime"] + h * 3_600_000, "c": hour_px} for h in range(24)])
         px = "100000" if req["coin"] == "BTC" else "4000"
         return httpx.Response(
             200, json=[{"t": req["startTime"] + m * 60_000, "c": px, "v": "50"} for m in range(0, 1440, 1)]
