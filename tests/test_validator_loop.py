@@ -1630,3 +1630,28 @@ async def test_failed_reads_of_the_day_s_end_wait_for_the_deadline_then_leave_th
     held = store.position_series([addr_a, addr_b], [DAY])
     assert held[addr_a] == {} and held[addr_b] == {"BTC": [50000.0]}  # only the address that could not be read
     await hl.close()
+
+
+async def test_positions_are_left_out_when_the_fills_since_the_day_s_end_may_be_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "FILLS_KEPT", 1)  # the exchange holds this many fills of an address
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+    later = [{"coin": "BTC", "px": "100000", "sz": "0.1", "side": "B", "time": end + 60_000, "crossed": True,
+              "fee": "1", "closedPnl": "0", "startPosition": "0.4", "hash": "0x1", "tid": 9}]  # fmt: skip
+
+    def busy(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == addr_a:
+            return httpx.Response(200, json=later)
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.position_series([addr_a], [DAY])[addr_a] == {}
+    notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'positions'")
+    assert any("left out" in n["message"] for n in notes)
+    await hl.close()
