@@ -229,7 +229,6 @@ def _fill_row(f: Fill, hotkey: str | None, excluded: str | None) -> dict[str, An
 
 
 MAX_TX_LOOKUPS = 200  # per address and day: taker fills beyond it are not confirmed one by one
-CUT_WINDOW_MS = 3_600_000  # the fills counted toward a possibly cut day: up to an hour after the day's end
 
 
 async def confirmed_builder_orders(
@@ -535,13 +534,20 @@ async def collect_and_score(
                 day_end_cache[coin] = hours[max(hours)] if hours else None
         return day_end_cache[coin]
 
+    def read_time_ms(state: dict[str, Any]) -> int:
+        """When the exchange answered with this state (its own `time`); this validator's clock when it gave none or
+        something that is not a time."""
+        try:
+            return int(state.get("time") or clock * 1000)
+        except (TypeError, ValueError):
+            return int(clock * 1000)
+
     async def fills_since_end(hk: str, address: str, state: dict[str, Any]) -> list[Fill] | None:
         """The address's fills since the day ended, up to the state's time (for its day-end positions, and to tell
         whether the exchange still holds all of the day's own fills). A failed read fails the day until the
         deadline, like the other reads; after it, None."""
-        state_ms = int(state.get("time") or clock * 1000)
         try:
-            return await hl.fills_by_time(address, end_ms, state_ms + 1)
+            return await hl.fills_by_time(address, end_ms, read_time_ms(state) + 1)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "positions", f"fills since the day's end: {exc}")
             if not past_deadline:
@@ -729,22 +735,20 @@ async def collect_and_score(
             errors[hk] = f"account state: {str(exc)[:160]}"
             store.put_error(day, hk, address, "account state", str(exc))
         later = await fills_since_end(hk, address, read_state) if read_state is not None else None
-        # the exchange keeps an address's latest FILLS_KEPT fills: with that many from the day's start to an hour
-        # after its end (a fixed window, so every validator decides alike once the hour is over), part of the day's
-        # own history may be gone, and with it what the thin-coin and off-market checks look at. Such a day is
-        # treated like a thin one: its loss counts, its profit does not. A validator whose own read since may have
-        # been cut decides the same, whatever the hour
-        if read_state is not None and later is not None and not past_deadline:
-            if int(read_state.get("time") or clock * 1000) < end_ms + CUT_WINDOW_MS:
-                raise RuntimeError(f"the hour after {day} is not over yet for {address}")
-        early = [f for f in later if f.time_ms < end_ms + CUT_WINDOW_MS] if later is not None else []
-        since_start = len(public) + len(early)
-        cut = since_start >= FILLS_KEPT or (later is not None and len(public) + len(later) >= FILLS_KEPT)
+        # the exchange keeps an address's latest FILLS_KEPT fills: when the day's fills and those since it ended reach
+        # that many, part of the day's own history may be gone from what this validator read, and with it what the
+        # thin-coin and off-market checks look at. Such a day is treated like a thin one: its loss counts, its profit
+        # does not. This depends on when a validator reads: validators score a day within the hour after its builder
+        # file comes out, so they read alike, but one that reads later sees more fills since the day ended and, for an
+        # address near the limit, may find the day cut where an earlier one did not. It cannot see what was dropped,
+        # so it never counts a profit it could not check
+        seen = len(public) + len(later or [])
+        cut = seen >= FILLS_KEPT
         if cut:
             store.put_note(
                 day, hk, address, "fill history",
-                f"{since_start} fills from the day's start to an hour after it: the exchange may no longer hold all "
-                "of the day's, so its profit is not counted (a loss is)",
+                f"{seen} fills read for the day and since it ended: the exchange may no longer hold all of the day's, "
+                "so its profit is not counted (a loss is)",
             )  # fmt: skip
         try:
             if read_state is None:
