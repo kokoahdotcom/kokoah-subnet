@@ -484,6 +484,29 @@ def test_one_process_that_cannot_be_killed_never_spares_the_rest(monkeypatch: py
     assert killed[:3] == [11, 12, 13] and not running  # the round went on, and the next one took the first
 
 
+def test_a_stop_whose_cleanup_fails_keeps_trying(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from kokoah_subnet.agent import supervisor
+
+    tries: list[int] = []
+
+    def kill(uid: int) -> None:
+        tries.append(uid)
+        if len(tries) < 3:
+            raise supervisor.KillFailed("not yet")
+
+    monkeypatch.setattr(supervisor, "kill_user_processes", kill)
+    monkeypatch.setattr(supervisor, "reap_orphans", lambda keep=None: None)
+    runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=4321)
+    runner.retry_s = 0.01
+    with pytest.raises(supervisor.KillFailed):
+        runner.stop()  # the stop says it did not work...
+    deadline = time.time() + 5
+    while len(tries) < 3 and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.05)
+    assert len(tries) == 3  # ...and the cleanup goes on until it works, then stops trying
+
+
 def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import ctypes
     import errno

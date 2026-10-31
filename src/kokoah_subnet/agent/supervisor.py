@@ -356,6 +356,8 @@ class AgentRunner:
         self.stopped = threading.Event()
         self.proc: subprocess.Popen[bytes] | None = None
         self._lock = threading.Lock()  # starting, stopping and collecting orphans never overlap
+        self.retry_s = 5.0  # after a stop whose cleanup failed, how often it is tried again
+        self._retrying = threading.Event()
 
     def _end_all(self) -> None:
         proc = self.proc
@@ -376,8 +378,25 @@ class AgentRunner:
             self._end_all()
 
     def stop(self) -> None:
+        """No agent starts again; everything of the agent ends. A cleanup that fails says so, and is tried again in
+        the background until it works (nothing else would: the runner's loop ends with the stop)."""
         self.stopped.set()
-        self.end_all()
+        try:
+            self.end_all()
+        except Exception:
+            if not self._retrying.is_set():
+                self._retrying.set()
+                threading.Thread(target=self._keep_ending, daemon=True).start()
+            raise
+
+    def _keep_ending(self) -> None:
+        while True:
+            time.sleep(self.retry_s)
+            try:
+                self.end_all()
+                return
+            except Exception:  # noqa: BLE001 - tried again until nothing of the agent is left
+                log.exception("the stopped agent's processes are not all ended yet")
 
     def start(self) -> subprocess.Popen[bytes] | None:
         """A fresh agent, or None once stopped."""
