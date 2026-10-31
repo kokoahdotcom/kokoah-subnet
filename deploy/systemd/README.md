@@ -14,10 +14,10 @@ The owner's services, where the owner runs them, have users of their own and the
   do), and systemd hands its key files to each run in a private place (`LoadCredential`), so the user never owns
   them.
 - `kokoah-subnet-operator.timer` (user `kokoah-subnet-operator`): the daily file-hash commitment from the owner
-  hotkey, every hour until it is made. The hotkey stays in `/etc/kokoah-subnet/operator-wallet/hotkey` (root's
-  alone; a link to the hotkey file will do) and reaches each run the same way, so the validator never reads it.
-  On a host set up before, take the `--wallet` flags out of `operator.env`, and remove the owner hotkey's copy from
-  the validator's wallet folder unless that hotkey is also the one the validator signs with.
+  hotkey, every hour until it is made. The hotkey file stays in `/etc/kokoah-subnet/operator-wallet/hotkey` (root's
+  alone: the file 0600, its folder 0700) and reaches each run the same way, so the validator never reads it.
+  On a host set up before, take the `--wallet` flags out of `operator.env` and move the owner hotkey's file from the
+  validator's wallet folder to that place; copy it instead only if the validator also signs with that hotkey.
 
 | Path | What |
 |---|---|
