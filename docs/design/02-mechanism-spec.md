@@ -114,7 +114,9 @@ Removed before anything is computed:
    address made more than 25% of the day's traded notional (the same minute candles' volume at their close), the
    marks are its own prices and its counterparty's, so they tell nothing about what it made there. The day stays
    known (a day left out would hide a loss): its loss counts in full, its profit counts as nothing (removed like
-   money moved in), and its builder fills still count;
+   money moved in), and its builder fills still count. The same for a day the exchange may have cut: it keeps an
+   address's latest 10,000 fills, so with that many fills from the day's start to the validator's read, part of the
+   day's own history (and with it what these checks look at) may be gone; such a day also has no positions;
 3. **bound counterparties:** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill) are removed from credit: the subnet does not pay for volume between its own miners.
    They report no one: any miner can take another's resting orders, so who traded with whom says nothing about who
