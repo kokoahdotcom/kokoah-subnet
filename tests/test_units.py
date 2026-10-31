@@ -101,9 +101,7 @@ def test_the_owner_hotkey_reaches_only_the_operator_step() -> None:
     operator = service("kokoah-subnet-operator.service")
     assert operator["User"] == ["kokoah-subnet-operator"]  # not the validator's user
     assert [c.split(":", 1)[0] for c in operator["LoadCredential"]] == ["hotkey"]
-    assert all(
-        "/var/lib/kokoah-subnet " in f" {v} " or "/var/lib/kokoah-subnet" in v for v in operator["InaccessiblePaths"]
-    )
+    assert "-/var/lib/kokoah-subnet" in " ".join(operator["InaccessiblePaths"]).split()  # the validator's folder
     for name in services():
         if name != "kokoah-subnet-operator.service":
             assert not any("operator-wallet" in v for vs in service(name).values() for v in vs), name
