@@ -1675,8 +1675,10 @@ async def test_a_validator_that_reads_later_never_counts_a_profit_it_could_not_c
 
     monkeypatch.setattr(collect, "FILLS_KEPT", 2)
     end = DAY_MS + 86_400_000
-    later = [{"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 90 * 60_000, "crossed": True,
-              "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10}]  # fmt: skip
+    later: list[dict[str, Any]] = [
+        {"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 90 * 60_000, "crossed": True,
+         "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10},
+    ]  # fmt: skip
     # the recorded profit is 5,000 dollars, 3,000 once the 2,000-dollar off-market gift is removed
     for read_at, expected in ((end + 65 * 60_000, 3_000.0), (end + 120 * 60_000, 0.0)):
         sub = tmp_path / f"read{read_at}"
