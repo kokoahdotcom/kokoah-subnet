@@ -719,12 +719,12 @@ def create_app(
         links_read[0] = clock()  # a failed read waits its turn too
         links_known[0] = False
         current = {(str(hk), str(a).lower()) for hk, a in bound_pairs()}
-        links_known[0] = True
         with engine.begin() as c:
             seen = {(hk, a) for hk, a in c.execute(select(linked.c.hotkey, linked.c.address)).all()}
             new = [{"hotkey": hk, "address": a, "seen_at": clock()} for hk, a in sorted(current - seen)]
             if new:
                 c.execute(insert(linked), new)
+        links_known[0] = True  # only once they are recorded: until then a link not found is not known to be missing
 
     def poll_links() -> None:
         if bound_pairs is not None:
