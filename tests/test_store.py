@@ -254,3 +254,19 @@ def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
         c.execute(text("UPDATE meta SET value = '1' WHERE key = 'schema_version'"))
     with pytest.raises(RuntimeError, match="start the validator of this release first"):
         Store(path, create=False)
+
+
+def test_the_copy_rule_reads_only_counted_fills_of_the_days_before(tmp_path: Path) -> None:
+    s = Store(tmp_path / "v.sqlite")
+    a = "0x" + "aa" * 20
+
+    def row(t: int, excluded: str | None = None, address: str = a) -> dict[str, object]:
+        return {"address": address, "time_ms": t, "coin": "BTC", "side": "B", "px": 100.0, "sz": 2.0,
+                "notional": 200.0, "crossed": True, "builder_fee": 0.05, "excluded": excluded}  # fmt: skip
+
+    s.put_fills("2026-10-26", [row(1)])  # four days before: outside the three
+    s.put_fills("2026-10-27", [row(2), row(3, "mark_clip")])
+    s.put_fills("2026-10-29", [row(4), row(5, address="0x" + "bb" * 20)])
+    s.put_fills("2026-10-30", [row(6)])  # the day being scored: not "before"
+    got = s.counted_fills(a.upper().replace("0X", "0x"), "2026-10-30", 3)
+    assert [f.time_ms for f in got] == [2, 4] and all(f.notional == 200.0 for f in got)
