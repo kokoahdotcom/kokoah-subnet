@@ -212,8 +212,8 @@ against another linked account, since the subnet does not pay for volume between
 trade carry the same trade id, so this is exact; such trades report no one, since anyone can take anyone's orders);
 fills priced more than 0.5% from the exchange's minute mark, which are valued at the mark; and fills whose order did
 not carry the Kokoah builder code, which the validator confirms from the account's own signed orders. A coin in which
-an account made more than a quarter of the day's volume was priced by its own trades, so that day's return is not
-counted for skill. Persistent hedging between accounts of one owner (one coldkey, or a master and its sub-accounts)
+an account made more than a quarter of the day's volume was priced by its own trades, so that day's profit is not
+counted for skill, while a loss is. Persistent hedging between accounts of one owner (one coldkey, or a master and its sub-accounts)
 is caught by position: net positions at each day's end correlated below −0.8 on at least 10 days in the last 30.
 Mirrored positions above 25% of an account's are removed from its credit; above 50%, both accounts are reported and
 leave the skill reward for 30 days.
