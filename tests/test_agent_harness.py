@@ -153,6 +153,9 @@ def test_the_two_interfaces(setup: Any) -> None:
         "result": {"cancelled": 1},
     }
     assert public.post("/stop", json={"time_ms": t + 1, "signature": sig}).status_code == 403
+    posted = len(fake.posted)
+    after = agent.post("/call", json={"method": "cancel", "params": {"coin": "ETH", "oid": 6}}).json()
+    assert after == {"ok": False, "error": "the agent was stopped"} and len(fake.posted) == posted
 
 
 def test_the_harness_binding_line_is_the_subnet_one() -> None:

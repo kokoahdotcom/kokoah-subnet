@@ -125,6 +125,7 @@ class Harness:
         self.attestor = attestor
         self.http = http or httpx.Client(timeout=20, trust_env=False)
         self.on_stop = on_stop
+        self.stopped = False  # once a signed stop is accepted, the agent places nothing more
         self.started_at = int(time.time())
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
@@ -306,6 +307,8 @@ class Harness:
     def call(self, method: str, params: dict[str, Any]) -> Any:
         if method not in AGENT_METHODS:  # checked before anything else: no attribute is ever looked up by name
             raise ValueError(f"method not offered: {method}")
+        if self.stopped:  # whatever of the agent may still run after a stop, nothing it asks reaches the exchange
+            raise ValueError("the agent was stopped")
         handlers: dict[str, Callable[..., Any]] = {
             "order": self.order,
             "cancel": self.cancel,
@@ -377,6 +380,7 @@ class Harness:
 
     def stop(self, time_ms: int, signature: str) -> Any:
         self._check_master(stop_message(self.address, time_ms), signature, time_ms)
+        self.stopped = True  # before the cancels, so no order of the agent's lands after them
         open_orders = self.info({"type": "openOrders", "user": self.address})
         results = [self.cancel(o["coin"], int(o["oid"])) for o in open_orders]
         if self.on_stop:
