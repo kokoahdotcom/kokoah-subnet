@@ -30,9 +30,6 @@ from .payout import Allocation, allocate, weights
 from .skill import SkillParts, skill_factor, skill_raw
 from .skillpool import (
     adjusted_skill,
-    apply_copy_groups,
-    copy_groups,
-    copy_leader,
     entry_psr,
     skill_weight,
     volume_factor,
@@ -61,9 +58,7 @@ class MinerInputs:
     registered_block: int | None = None  # the hotkey's registration block (a new registration is a fresh identity)
     # skill pool
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days
-    dated_returns: Mapping[str, float] = field(default_factory=dict)  # day -> return, for the copy rule
     agent_verified: bool = False  # a verified sealed-machine agent account (the skill bonus)
-    record_start: str | None = None  # the day the address's exchange history begins (the copy rule's longest record)
 
 
 @dataclass(frozen=True)
@@ -75,6 +70,9 @@ class DayInputs:
     states: Mapping[str, MinerState]  # by hotkey; missing hotkeys start fresh
     cluster_of: Mapping[str, str] = field(default_factory=dict)
     positions: Mapping[str, Mapping[str, Sequence[float]]] = field(default_factory=dict)  # mirror rule inputs
+    # address -> its owner's group (hotkeys on one coldkey, a master and its sub-accounts): the position mirror rule
+    # compares only addresses in one group
+    owner_group_of: Mapping[str, str] = field(default_factory=dict)
     pool_alpha: float | None = None
     penalized_until: Mapping[str, int] = field(default_factory=dict)  # address -> day index: a report follows it
 
@@ -118,8 +116,7 @@ class MinerRecord:
     volume_window_usd: float  # V over the window
     volume_factor: float  # v
     agent_verified: bool
-    copy_group: tuple[str, ...]
-    skill_weight: float  # after the copy rule
+    skill_weight: float
     skill_pool_reason: str | None  # why not in the skill pool
     # pay
     volume_pay_alpha: float
@@ -181,7 +178,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     bound_fills = {a: f for a, f in by_user(fills).items() if a in bound}
     against_bound = bound_counterparty_notional(bound_fills)  # measured before the fills are dropped
     bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
-    position_share = mirror_position_share(inputs.positions, params)
+    position_share = mirror_position_share(inputs.positions, params, inputs.owner_group_of)
 
     work: list[_Work] = []
     for m in inputs.miners:
@@ -204,9 +201,9 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         # only trades made while eligible earn credit; an ineligible day adds nothing and the smoothing decays
         credited = day_fees(qual.credited, params, m.exchange_rates_bps) if eligible else DayFees.zero()
         gross = fees.notional + against_bound.get(m.address, 0.0)
-        cp_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0
+        cp_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0  # recorded: removed, not reported
         pos_share = position_share.get(m.address, 0.0)
-        mirrored = max(cp_share, pos_share)
+        mirrored = pos_share
         action = mirror_action(mirrored, params)
         zeroed = (
             action.zero_multiplier
@@ -251,12 +248,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             )
         )  # fmt: skip
 
-    groups = copy_groups({w.m.hotkey: w.m.dated_returns for w in work if w.weight > 0}, params)
-    group_of = {k: tuple(g) for g in groups for k in g}
-    fills_of = {w.m.hotkey: bound_fills.get(w.m.address, []) for w in work}
-    record_start = {w.m.hotkey: w.m.record_start or min(w.m.dated_returns, default=None) for w in work}
-    leaders = {tuple(g): copy_leader(g, fills_of, record_start) for g in groups}
-    skill_weights = apply_copy_groups({w.m.hotkey: w.weight for w in work}, groups, leaders)
+    skill_weights = {w.m.hotkey: w.weight for w in work}
     volume_weights = {w.m.hotkey: w.phi_hat for w in work if w.eligible}
     allocation = allocate(volume_weights, skill_weights, inputs.price_usd, params, inputs.pool_alpha)
 
@@ -301,7 +293,6 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 volume_window_usd=w.volume_window,
                 volume_factor=w.v,
                 agent_verified=w.m.agent_verified,
-                copy_group=group_of.get(w.m.hotkey, ()),
                 skill_weight=skill_weights.get(w.m.hotkey, 0.0),
                 skill_pool_reason=w.pool_reason,
                 volume_pay_alpha=vp,

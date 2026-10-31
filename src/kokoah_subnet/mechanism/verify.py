@@ -13,9 +13,6 @@ from kokoah_subnet.mechanism import DEFAULT, allocate, ema
 from kokoah_subnet.mechanism.skill import skill_factor, skill_raw
 from kokoah_subnet.mechanism.skillpool import (
     adjusted_skill,
-    apply_copy_groups,
-    copy_groups,
-    copy_leader,
     passes_entry,
     skill_weight,
     volume_factor,
@@ -105,23 +102,8 @@ def luck_weight() -> None:
     )
 
 
-def copy_rule() -> None:
-    print("5. Copy rule: the same strategy in many accounts earns one weight; splitting above the cap gains nothing")
-    rng = random.Random(3)
-    days = [f"d{i:03d}" for i in range(60)]
-    r = {d: rng.gauss(0.002, 0.01) for d in days}
-    single = skill_weight(0.9, 10 * P.skill_volume_cap_usd, False, P)
-    parts = {f"x{i}": skill_weight(0.9, P.skill_volume_cap_usd, False, P) for i in range(10)}
-    noisy = {k: {d: v + rng.gauss(0, 0.0005) for d, v in r.items()} for k in parts}
-    groups = copy_groups(noisy, P)
-    total = sum(apply_copy_groups(parts, groups, {tuple(g): copy_leader(g, {}, {}) for g in groups}).values())
-    check("ten copies of one $10M trader", abs(total - single) < 1e-9, f"{total:.3f} vs {single:.3f}")
-    independent = {f"y{i}": {d: rng.gauss(0.002, 0.01) for d in days} for i in range(10)}
-    check("independent traders are never grouped", copy_groups(independent, P) == [])
-
-
 def agent_bonus() -> None:
-    print("6. Agent bonus: +10% on the skill weight only")
+    print("5. Agent bonus: +10% on the skill weight only")
     check("skill weight x 1.1", abs(skill_weight(0.8, 2e6, True, P) / skill_weight(0.8, 2e6, False, P) - 1.1) < 1e-12)
     vol = allocate({"agent": 100.0, "human": 100.0}, {}, 1.0, P).pays
     check("no effect on the volume pool", abs(vol["agent"] - vol["human"]) < 1e-9)
@@ -134,7 +116,6 @@ def main() -> int:
         volume_pool_sybil,
         entry_rates,
         luck_weight,
-        copy_rule,
         agent_bonus,
     ):
         f()

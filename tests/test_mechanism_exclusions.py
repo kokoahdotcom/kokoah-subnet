@@ -55,14 +55,16 @@ def test_mirror_position_rule() -> None:
         "b": {"BTC": [-x for x in a]},  # perfectly opposite on every day
         "c": {"BTC": [1000.0, 1200.0, 900.0, 1300.0, 950.0, 1250.0, 1000.0, 1100.0, 1050.0, 1150.0, 980.0, 1220.0]},
     }
-    share = mirror_position_share(pos, DEFAULT)
+    one_owner = {"a": "a", "b": "a", "c": "a"}
+    assert mirror_position_share(pos, DEFAULT) == {"a": 0.0, "b": 0.0, "c": 0.0}  # unlinked: never compared
+    share = mirror_position_share(pos, DEFAULT, one_owner)
     total_a = sum(a) + 500.0 * days
     assert share["a"] == pytest.approx(sum(a) / total_a)
     assert share["b"] == pytest.approx(1.0)
     assert share["c"] == 0.0  # long like a, noisy: not opposite to b
     # fewer overlapping days than the minimum: nothing
     short = {"a": {"BTC": a[:5]}, "b": {"BTC": [-x for x in a[:5]]}}
-    assert mirror_position_share(short, DEFAULT) == {"a": 0.0, "b": 0.0}
+    assert mirror_position_share(short, DEFAULT, one_owner) == {"a": 0.0, "b": 0.0}
 
 
 def test_mirror_action_thresholds() -> None:

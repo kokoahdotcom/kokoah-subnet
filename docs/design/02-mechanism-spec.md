@@ -1,10 +1,11 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.3)
+# Kokoah subnet incentive mechanism: complete specification (v6.4)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
 record (§7a). Nothing is capped or burned in normal operation. The volume pool pays every miner in proportion to the
-builder fees it pays, and every builder fee funds the buyback (§10, §11). The skill pool is protected against luck, copies and splitting by an entry test (a probabilistic Sharpe ratio of at
-least 0.95 over 90 days), a luck floor, a volume participation factor capped at $1M over 30 days, and a copy rule.
+builder fees it pays, and every builder fee funds the buyback (§10, §11). The skill pool is protected against luck
+by an entry test (a probabilistic Sharpe ratio of at least 0.95 over 90 days), a luck floor and a volume
+participation factor capped at $1M over 30 days; each account is weighed on its own record.
 A miner's agent running in a cloud confidential VM with Kokoah's harness, verified by the validators themselves,
 earns 10% more skill weight (§16). Validator emissions and outside demand are out of scope.
 
@@ -15,8 +16,7 @@ perpetuals through the Kokoah builder code, by hand or with an agent. Validators
 the bound addresses and chain state, each miner's share of the daily miner emission. Kokoah collects the builder fee
 on every such trade and spends it buying back and burning the subnet's token (alpha). The purpose: trading agents,
 and traders, whose records are verified from public data. The intention: activity rewarded in proportion to the
-builder fees it pays; a separate reward for proven trading skill that luck, copies and split accounts cannot
-capture; more skill weight for verified agents, the subnet's main purpose; and the whole emission paid to miners
+builder fees it pays; a separate reward for proven trading skill that luck cannot capture; more skill weight for verified agents, the subnet's main purpose; and the whole emission paid to miners
 every day. Verified agents with long records are to be offered to traders on Kokoah as strategies, and that revenue
 goes to the buyback too; that happens outside the mechanism and never changes a score.
 
@@ -111,15 +111,31 @@ Removed before anything is computed:
    A failed read of a coin's minute candles fails the day's scoring until the file deadline; after it, the coin's
    builder fills go uncounted and the day's return of every address that traded the coin is unknown. The exchange
    keeps only its latest 5000 minute candles (about three and a half days): a day scored later, whose candles no
-   longer reach back to its start, is settled at once the same way, never clipped in part;
-3. **mirror rule (counterparties):** fills whose counterparty is another bound address (the builder file names the
-   counterparty of every fill), measured as a share of the address's notional, then removed from credit: the subnet
-   does not pay for volume between its own miners. Exact, so an honest trader is never flagged by coincidence;
-4. **mirror rule (positions):** for every pair of bound addresses active in the same coin, the daily net position
-   series over the last 30 days; correlation below −0.8 on at least 10 overlapping days marks the overlapping
-   notional as mirrored.
-   For both rules: mirrored notional above 25% of an address's notional is removed from credit (fills against
-   bound counterparties are removed whatever the share); an address with more than 50% mirrored is reported, and
+   longer reach back to its start, is settled at once the same way, never clipped in part. In a coin in which an
+   address made more than 25% of the day's traded notional (the same minute candles' volume at their close), the
+   marks are its own prices and its counterparty's, so they tell nothing about what it made there. The day stays
+   known (a day left out would hide a loss): its loss counts in full, its profit counts as nothing (removed like
+   money moved in), and its builder fills still count. The same for a day the exchange may have cut: it keeps an
+   address's latest 10,000 fills, so when the day's fills and those since it ended reach that many in what a
+   validator read, part of the day's own history (and with it what these checks look at) may be gone. Validators
+   score a day within the hour after its builder file comes out, so they read alike; one that reads much later sees
+   more fills since and may find such a day cut where an earlier one did not, and never counts a profit it could not
+   check; nor does one that could not read the fills since the day ended;
+3. **bound counterparties:** fills whose counterparty is another bound address (the builder file names the
+   counterparty of every fill) are removed from credit: the subnet does not pay for volume between its own miners.
+   They report no one: any miner can take another's resting orders, so who traded with whom says nothing about who
+   meant to (their share of the address's notional is recorded);
+4. **mirror rule (positions):** for every pair of bound addresses one owner tied together (hotkeys on one coldkey, a
+   master and its sub-accounts: the links only the owner can create, §14a) and active in the same coin, the net
+   position at each day's end over the last 30 days. The size is what the exchange records just before the first
+   fill since the day ended (else the size the validator reads), valued at the close of the coin's last hourly
+   candle of the day (the one opening at 23:00, never the next day's first), so it is the same whenever a validator
+   reads it; main perpetuals only. A failed read fails the
+   day until the deadline, and an address with 10,000 fills or more since the day ended (the exchange keeps no
+   more, so the first may be gone) has no positions that day; correlation below
+   −0.8 on at least 10 overlapping days marks the overlapping notional as mirrored. Pairs without such a link are
+   not compared, since anyone can hold the opposite of another trader's position. Mirrored notional above 25% of an
+   address's position notional is removed from its credit; an address with more than 50% mirrored is reported, and
    for 30 days it and the addresses its owner controls (§14a) take no part in the skill pool. These rules protect
    the leaderboard's integrity.
 
@@ -196,13 +212,8 @@ part only when all of these hold: eligible today (§9a); the activity gates pass
 the **entry test**: the probabilistic Sharpe ratio of the last 90 capped daily returns against the benchmark daily
 Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no entry). Then:
 
-- **Copy rule.** Bound accounts whose daily returns correlate above 0.9 over at least 30 common days form a group
-  (joined transitively), and only the group's leader keeps its weight; the others get none. The leader is the member
-  whose trades come first: each member's fills of the day are matched with the nearest fill of another member on the
-  same coin and side within 10 minutes, and the member whose fill comes first most often leads (a copier trades
-  after what it copies). With fewer than 5 matched fills, the member with the longest record (the account whose
-  history on the exchange begins first, the same for every validator) leads, then the hotkey order. The same strategy in many accounts earns one weight, copying another miner
-  earns nothing, and splitting one account above the volume cap into several gains nothing.
+- **Each account on its own record.** Accounts that trade alike, copies of one another included, are each weighed
+  on their own: copy trading is never punished.
 - **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
   pay; proving an edge from daily returns takes months by design.
 - **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
@@ -294,10 +305,10 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
-| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; copy rule: correlation > 0.9 over ≥ 30 common days; verified agents ×1.1 |
+| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
-| mirror rules | fills against bound counterparties never count; position correlation < −0.8 on ≥ 10 days; exclude > 25%, out of the skill pool > 50% |
+| mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 12 h after the day: scored from the histories |
 | migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero |
@@ -315,9 +326,6 @@ to A. A is paid 1,771.2 alpha, B 1,180.8; nothing is burned.
 **An agent beside a human.** Two traders pass the entry test with the same `s × v`; one trades through a verified
 sealed-machine agent. Skill weights 1.1 and 1.0: the agent takes 52.4% of the skill pool, the human 47.6%; the
 volume pool is split by fees alone.
-
-**Ten copies.** One strategy run in ten accounts, each with `s × v` = 0.9: the copy rule groups them and only the
-leader keeps its 0.9, the same as a single account.
 
 ## 14. Account switching and migration
 
@@ -337,8 +345,8 @@ after 60 days.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
   new hotkey starts with no credit tail, no qualification and no smoothed skill (`g = 0`). The unpaid credit tail of
   the old hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of
-  that day's credit, 49% of the day before, and so on. The activity gates, the entry test and the copy rule read the
-  address's own record, which stays with the address, as do its penalties.
+  that day's credit, 49% of the day before, and so on. The activity gates and the entry test read the address's own
+  record, which stays with the address, as do its penalties.
 - **Unlinking.** The linked address ends its link with one signature, without the hotkey:
   `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
   subnet's service, which accepts it only within 10 minutes of its time and only for a link a binding on chain has

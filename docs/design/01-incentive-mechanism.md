@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.3)
+# Incentive mechanism in plain words (v6.4)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -34,18 +34,21 @@ The whole miner emission is paid out every day, in two parts:
    running figure). Twice the fees, twice the share. Splitting an account in two changes nothing.
 2. **20% for proven skill.** Shared only among miners whose daily returns pass a strict test over the last 90 days
    (a 95% confidence that the edge is real). Inside it, the share grows with the skill score above a luck floor and
-   with the miner's Kokoah volume over 30 days, up to $1 million. Verified agents get 10% more. Among accounts that
-   trade almost exactly alike, only the one whose trades come first is paid, so copies and split accounts gain nothing. On a day nobody passes, this
-   part joins the activity part.
+   with the miner's Kokoah volume over 30 days, up to $1 million. Verified agents get 10% more. Each account is
+   weighed on its own record; copy trading is never punished. On a day nobody passes, this part joins the activity
+   part.
 
 Nothing is capped and nothing is burned (only a day with nobody to pay would go to the burn hotkey).
 
 ## Fair play
 
 Trades with yourself or your linked accounts never count, and neither do trades between two of the subnet's own
-miners. When two miners' accounts keep opposite positions for weeks and the mirrored volume is more than a quarter
-of an account's volume, that mirrored part earns no credit; above half, both accounts also leave the skill reward for
-30 days. The skill reward needs a real edge, proven over 90 days.
+miners (they report no one, since anyone can trade against anyone's orders). When two accounts of one owner (on one
+coldkey, or a master and its sub-accounts) keep opposite positions for weeks, the mirrored part earns no credit when
+it is more than a quarter of the account's positions; above half, both accounts also leave the skill reward for 30
+days. A day's profit made in a coin that hardly anyone else traded does not count for skill, though a loss there
+does. The skill reward needs
+a real edge, proven over 90 days.
 
 ## Agents
 

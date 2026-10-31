@@ -160,7 +160,7 @@ All times are UTC.
    accounts linked to it (to name counterparties and detect self-dealing). Every bound account's link and every
    agent machine are checked, and the unlinks the addresses signed are read from the subnet's service (each
    signature is checked; every unlink seen is kept).
-4. **Scoring.** Eligibility, fee credit, skill, the entry test, the copy rule, agent verification, and the two
+4. **Scoring.** Eligibility, fee credit, skill, the entry test, agent verification, and the two
    rewards, exactly as the specification states. The day's artifact (every miner's figures) is stored.
 5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
    subnet's settings, including commit-reveal.

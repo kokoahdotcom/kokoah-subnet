@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +203,7 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
             200,
             json={
                 "marginSummary": {"accountValue": str(LIVE.get(body["user"].lower(), 25000.0))},
+                "time": DAY_MS + 86_400_000 + 7_200_000,  # read two hours after the day ended
                 "assetPositions": [{"position": {"coin": "BTC", "szi": "0.5", "positionValue": "50000"}}],
             },
         )
@@ -215,9 +216,15 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
     if t == "candleSnapshot":
         req = body["req"]
         if req["interval"] == "1h":
-            return httpx.Response(200, json=[{"t": req["startTime"] + h * 3_600_000, "c": "400"} for h in range(24)])
+            hour_px = {"BTC": "100000", "ETH": "4000"}.get(req["coin"], "400")  # TAO otherwise
+            hours = [{"t": req["startTime"] + h * 3_600_000, "c": hour_px} for h in range(24)]
+            if req["coin"] == "BTC":  # the candle opening at the end time too: the next day's, never the day's end
+                hours.append({"t": req["endTime"], "c": "90000"})
+            return httpx.Response(200, json=hours)
         px = "100000" if req["coin"] == "BTC" else "4000"
-        return httpx.Response(200, json=[{"t": req["startTime"] + m * 60_000, "c": px} for m in range(0, 1440, 1)])
+        return httpx.Response(
+            200, json=[{"t": req["startTime"] + m * 60_000, "c": px, "v": "50"} for m in range(0, 1440, 1)]
+        )  # a deep market: no address makes a quarter of its volume
     if t == "portfolio":
         user = body["user"].lower()
         if user in PORTFOLIO_FAILS:
@@ -663,33 +670,19 @@ async def test_past_the_deadline_a_failed_own_fill_history_leaves_only_that_retu
     await hl.close()
 
 
-async def test_points_an_earlier_attempt_stored_still_measure_the_day(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_points_an_earlier_attempt_stored_still_measure_the_day(tmp_path: Path) -> None:
     """The first attempt read A's recorded history (past the day's end) and then failed on its fill history; by the
     retry past the deadline the history read fails. The stored points still give the same average for every
-    validator, and the copy rule still sees where A's history begins, not the scored day."""
-    from kokoah_subnet.mechanism.day import score_day as real
-
+    validator."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     FILLS_FAIL.add(addr_a)
     with pytest.raises(RuntimeError, match="fill history"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
-    first = store.execute_sql(f"select avg_equity_usd, origin_ms from equity_daily where address = '{addr_a}'")[0]
+    first = store.execute_sql(f"select avg_equity_usd from equity_daily where address = '{addr_a}'")[0]
     FILLS_FAIL.clear()
     PORTFOLIO_FAILS.add(addr_a)
-    seen: list[Any] = []
-
-    def spy(inputs: Any, *a: Any, **kw: Any) -> Any:
-        seen.append(inputs)
-        return real(inputs, *a, **kw)
-
-    monkeypatch.setattr("kokoah_subnet.validator.collect.score_day", spy)
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert {r.hotkey: r for r in result.records}[HK_A].eligible
-    a = next(m for m in seen[0].miners if m.hotkey == HK_A)
-    origin_day = datetime.fromtimestamp(first["origin_ms"] / 1000, tz=UTC).strftime("%Y-%m-%d")
-    assert a.record_start == origin_day != DAY
     again = store.execute_sql(f"select avg_equity_usd from equity_daily where address = '{addr_a}'")
     assert again == [{"avg_equity_usd": first["avg_equity_usd"]}]
     await hl.close()
@@ -1348,32 +1341,6 @@ def _sends(user: str, amounts: dict[str, float]) -> list[dict[str, Any]]:
     ]
 
 
-async def test_the_copy_rule_reads_the_same_record_start_on_every_validator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The longest record is where the account's history on the exchange begins (90 days before the day in the fake
-    history), not the first day this validator scored it: a validator that scored A since September and one that
-    starts today give the copy rule the same record start."""
-    from kokoah_subnet.mechanism.day import score_day
-    from kokoah_subnet.validator import collect
-
-    seen: list[dict[str, str | None]] = []
-    real = score_day
-
-    def capture(inputs: Any, params: Any) -> Any:
-        seen.append({m.hotkey: m.record_start for m in inputs.miners})
-        return real(inputs, params)
-
-    monkeypatch.setattr(collect, "score_day", capture)
-    for started_early in (True, False):
-        cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / str(started_early))
-        if started_early:
-            store.put_miner_days("2026-09-01", [{"hotkey": HK_A, "address": addr_a}])
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
-        await hl.close()
-    assert seen == [{HK_A: "2026-07-23", HK_B: "2026-07-23"}] * 2
-
-
 async def test_dust_transfers_cannot_push_a_sub_account_out_of_the_linked_reads(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     sub = "0x" + "ff" * 20
@@ -1572,3 +1539,187 @@ async def test_a_file_published_after_scoring_is_recorded_as_such(
     rows = store.execute_sql("select level, message from errors where stage = 'file recheck'")
     assert len(rows) == 1 and rows[0]["level"] == "note" and rows[0]["message"].startswith("published after scoring")
     await hl.close()
+
+
+async def test_a_coin_whose_volume_is_mostly_the_address_s_own_counts_its_loss_but_not_its_profit(
+    tmp_path: Path,
+) -> None:
+    """In a coin almost nobody else traded, the minute marks are the address's own prices (and its counterparty's),
+    so they say nothing about what the account made there. The day stays known, since a day left out would hide a
+    loss: a profit counts as nothing, a loss counts in full; its fees still count."""
+    # the recorded profit, and what the return counts of it (the 2,000-dollar off-market gift is removed first)
+    for pnl, expected in ((5_000.0, 0.0), (-1_500.0, -3_500.0)):
+        sub = tmp_path / f"pnl{int(pnl)}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+        PNL_DAY[addr_a] = pnl
+
+        def thin_btc(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            req = body.get("req", {})
+            if body["type"] == "candleSnapshot" and req.get("interval") == "1m" and req.get("coin") == "BTC":
+                candles = [{"t": req["startTime"] + m * 60_000, "c": "100000", "v": "0.00001"} for m in range(1440)]
+                return httpx.Response(200, json=candles)  # about $1,440 of BTC traded all day
+            return _info_handler(request)
+
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(thin_btc))
+        try:
+            result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        records = {r.hotkey: r for r in result.records}
+        assert records[HK_A].fees.fills > 0  # the builder fees were paid: they count
+        series = store.equity_series(addr_a, 5)
+        (_, v0, _), (_, v1, moved) = series[-2], series[-1]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)
+        notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'marks'")
+        assert any("profit not counted" in n["message"] for n in notes)
+
+
+async def test_failed_reads_of_the_day_s_end_wait_for_the_deadline_then_leave_the_positions_out(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+
+    def since_end_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == addr_a:
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(since_end_down))
+    with pytest.raises(RuntimeError, match="since the day's end"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 3600)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+    held = store.position_series([addr_a, addr_b], [DAY])
+    assert held[addr_a] == {} and held[addr_b] == {"BTC": [50000.0]}  # only the address that could not be read
+    await hl.close()
+
+
+async def test_a_day_whose_later_fills_cannot_be_read_counts_its_loss_but_not_its_profit(tmp_path: Path) -> None:
+    """Past the deadline, a validator that cannot read the fills since the day ended cannot tell whether the day's own
+    were cut: its loss counts, its profit does not."""
+    end = DAY_MS + 86_400_000
+    # the recorded profit, and what the return counts of it (the 2,000-dollar off-market gift is removed first)
+    for pnl, expected in ((5_000.0, 0.0), (-1_500.0, -3_500.0)):
+        sub = tmp_path / f"pnl{int(pnl)}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+
+        def since_end_down(request: httpx.Request, a: str = addr_a) -> httpx.Response:
+            body = json.loads(request.content)
+            if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == a:
+                return httpx.Response(500, json={"error": "down"})
+            return _info_handler(request)
+
+        PNL_DAY[addr_a] = pnl
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(since_end_down))
+        try:
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)
+        notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'fill history'")
+        assert any("could not be read" in n["message"] for n in notes)
+
+
+async def test_positions_are_left_out_when_the_fills_since_the_day_s_end_may_be_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "FILLS_KEPT", 1)  # the exchange holds this many fills of an address
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+    later = [{"coin": "BTC", "px": "100000", "sz": "0.1", "side": "B", "time": end + 60_000, "crossed": True,
+              "fee": "1", "closedPnl": "0", "startPosition": "0.4", "hash": "0x1", "tid": 9}]  # fmt: skip
+
+    def busy(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == addr_a:
+            return httpx.Response(200, json=later)
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.position_series([addr_a], [DAY])[addr_a] == {}
+    notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'positions'")
+    assert any("left out" in n["message"] for n in notes)
+    await hl.close()
+
+
+async def test_a_day_the_exchange_may_have_cut_counts_its_loss_but_not_its_profit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thousands of fills after the day ends can push the day's own fills beyond what the exchange keeps, and the
+    thin-coin and off-market checks with them: such a day keeps its loss and loses its profit, like a thin one; its
+    positions are still recorded (the fills since are few)."""
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "FILLS_KEPT", 2)  # the day's one fill and one in the hour after make two
+    end = DAY_MS + 86_400_000
+    # the recorded profit, and what the return counts of it (the 2,000-dollar off-market gift is removed first)
+    for pnl, expected in ((5_000.0, 0.0), (-1_500.0, -3_500.0)):
+        sub = tmp_path / f"pnl{int(pnl)}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+        later = [{"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 60_000, "crossed": True,
+                  "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10}]  # fmt: skip
+
+        def busy(request: httpx.Request, a: str = addr_a, fills: list[Any] = later) -> httpx.Response:
+            body = json.loads(request.content)
+            if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == a:
+                return httpx.Response(200, json=fills)
+            return _info_handler(request)
+
+        PNL_DAY[addr_a] = pnl
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(busy))
+        try:
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)  # a profit not counted, a loss kept
+        assert store.position_series([addr_a], [DAY])[addr_a] != {}
+
+
+async def test_a_validator_that_reads_later_never_counts_a_profit_it_could_not_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The day's one fill and one 90 minutes after the day ended make two, the limit here. A validator that read the
+    account before that later fill sees one and counts the day's profit; one that read after it sees two, so the
+    day's own fills may be gone from what it read, and it counts none (its loss would still count)."""
+    from kokoah_subnet.validator import collect
+
+    monkeypatch.setattr(collect, "FILLS_KEPT", 2)
+    end = DAY_MS + 86_400_000
+    later: list[dict[str, Any]] = [
+        {"coin": "ETH", "px": "4000", "sz": "0.1", "side": "B", "time": end + 90 * 60_000, "crossed": True,
+         "fee": "1", "closedPnl": "0", "startPosition": "0", "hash": "0x2", "tid": 10},
+    ]  # fmt: skip
+    # the recorded profit is 5,000 dollars, 3,000 once the 2,000-dollar off-market gift is removed
+    for read_at, expected in ((end + 65 * 60_000, 3_000.0), (end + 120 * 60_000, 0.0)):
+        sub = tmp_path / f"read{read_at}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+
+        def reads_at(request: httpx.Request, a: str = addr_a, at: int = read_at) -> httpx.Response:
+            body = json.loads(request.content)
+            if body["type"] == "clearinghouseState" and body["user"].lower() == a:
+                return httpx.Response(200, json={**_info_handler(request).json(), "time": at})
+            if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == a:
+                return httpx.Response(200, json=[f for f in later if int(f["time"]) <= body["endTime"]])
+            return _info_handler(request)
+
+        PNL_DAY[addr_a] = 5_000.0
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(reads_at))
+        try:
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6), read_at

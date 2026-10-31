@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,7 +18,8 @@ from kokoah_subnet.mechanism.fills import Fill, parse_user_fills
 
 MAINNET_INFO = "https://api.hyperliquid.xyz/info"
 MAINNET_EXPLORER = "https://rpc.hyperliquid.xyz/explorer"
-PAGE = 2000  # fills per response; the API keeps the most recent 10,000 per address
+PAGE = 2000  # fills per response
+FILLS_KEPT = 10_000  # the API keeps the most recent 10,000 fills per address
 CANDLES_KEPT = 5000  # candles per coin and interval the API keeps (minute candles: about three and a half days)
 
 # request weights per info type (the exchange budgets 1,200 weight per minute per address; documented values,
@@ -308,27 +309,6 @@ def flows_from_updates(user: str, updates: list[dict[str, Any]]) -> float:
     return sum(ledger_amount(user, u.get("delta", {})) for u in updates)
 
 
-def positions_from_state(state: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """Per perp coin: signed notional (positive long) and the position's details, from a clearinghouse state."""
-    out: dict[str, dict[str, Any]] = {}
-    for ap in state.get("assetPositions", []):
-        pos = ap.get("position", {})
-        szi = float(pos.get("szi", 0.0) or 0.0)
-        value = float(pos.get("positionValue", 0.0) or 0.0)
-        if szi == 0 or value == 0:
-            continue
-        lev = pos.get("leverage", {})
-        out[str(pos["coin"])] = {
-            "notional": value if szi > 0 else -value,
-            "szi": szi,
-            "entry_px": float(pos["entryPx"]) if pos.get("entryPx") else None,
-            "unrealized_pnl": float(pos["unrealizedPnl"]) if pos.get("unrealizedPnl") else None,
-            "leverage": float(lev.get("value", 0.0)) if isinstance(lev, dict) and lev.get("value") else None,
-            "raw": dict(pos),
-        }
-    return out
-
-
 def daily_equity_from_portfolio(
     windows: list[Any], prefer: tuple[str, ...] = ("perpMonth", "month")
 ) -> list[tuple[str, float, float]]:
@@ -376,6 +356,53 @@ def mark_by_minute(candles: list[dict[str, Any]]) -> dict[int, float]:
             out[int(c["t"]) // 60_000 * 60_000] = float(c["c"])
         except (KeyError, TypeError, ValueError):
             continue
+    return out
+
+
+def day_volume_usd(candles: list[dict[str, Any]]) -> float | None:
+    """A coin's traded notional over the candles, USD (each candle's volume at its close); None when the candles
+    carry no volume."""
+    total, seen = 0.0, False
+    for c in candles:
+        try:
+            total += float(c["v"]) * float(c["c"])
+            seen = True
+        except (KeyError, TypeError, ValueError):
+            continue
+    return total if seen else None
+
+
+def end_of_day_positions(
+    state: Mapping[str, Any], later: Iterable[Fill], price_of: Mapping[str, float | None]
+) -> dict[str, dict[str, Any]]:
+    """Per main perpetual: the position at the day's end, the same whenever a validator reads it. A coin traded since
+    the day ended takes the size the exchange records just before its first fill since (`later`, oldest first, up to
+    the state's time), or else the state's size less what those fills moved; any other coin keeps the state's size.
+    Valued at the coin's last mark of the day (`price_of`; a coin without one is left out). Positive is long.
+    Builder-deployed markets (`dex:COIN`) are not in the main state, so they are left out."""
+    sizes: dict[str, float] = {}
+    for ap in state.get("assetPositions", []):
+        pos = ap.get("position", {})
+        try:
+            sizes[str(pos["coin"])] = float(pos.get("szi", 0.0) or 0.0)
+        except (KeyError, TypeError, ValueError):
+            continue
+    moved: dict[str, float] = {}
+    first: dict[str, float | None] = {}
+    for f in sorted(later, key=lambda f: f.time_ms):
+        if ":" in f.coin:
+            continue
+        first.setdefault(f.coin, f.start_position)
+        moved[f.coin] = moved.get(f.coin, 0.0) + (f.sz if f.side == "B" else -f.sz)
+    for coin, delta in moved.items():
+        start = first.get(coin)
+        sizes[coin] = start if start is not None else sizes.get(coin, 0.0) - delta
+    out: dict[str, dict[str, Any]] = {}
+    for coin, szi in sorted(sizes.items()):
+        px = price_of.get(coin)
+        if ":" in coin or abs(szi) < 1e-9 or not px:
+            continue
+        out[coin] = {"notional": szi * px, "szi": szi, "raw": {"day_end_px": px}}
     return out
 
 

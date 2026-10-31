@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "6.3"
+SPEC_VERSION = "6.4"
 
 
 @dataclass(frozen=True)
@@ -38,8 +38,6 @@ class Params:
     skill_volume_days: int = 30
     entry_days: int = 90  # entry test: PSR of the capped daily returns over this many days
     entry_psr: float = 0.95  # must reach this (benchmark `psr_benchmark`)
-    copy_correlation: float = 0.9  # bound accounts whose daily returns correlate above this
-    copy_min_days: int = 30  # over at least this many common days share one skill weight
     agent_bonus: float = 0.10  # skill weight x (1 + bonus) for a verified sealed-machine agent account
     # activity gates (section 9): for the skill pool
     gate_days: int = 30
@@ -65,6 +63,7 @@ class Params:
     mirror_exclude_share: float = 0.25
     mirror_zero_share: float = 0.50
     mirror_zero_days: int = 30
+    thin_market_share: float = 0.25  # above this share of a coin's day volume, the address's own trades set its marks
     # calendar: day index 0 (penalty windows count from here; the same for every validator)
     day_zero: str = "2026-10-19"
     # chain (section 1)
