@@ -707,6 +707,7 @@ def create_app(
         }
 
     links_lock = threading.Lock()
+    unlink_lock = threading.Lock()
     links_read = [float("-inf")]  # when the chain's bindings were last read (the service's clock), worked or not
     links_known = [False]  # whether that read worked: only then is a link missing from them known to be missing
 
@@ -788,11 +789,13 @@ def create_app(
             raise HTTPException(status_code=403, detail="not signed by the address")
         require_registered(hk)
         require_link(hk, a)
-        received_at = clock()
-        with engine.begin() as c:
+        # the time is taken and the row committed together, one at a time, so rows are listed in the order they
+        # were committed and a reader that keeps its place misses none
+        with unlink_lock, engine.begin() as c:
             row = c.execute(select(unlinks).where(unlinks.c.hotkey == hk, unlinks.c.address == a)).first()
             if row is not None:
                 return {**unlink_row(row), "existing": True}
+            received_at = clock()
             c.execute(insert(unlinks).values(hotkey=hk, address=a, time_ms=u.time_ms, signature=u.signature,
                                              received_at=received_at))  # fmt: skip
         return {**unlink_row(u, received_at), "existing": False}
