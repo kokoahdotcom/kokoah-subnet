@@ -117,8 +117,10 @@ def test_a_service_role_owns_its_database_and_nothing_else(tmp_path: Path) -> No
     password = next(line for line in env.splitlines() if line.startswith("KOKOAH_SUBNET_ROLE_KOKOAH_AGENTS_PASSWORD="))
     commands = [line for line in sent.splitlines() if line.startswith(("exec ", "ps", "run ", "start "))]
     assert commands and not any(password.split("=", 1)[1] in line for line in commands)  # never an argument
+    (tmp_path / "docker.log").write_text("")  # only the second run's commands from here
     again = _run_db(tmp_path, "owner-role", "kokoah_agents", "kokoah_subnet_agents")
-    assert (tmp_path / "db.env").read_text() == env and "OWNER TO kokoah_agents" in again  # the same password kept
+    assert (tmp_path / "db.env").read_text() == env  # the same password kept
+    assert "ALTER DATABASE kokoah_subnet_agents OWNER TO kokoah_agents;" in again  # and the grants made again
 
 
 def test_a_service_role_never_takes_a_reserved_or_odd_name(tmp_path: Path) -> None:
