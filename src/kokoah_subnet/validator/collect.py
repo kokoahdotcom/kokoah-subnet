@@ -923,6 +923,7 @@ async def collect_and_score(
         cluster_of=cluster_of,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         owner_group_of=owner_group_of,
+        earlier_fills=lambda a: store.counted_fills(a, day, params.copy_lookback_days),
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
     )
     result = score_day(inputs, params)
