@@ -1596,6 +1596,35 @@ async def test_failed_reads_of_the_day_s_end_wait_for_the_deadline_then_leave_th
     await hl.close()
 
 
+async def test_a_day_whose_later_fills_cannot_be_read_counts_its_loss_but_not_its_profit(tmp_path: Path) -> None:
+    """Past the deadline, a validator that cannot read the fills since the day ended cannot tell whether the day's own
+    were cut: its loss counts, its profit does not."""
+    end = DAY_MS + 86_400_000
+    # the recorded profit, and what the return counts of it (the 2,000-dollar off-market gift is removed first)
+    for pnl, expected in ((5_000.0, 0.0), (-1_500.0, -3_500.0)):
+        sub = tmp_path / f"pnl{int(pnl)}"
+        sub.mkdir()
+        cfg, store, hl, chain, addr_a, addr_b = _setup(sub)
+
+        def since_end_down(request: httpx.Request, a: str = addr_a) -> httpx.Response:
+            body = json.loads(request.content)
+            if body["type"] == "userFillsByTime" and body.get("startTime") == end and body["user"].lower() == a:
+                return httpx.Response(500, json={"error": "down"})
+            return _info_handler(request)
+
+        PNL_DAY[addr_a] = pnl
+        hl._client = httpx.AsyncClient(transport=httpx.MockTransport(since_end_down))
+        try:
+            await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end / 1000 + 13 * 3600)
+        finally:
+            PNL_DAY.pop(addr_a, None)
+            await hl.close()
+        (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
+        assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)
+        notes = store.execute_sql(f"select message from errors where address = '{addr_a}' and stage = 'fill history'")
+        assert any("could not be read" in n["message"] for n in notes)
+
+
 async def test_positions_are_left_out_when_the_fills_since_the_day_s_end_may_be_cut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

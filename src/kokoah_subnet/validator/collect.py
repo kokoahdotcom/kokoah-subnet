@@ -742,14 +742,17 @@ async def collect_and_score(
         # does not. This depends on when a validator reads: validators score a day within the hour after its builder
         # file comes out, so they read alike, but one that reads later sees more fills since the day ended and, for an
         # address near the limit, may find the day cut where an earlier one did not. It cannot see what was dropped,
-        # so it never counts a profit it could not check
+        # so it never counts a profit it could not check. Nor does one that could not read the fills since (past the
+        # deadline): it cannot tell
         seen = len(public) + len(later or [])
-        cut = seen >= FILLS_KEPT
+        unread = read_state is not None and later is None
+        cut = seen >= FILLS_KEPT or unread
         if cut:
             store.put_note(
                 day, hk, address, "fill history",
-                f"{seen} fills read for the day and since it ended: the exchange may no longer hold all of the day's, "
-                "so its profit is not counted (a loss is)",
+                ("the fills since the day ended could not be read" if unread and seen < FILLS_KEPT
+                 else f"{seen} fills read for the day and since it ended")
+                + ": the exchange may no longer hold all of the day's, so its profit is not counted (a loss is)",
             )  # fmt: skip
         try:
             if read_state is None:
