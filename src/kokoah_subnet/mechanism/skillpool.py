@@ -163,16 +163,19 @@ def copy_leader(
     registered_block: Mapping[str, int | None],
     params: Params,
 ) -> str:
-    """The member a copy group follows: the one that led the most notional (`led[x][y]`: smoothed over the days, see
-    `copy_leads`), when that lead is at least `copy_lead_min_usd` and `copy_lead_margin` times the next member's.
-    Without such a lead, the earliest registration on the subnet (the same on every validator, and no later account
-    can have an earlier one), then the hotkey order."""
-    totals = {k: sum(v for y, v in led.get(k, {}).items() if y in group and y != k) for k in group}
-    ranked = sorted(group, key=lambda k: totals[k], reverse=True)
-    best = totals[ranked[0]]
-    runner_up = totals[ranked[1]] if len(ranked) > 1 else 0.0
-    if best >= params.copy_lead_min_usd and best >= params.copy_lead_margin * runner_up:
-        return ranked[0]
+    """The member a copy group follows: the one that leads every other member head to head (`led[x][y]`: smoothed
+    over the days, see `copy_leads`) by at least `copy_lead_min_usd` and `copy_lead_margin` times what that member
+    led it by, so a copier's second account copying the copier makes up no lead. Without such a member, the earliest
+    registration on the subnet (the same on every validator, and no later account can have an earlier one), then the
+    hotkey order."""
+
+    def beats(x: str, y: str) -> bool:
+        ahead, behind = led.get(x, {}).get(y, 0.0), led.get(y, {}).get(x, 0.0)
+        return ahead >= params.copy_lead_min_usd and ahead >= params.copy_lead_margin * behind
+
+    ahead_of_all = [x for x in group if all(beats(x, y) for y in group if y != x)]
+    if len(ahead_of_all) == 1:
+        return ahead_of_all[0]
     return min(group, key=lambda k: (registered_block.get(k) is None, registered_block.get(k) or 0, k))
 
 
