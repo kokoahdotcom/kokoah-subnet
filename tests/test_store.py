@@ -256,26 +256,6 @@ def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
         Store(path, create=False)
 
 
-def test_the_copy_rule_looks_back_on_each_day_s_own_orders(tmp_path: Path) -> None:
-    from kokoah_subnet.mechanism import Fill
-
-    s = Store(tmp_path / "v.sqlite")
-    a = "0x" + "aa" * 20
-
-    def fill(t: int, sz: float = 2.0, coin: str = "BTC") -> Fill:
-        return Fill(t, a, coin, "B", 100.0, sz, True, 0.0)
-
-    s.put_history_orders(a, "2026-10-26", [fill(1)])  # four days before: outside the three
-    s.put_history_orders(a, "2026-10-27", [fill(2), fill(2, 1.0), fill(3, coin="ETH")])  # one order in two pieces
-    s.put_history_orders(a, "2026-10-29", [fill(4)])
-    s.put_history_orders("0x" + "bb" * 20, "2026-10-29", [fill(5)])
-    s.put_history_orders(a, "2026-10-30", [fill(6)])  # the day being scored: not "before"
-    got = s.history_orders(a.upper().replace("0X", "0x"), "2026-10-30", 3)
-    assert [(f.time_ms, f.coin, f.notional) for f in got] == [(2, "BTC", 300.0), (3, "ETH", 200.0), (4, "BTC", 200.0)]
-    s.put_history_orders(a, "2026-11-08", [fill(7)])  # a week on: the old days are gone
-    assert [(f.time_ms, f.notional) for f in s.history_orders(a, "2026-11-09", 30)] == [(7, 200.0)]
-
-
 def test_the_copy_rule_s_leads_survive_the_record(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
     state = MinerState(g=0.2, led=(("hkB", 1234.5),), matched=(("hkB", 9876.0), ("hkC", 12.0)))

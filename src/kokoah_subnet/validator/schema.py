@@ -292,20 +292,6 @@ ledger_updates = Table(  # deposits, withdrawals, transfers: the raw ledger reco
     UniqueConstraint("address", "time_ms", "hash", "type", name="uq_ledger"),
 )
 
-history_orders = Table(  # the address's own orders of each day from its whole fill history (builder code or not), one
-    # row per coin, side and millisecond: what the copy rule looks back on; a week is kept
-    "history_orders",
-    metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("address", String(42), nullable=False),
-    Column("day", String(10), nullable=False),
-    Column("coin", String(32), nullable=False),
-    Column("side", String(8), nullable=False),
-    Column("time_ms", BigInteger, nullable=False),
-    Column("notional", Float, nullable=False),
-    Index("ix_history_orders_address_day", "address", "day"),
-)
-
 positions = Table(  # end-of-day positions per coin (the mirror rule reads notional)
     "positions",
     metadata,

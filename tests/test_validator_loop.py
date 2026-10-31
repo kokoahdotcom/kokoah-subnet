@@ -1634,7 +1634,7 @@ async def test_a_day_the_exchange_may_have_cut_counts_its_loss_but_not_its_profi
 ) -> None:
     """Thousands of fills after the day ends can push the day's own fills beyond what the exchange keeps, and the
     thin-coin and off-market checks with them: such a day keeps its loss and loses its profit, like a thin one; its
-    orders are not kept for the copy rule (they may be partial); its positions still are (the fills since are few)."""
+    positions are still recorded (the fills since are few)."""
     from kokoah_subnet.validator import collect
 
     monkeypatch.setattr(collect, "FILLS_KEPT", 2)  # the day's one fill and one in the hour after make two
@@ -1662,6 +1662,4 @@ async def test_a_day_the_exchange_may_have_cut_counts_its_loss_but_not_its_profi
             await hl.close()
         (_, v0, _), (_, v1, moved) = store.equity_series(addr_a, 5)[-2:]
         assert v1 - v0 - moved == pytest.approx(expected, abs=1e-6)  # a profit not counted, a loss kept
-        assert store.history_orders(addr_a, store.day_after(DAY), 3) == []
-        assert store.history_orders(addr_b, store.day_after(DAY), 3) != []
         assert store.position_series([addr_a], [DAY])[addr_a] != {}

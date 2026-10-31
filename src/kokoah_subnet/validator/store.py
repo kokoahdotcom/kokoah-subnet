@@ -17,7 +17,7 @@ from sqlalchemy import case, create_engine, delete, func, insert, select, text
 from sqlalchemy.engine import Connection, Engine
 
 from kokoah_subnet.binding import AcceptedBinding, Unlink
-from kokoah_subnet.mechanism import Fill, MinerState
+from kokoah_subnet.mechanism import MinerState
 
 from . import schema as S
 from .migrations import apply_migrations, current_version, latest_version
@@ -724,47 +724,6 @@ class Store:
             batch = [dict(day=day, **dict(r)) for r in rows]
             for i in range(0, len(batch), 500):
                 c.execute(insert(S.fills), batch[i : i + 500])
-
-    HISTORY_ORDER_DAYS = 7  # days of history orders kept per address
-
-    def put_history_orders(self, address: str, day: str, fills: Iterable[Fill]) -> None:
-        """The address's orders of `day` from its own fill history (`as_orders`: the fills of one millisecond, or of
-        one TWAP order, as one order). Days older than a week are dropped."""
-        from kokoah_subnet.mechanism.skillpool import as_orders
-
-        a = address.lower()
-        rows = [
-            {"address": a, "day": day, "coin": coin, "side": side, "time_ms": t, "notional": n}
-            for coin, side, t, n in as_orders(fills)
-        ]
-        with self._engine.begin() as c:
-            c.execute(
-                delete(S.history_orders).where(
-                    S.history_orders.c.address == a,
-                    (S.history_orders.c.day == day)
-                    | (S.history_orders.c.day < _days_before(day, self.HISTORY_ORDER_DAYS)),
-                )
-            )
-            for i in range(0, len(rows), 500):
-                c.execute(insert(S.history_orders), rows[i : i + 500])
-
-    def history_orders(self, address: str, day: str, days: int) -> list[Fill]:
-        """The address's orders of the `days` days before `day` (each as one fill of its notional), oldest first:
-        what the copy rule looks back on."""
-        with self._engine.connect() as c:
-            rows = c.execute(
-                select(S.history_orders.c.time_ms, S.history_orders.c.coin, S.history_orders.c.side,
-                       S.history_orders.c.notional)
-                .where(
-                    S.history_orders.c.address == address.lower(),
-                    S.history_orders.c.day >= _days_before(day, days),
-                    S.history_orders.c.day < day,
-                )
-                .order_by(S.history_orders.c.time_ms)
-            ).all()  # fmt: skip
-        return [
-            Fill(int(t), address.lower(), str(coin), str(side), float(n), 1.0, True, 0.0) for t, coin, side, n in rows
-        ]
 
     def put_miner_days(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
         with self._engine.begin() as c:

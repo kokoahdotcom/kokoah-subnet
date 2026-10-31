@@ -413,7 +413,6 @@ async def collect_and_score(
     price_usd = price_tao * tao_usd
 
     fills_by_address = by_user(fills)
-    history_of: dict[str, list[Fill]] = {}  # each address's own fill history of the day (main perpetuals)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
     # agent accounts: challenge every sealed machine and verify its attestation (the skill bonus)
     if agent_status is None:
@@ -733,9 +732,9 @@ async def collect_and_score(
         later = await fills_since_end(hk, address, read_state) if read_state is not None else None
         # the exchange keeps an address's latest FILLS_KEPT fills: with that many from the day's start to an hour
         # after its end (a fixed window, so every validator decides alike once the hour is over), part of the day's
-        # own history may be gone, and with it what the thin-coin and off-market checks and the copy rule look at.
-        # Such a day is treated like a thin one: its loss counts, its profit does not; and its orders are not kept
-        # for the copy rule. A validator whose own read since may have been cut decides the same, whatever the hour
+        # own history may be gone, and with it what the thin-coin and off-market checks look at. Such a day is
+        # treated like a thin one: its loss counts, its profit does not. A validator whose own read since may have
+        # been cut decides the same, whatever the hour
         if read_state is not None and later is not None and not past_deadline:
             if int(read_state.get("time") or clock * 1000) < end_ms + CUT_WINDOW_MS:
                 raise RuntimeError(f"the hour after {day} is not over yet for {address}")
@@ -748,9 +747,6 @@ async def collect_and_score(
                 f"{since_start} fills from the day's start to an hour after it: the exchange may no longer hold all "
                 "of the day's, so its profit is not counted (a loss is)",
             )  # fmt: skip
-        if history_read and not cut:  # the copy rule's look back: the day's own orders, builder code or not
-            history_of[address] = [f for f in public if is_perp(f.coin) and ":" not in f.coin]
-            store.put_history_orders(address, day, history_of[address])
         try:
             if read_state is None:
                 raise RuntimeError("no account state")
