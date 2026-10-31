@@ -478,7 +478,8 @@ def _owner(args: argparse.Namespace) -> int:
         from kokoah_subnet.validator.store import Store
 
         db_url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL", "")
-        store = Store(db_url) if db_url else None
+        # the validator creates and migrates the record; the burn only adds its rows (scripts/db.sh burn-role)
+        store = Store(db_url, create=False) if db_url else None
 
         async def _burn() -> int:
             async with bt.Subtensor(args.network) as client:

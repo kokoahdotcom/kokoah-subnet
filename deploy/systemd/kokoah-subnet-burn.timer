@@ -1,0 +1,9 @@
+[Unit]
+Description=Kokoah subnet burn, every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:40:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
