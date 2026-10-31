@@ -252,7 +252,8 @@ def _status(pid: int | str) -> dict[bytes, bytes] | None:
         status = Path(f"/proc/{pid}/status").read_bytes()
     except OSError:
         return None
-    return dict(line.split(b":", 1) for line in status.splitlines() if line.startswith((b"Uid:", b"State:", b"PPid:")))
+    keep = (b"Uid:", b"State:", b"PPid:", b"Threads:")
+    return dict(line.split(b":", 1) for line in status.splitlines() if line.startswith(keep))
 
 
 def _real_uid(fields: dict[bytes, bytes]) -> int | None:
@@ -263,12 +264,23 @@ def _real_uid(fields: dict[bytes, bytes]) -> int | None:
         return None
 
 
+def _running(fields: dict[bytes, bytes]) -> bool:
+    """Not an exited process: a zombie (Z) with threads left is still running (its main thread exited, another goes
+    on), only one with a single thread is done."""
+    if not fields.get(b"State", b"").strip().startswith((b"Z", b"X")):
+        return True
+    try:
+        return int(fields.get(b"Threads", b"1").strip() or 1) > 1
+    except ValueError:
+        return True
+
+
 def processes_of(uid: int) -> list[int]:
-    """The live (not yet exited) processes whose real user is `uid`."""
+    """The processes whose real user is `uid` and that still run."""
     found = []
     for entry in os.scandir("/proc"):
         if entry.name.isdigit() and (fields := _status(entry.name)) is not None:
-            if _real_uid(fields) == uid and not fields.get(b"State", b"").strip().startswith((b"Z", b"X")):
+            if _real_uid(fields) == uid and _running(fields):
                 found.append(int(entry.name))
     return found
 
@@ -404,7 +416,7 @@ def reap_orphans(keep: int | None = None) -> None:
         if not entry.name.isdigit() or int(entry.name) == keep:
             continue
         fields = _status(entry.name)
-        if fields and fields.get(b"PPid", b"").strip() == me and fields.get(b"State", b"").strip().startswith(b"Z"):
+        if fields and fields.get(b"PPid", b"").strip() == me and not _running(fields):
             try:
                 os.waitpid(int(entry.name), os.WNOHANG)
             except ChildProcessError:
