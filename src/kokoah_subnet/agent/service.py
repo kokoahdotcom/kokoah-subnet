@@ -35,6 +35,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import math
 import os
 import secrets
 import threading
@@ -67,6 +68,7 @@ from sqlalchemy import (
     insert,
     literal,
     select,
+    text,
     tuple_,
 )
 from starlette.concurrency import run_in_threadpool
@@ -791,13 +793,17 @@ def create_app(
             raise HTTPException(status_code=403, detail="not signed by the address")
         require_registered(hk)
         require_link(hk, a)
-        # the time is taken and the row committed together, one at a time, so rows are listed in the order they
-        # were committed and a reader that keeps its place misses none
+        # the time is taken and the row committed together, one at a time (on PostgreSQL the table is locked, so
+        # across processes too), and each row's time comes after every earlier row's even if the clock went back:
+        # rows are listed in the order they were committed, and a reader that keeps its place misses none
         with unlink_lock, engine.begin() as c:
+            if c.dialect.name == "postgresql":
+                c.execute(text(f"LOCK TABLE {unlinks.name} IN SHARE ROW EXCLUSIVE MODE"))
             row = c.execute(select(unlinks).where(unlinks.c.hotkey == hk, unlinks.c.address == a)).first()
             if row is not None:
                 return {**unlink_row(row), "existing": True}
-            received_at = clock()
+            latest = c.execute(select(func.max(unlinks.c.received_at))).scalar()
+            received_at = clock() if latest is None else max(clock(), math.nextafter(float(latest), math.inf))
             c.execute(insert(unlinks).values(hotkey=hk, address=a, time_ms=u.time_ms, signature=u.signature,
                                              received_at=received_at))  # fmt: skip
         return {**unlink_row(u, received_at), "existing": False}

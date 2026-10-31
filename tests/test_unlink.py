@@ -194,6 +194,29 @@ def test_the_unlink_list_comes_in_pages_oldest_first_and_misses_none(tmp_path: P
     assert c.get("/unlinks", params={"after": "nonsense"}).status_code == 400
 
 
+def test_an_unlink_filed_after_the_clock_went_back_still_comes_after_a_reader_s_place(tmp_path: Path) -> None:
+    clock = Clock()
+    keys = [Account.create() for _ in range(3)]
+    app = create_app(tmp_path / "svc", verify=lambda m, s, h: False, is_registered=lambda hk: True, clock=clock,
+                     netuid=NETUID)  # fmt: skip
+    c = TestClient(app)
+
+    def file(key: Any) -> None:
+        t = int(clock.now * 1000)
+        body = {"hotkey": H1, "address": key.address, "time_ms": t,
+                "signature": sign_unlink(key.key, NETUID, H1, key.address, t)}  # fmt: skip
+        assert c.post("/unlinks", json=body).status_code == 200
+
+    file(keys[0])
+    last = c.get("/unlinks").json()["unlinks"][-1]
+    place = f"{last['received_at']!r}|{last['hotkey']}|{last['address']}"  # where a reader stopped
+    clock.now -= 600  # the clock went back
+    file(keys[1])
+    file(keys[2])  # and the same instant again
+    later = [u["address"] for u in c.get("/unlinks", params={"after": place}).json()["unlinks"]]
+    assert sorted(later) == sorted(k.address.lower() for k in keys[1:])
+
+
 async def test_a_validator_reads_every_page_and_checks_each_signature_once(monkeypatch: Any) -> None:
     owners = [Account.create() for _ in range(3)]
     rows = [signed(o, H1, ms("2026-10-24") + i) for i, o in enumerate(owners)]
