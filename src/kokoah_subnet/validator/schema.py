@@ -208,7 +208,7 @@ miner_days = Table(
     Column("entry_psr", Float),
     Column("entry_pass", Boolean),
     Column("agent_verified", Boolean),
-    Column("copy_group", Text),
+    Column("copy_group", Text),  # no longer written (each account is weighed on its own record)
     Column("skill_pool_reason", String(64)),
 )
 
