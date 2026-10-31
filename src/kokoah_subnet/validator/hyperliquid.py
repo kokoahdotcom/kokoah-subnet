@@ -374,9 +374,11 @@ def day_volume_usd(candles: list[dict[str, Any]]) -> float | None:
 def end_of_day_positions(
     state: Mapping[str, Any], later: Iterable[Fill], price_of: Mapping[str, float | None]
 ) -> dict[str, dict[str, Any]]:
-    """Per perp coin: the position at the day's end, the same whenever a validator reads it: the state's size less
-    what the fills since the day's end (`later`, up to the state's time) moved, valued at the coin's last minute mark
-    of the day (`price_of`; a coin without one is left out). Positive is long."""
+    """Per main perpetual: the position at the day's end, the same whenever a validator reads it. A coin traded since
+    the day ended takes the size the exchange records just before its first fill since (`later`, oldest first, up to
+    the state's time), or else the state's size less what those fills moved; any other coin keeps the state's size.
+    Valued at the coin's last mark of the day (`price_of`; a coin without one is left out). Positive is long.
+    Builder-deployed markets (`dex:COIN`) are not in the main state, so they are left out."""
     sizes: dict[str, float] = {}
     for ap in state.get("assetPositions", []):
         pos = ap.get("position", {})
@@ -384,12 +386,20 @@ def end_of_day_positions(
             sizes[str(pos["coin"])] = float(pos.get("szi", 0.0) or 0.0)
         except (KeyError, TypeError, ValueError):
             continue
-    for f in later:
-        sizes[f.coin] = sizes.get(f.coin, 0.0) - (f.sz if f.side == "B" else -f.sz)
+    moved: dict[str, float] = {}
+    first: dict[str, float | None] = {}
+    for f in sorted(later, key=lambda f: f.time_ms):
+        if ":" in f.coin:
+            continue
+        first.setdefault(f.coin, f.start_position)
+        moved[f.coin] = moved.get(f.coin, 0.0) + (f.sz if f.side == "B" else -f.sz)
+    for coin, delta in moved.items():
+        start = first.get(coin)
+        sizes[coin] = start if start is not None else sizes.get(coin, 0.0) - delta
     out: dict[str, dict[str, Any]] = {}
     for coin, szi in sorted(sizes.items()):
         px = price_of.get(coin)
-        if abs(szi) < 1e-9 or not px:
+        if ":" in coin or abs(szi) < 1e-9 or not px:
             continue
         out[coin] = {"notional": szi * px, "szi": szi, "raw": {"day_end_px": px}}
     return out
