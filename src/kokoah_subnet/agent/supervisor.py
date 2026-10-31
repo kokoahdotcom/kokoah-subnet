@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import errno
 import json
 import logging
 import os
@@ -294,11 +295,17 @@ def _kill_if_owned(pid: int, uid: int) -> None:
     looked at, never to another that got its id since."""
     fd = _libc.syscall(SYS_PIDFD_OPEN, pid, 0)
     if fd < 0:
-        return  # gone already
+        err = ctypes.get_errno()
+        if err == errno.ESRCH:
+            return  # gone already
+        raise OSError(err, f"pidfd_open of {pid}: {os.strerror(err)}")
     try:
         fields = _status(pid)
         if fields is not None and _real_uid(fields) == uid:
-            _libc.syscall(SYS_PIDFD_SEND_SIGNAL, fd, signal.SIGKILL, None, 0)
+            if _libc.syscall(SYS_PIDFD_SEND_SIGNAL, fd, signal.SIGKILL, None, 0) != 0:
+                err = ctypes.get_errno()
+                if err != errno.ESRCH:  # it exited meanwhile: fine; anything else is a kill that did not happen
+                    raise OSError(err, f"pidfd_send_signal to {pid}: {os.strerror(err)}")
     finally:
         os.close(fd)
 
@@ -314,7 +321,7 @@ def kill_user_processes(uid: int, rounds: int = 1000) -> None:
         for pid in pids:
             _kill_if_owned(pid, uid)
         time.sleep(0.005)
-    log.warning("processes of uid %d still alive after %d rounds", uid, rounds)
+    raise RuntimeError(f"processes of uid {uid} still running after {rounds} rounds: {processes_of(uid)}")
 
 
 class AgentRunner:
@@ -344,12 +351,11 @@ class AgentRunner:
             except ProcessLookupError:
                 pass
             proc.wait()
-        try:
-            if self.uid is not None:
-                kill_user_processes(self.uid)
-            reap_orphans(keep=proc.pid if proc is not None and proc.returncode is None else None)
-        except Exception:  # a cleanup that failed is tried again at the next start, exit or stop
-            log.exception("could not end the agent's processes")
+        # a cleanup that fails raises: no new agent is started beside what is left (the runner tries again after
+        # its pause), and a stop says it did not work
+        if self.uid is not None:
+            kill_user_processes(self.uid)
+        reap_orphans(keep=proc.pid if proc is not None and proc.returncode is None else None)
 
     def end_all(self) -> None:
         with self._lock:
