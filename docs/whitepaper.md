@@ -442,8 +442,8 @@ s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
 w_i        = s_i × v_i × (1.1 for a verified agent)       when entry holds, else 0
 copies     = in a group with daily-return correlation > 0.9 over ≥ 30 common days, only the leader keeps its w
-             (the leader trades first on the same coin and side, by notional, smoothed over the days; else the
-             earliest registration)
+             (the leader's orders come first on the same coin and side, matched up to 3 days back, by notional,
+             smoothed over the days; without a clear lead, the earliest registration)
 ```
 
 The agent check, by each validator:
