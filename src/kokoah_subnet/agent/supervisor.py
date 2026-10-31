@@ -334,7 +334,7 @@ class AgentRunner:
             proc.wait()
         if self.uid is not None:
             kill_user_processes(self.uid)
-        reap_orphans()
+        reap_orphans(keep=proc.pid if proc is not None and proc.returncode is None else None)
 
     def end_all(self) -> None:
         with self._lock:
@@ -369,9 +369,8 @@ class AgentRunner:
     def reap_loop(self, every_s: float = 30.0) -> None:
         while not self.stopped.wait(every_s):
             with self._lock:
-                if self.proc is not None:
-                    self.proc.poll()  # the agent is collected by its own Popen, never as an orphan
-                reap_orphans()
+                proc = self.proc
+                reap_orphans(keep=proc.pid if proc is not None and proc.returncode is None else None)
 
     def run(self) -> None:
         threading.Thread(target=self.reap_loop, daemon=True).start()
@@ -390,21 +389,19 @@ class AgentRunner:
             self.stopped.wait(pause)
 
 
-def reap_orphans() -> None:
+def reap_orphans(keep: int | None = None) -> None:
     """In the sealed machine the supervisor is the container's first process, so the agent's orphans become its
-    children: collect the ones that exited. Called only under the runner's lock, once the agent itself was collected
-    by its own Popen (`wait` or `poll`), so no child anything waits for is taken by mistake."""
-    while True:
-        try:
-            exited = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-        except ChildProcessError:
-            return
-        if exited is None:
-            return
-        try:
-            os.waitpid(exited.si_pid, os.WNOHANG)
-        except ChildProcessError:
-            return
+    children: collect the ones that exited, by their own ids, never `keep` (the agent, which its Popen collects)."""
+    me = str(os.getpid()).encode()
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit() or int(entry.name) == keep:
+            continue
+        fields = _status(entry.name)
+        if fields and fields.get(b"PPid", b"").strip() == me and fields.get(b"State", b"").strip().startswith(b"Z"):
+            try:
+                os.waitpid(int(entry.name), os.WNOHANG)
+            except ChildProcessError:
+                pass
 
 
 def funding_loop(h: Harness, stop: threading.Event) -> None:
