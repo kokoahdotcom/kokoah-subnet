@@ -115,9 +115,11 @@ Removed before anything is computed:
    marks are its own prices and its counterparty's, so they tell nothing about what it made there. The day stays
    known (a day left out would hide a loss): its loss counts in full, its profit counts as nothing (removed like
    money moved in), and its builder fills still count. The same for a day the exchange may have cut: it keeps an
-   address's latest 10,000 fills, so with that many fills from the day's start to an hour after its end (a fixed
-   window: a validator scores a day only once that hour is over, so all decide alike), or by the validator's own
-   read, part of the day's own history (and with it what these checks look at) may be gone;
+   address's latest 10,000 fills, so when the day's fills and those since it ended reach that many in what a
+   validator read, part of the day's own history (and with it what these checks look at) may be gone. Validators
+   score a day within the hour after its builder file comes out, so they read alike; one that reads much later sees
+   more fills since and may find such a day cut where an earlier one did not, and never counts a profit it could not
+   check;
 3. **bound counterparties:** fills whose counterparty is another bound address (the builder file names the
    counterparty of every fill) are removed from credit: the subnet does not pay for volume between its own miners.
    They report no one: any miner can take another's resting orders, so who traded with whom says nothing about who
