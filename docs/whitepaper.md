@@ -32,7 +32,7 @@ returns to Bittensor and to the people and agents who earned it.
 - **80% for activity.** The volume reward is shared in proportion to the builder fees each trader paid. Splitting
   an account in two changes nothing.
 - **20% for proven skill.** The skill reward goes only to accounts whose daily returns pass a strict statistical
-  test over 90 days, so luck, copies and split accounts cannot take it.
+  test over 90 days, so luck cannot take it. Each account is weighed on its own record.
 - **Verified agents earn 10% more skill weight.** Every validator checks each agent's sealed machine itself, every
   day, from a token signed by the cloud provider.
 - **From verified agents to the market.** Agents with long, verified records are to become strategies offered to
@@ -131,7 +131,7 @@ flowchart TD
   E -->|yes| F[Builder fees paid today<br/>smoothed: 30% today, 70% the running figure]
   F --> VP[Volume reward: 80% of the pool<br/>in proportion to fees]
   E -->|yes| S{Proven record?<br/>90-day statistical test, activity,<br/>skill above the luck floor}
-  S -->|yes| W[Skill weight<br/>skill x participation, +10% for a verified agent,<br/>copies earn nothing]
+  S -->|yes| W[Skill weight<br/>skill x participation, +10% for a verified agent]
   W --> SP[Skill reward: 20% of the pool<br/>in proportion to skill weight]
   VP --> PAY[Paid to the miner]
   SP --> PAY
@@ -219,7 +219,7 @@ Mirrored positions above 25% of an account's are removed from its credit; above 
 leave the skill reward for 30 days.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 90 days;
-luck floor 0.25; participation full at $1M over 30 days; copy rule above 0.9 correlation over 30 days; agent bonus 10%
+luck floor 0.25; participation full at $1M over 30 days; agent bonus 10%
 of the skill weight; gates 10 round trips, 7 days, $500; eligibility $10,000 average account value a day and three
 qualifying trades worth $1,000; mirror thresholds 25% and 50%; migration once per 60 days; emission split miners 41%,
 validators 41%, owner 18% (locked). Changes follow section 10.
@@ -238,7 +238,7 @@ account's own record, whatever hotkey it is linked to.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
-What no one can do is buy the skill reward with volume, take it with luck, or multiply it with copies.
+What no one can do is buy the skill reward with volume or take it with luck.
 
 ## 7. Trading agents
 
@@ -441,9 +441,6 @@ entry      = PSR of the last 90 days of r̃ ≥ 0.95, gates passed, no mirror re
 s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
 w_i        = s_i × v_i × (1.1 for a verified agent)       when entry holds, else 0
-copies     = in a group with daily-return correlation > 0.9 over ≥ 30 common days, only the leader keeps its w
-             (the leader's orders come first on the same coin and side, matched up to 3 days back, by notional,
-             smoothed over the days; without a clear lead, the earliest registration)
 ```
 
 The agent check, by each validator:
@@ -482,7 +479,7 @@ would keep its weight of 0.8, and the total paid to A's strategy would not chang
    deadline (and for a few hours after a validator's first attempt at the day); after it, only what depended on the
    failed read goes uncounted.
 5. Compute eligibility and qualification, the smoothed credit, the skill score, the entry test, the skill weights with
-   the copy rule and the agent bonus, and both rewards.
+   the agent bonus, and both rewards.
 6. Write everything to the record; publish the per-miner artifact; set weights every tempo until the next run.
 
 ### Appendix D. Binding format
