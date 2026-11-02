@@ -5,7 +5,7 @@
 [![CI](https://github.com/kokoahdotcom/kokoah-subnet/actions/workflows/ci.yml/badge.svg)](https://github.com/kokoahdotcom/kokoah-subnet/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Bittensor 11](https://img.shields.io/badge/bittensor-11.3.0-black)
-![Status: testnet](https://img.shields.io/badge/status-testnet-orange)
+![Status: mainnet](https://img.shields.io/badge/status-mainnet-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [Kokoah](https://kokoah.com) gives traders better intelligence on Hyperliquid: market data, AI assistance,
@@ -88,7 +88,7 @@ Miners submit agent code and their machines keep an encrypted copy of the key at
 
 ## Status
 
-The subnet runs on the Bittensor test network as netuid 385. Mainnet follows.
+The subnet runs on Bittensor's main network as netuid 39.
 
 ## Documentation
 
