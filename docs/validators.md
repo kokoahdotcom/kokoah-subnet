@@ -53,7 +53,7 @@ uv run kokoah-subnet verify     # optional: the specification's numerical checks
 
 ```bash
 uv run btcli wallet create -w validator -H default                      # on a secure machine
-uv run btcli tx burned-register --netuid 385 -w validator -H default --network test
+uv run btcli tx burned-register --netuid 39 -w validator -H default --network finney
 uv run btcli stake add --help                                           # stake to reach a validator permit
 ```
 
@@ -102,9 +102,8 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 **One pass**, to check the configuration: score the oldest pending day, submit weights, exit.
 
 ```bash
-uv run kokoah-subnet validator run --network test --netuid 385 \
+uv run kokoah-subnet validator run --network finney --netuid 39 \
     --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 \
-    --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz \
     --agent-service https://api.kokoah.com/miners \
     --data-dir ~/kokoah-subnet-data --wallet validator --wallet-hotkey default \
     --start-day <YYYY-MM-DD> --once
@@ -134,7 +133,7 @@ sudo install -d -m 755 /etc/kokoah-subnet && sudo install -d -g kokoah-subnet -m
 sudo install -g kokoah-subnet -m 640 ~/.local/share/kokoah/subnet-db.env /etc/kokoah-subnet/db.env
 grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
-echo 'KOKOAH_SUBNET_ARGS=--network test --netuid 385 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
+echo 'KOKOAH_SUBNET_ARGS=--network finney --netuid 39 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/validator-main.env
 
 sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
