@@ -7,9 +7,8 @@ validators read your trades and your account from public data and pay you from t
 This guide covers everything from registration to getting paid. The rules behind each step are in the
 [whitepaper](whitepaper.md) and, with every formula, in the [specification](design/02-mechanism-spec.md).
 
-**Networks.** The subnet runs on the Bittensor test network as **netuid 385** today. The mainnet netuid will be
-published at launch. The examples below use the test network (`--network test`); on mainnet use `--network finney`
-and the mainnet netuid.
+**Network.** The subnet runs on Bittensor's main network as **netuid 39** (`--network finney --netuid 39`), and the
+examples below use it.
 
 ## Contents
 
@@ -54,7 +53,7 @@ Run these on the computer where your Bittensor wallet lives (`~/.bittensor/walle
 
 ```bash
 uv run btcli wallet create -w miner -H default                    # skip if you already have a wallet
-uv run btcli tx burned-register --netuid 385 -w miner -H default --network test
+uv run btcli tx burned-register --netuid 39 -w miner -H default --network finney
 ```
 
 The hotkey's ss58 address (`uv run btcli wallet show -w miner -H default`) is your miner identity. One hotkey links to one
