@@ -7,9 +7,8 @@ validators read your trades and your account from public data and pay you from t
 This guide covers everything from registration to getting paid. The rules behind each step are in the
 [whitepaper](whitepaper.md) and, with every formula, in the [specification](design/02-mechanism-spec.md).
 
-**Networks.** The subnet runs on the Bittensor test network as **netuid 385** today. The mainnet netuid will be
-published at launch. The examples below use the test network (`--network test`); on mainnet use `--network finney`
-and the mainnet netuid.
+**Network.** The subnet runs on Bittensor's main network as **netuid 39** (`--network finney --netuid 39`), and the
+examples below use it.
 
 ## Contents
 
@@ -30,7 +29,7 @@ and the mainnet netuid.
 
 - **A Bittensor wallet**: a coldkey (holds your funds; keep it offline) and a hotkey (your miner identity).
 - **TAO for registration.** Registering a hotkey on the subnet burns a registration fee set by the chain; `btcli`
-  shows the current amount before you confirm. Test TAO has no value and is available from the Bittensor community.
+  shows the current amount before you confirm.
 - **A Hyperliquid account controlled by an ordinary wallet** (one private key, such as MetaMask or a hardware
   wallet). Smart-contract wallets cannot sign the link message.
 - **An average account value of at least $10,000** on the days you want to be paid (section 6).
@@ -54,7 +53,7 @@ Run these on the computer where your Bittensor wallet lives (`~/.bittensor/walle
 
 ```bash
 uv run btcli wallet create -w miner -H default                    # skip if you already have a wallet
-uv run btcli tx burned-register --netuid 385 -w miner -H default --network test
+uv run btcli tx burned-register --netuid 39 -w miner -H default --network finney
 ```
 
 The hotkey's ss58 address (`uv run btcli wallet show -w miner -H default`) is your miner identity. One hotkey links to one
@@ -68,13 +67,13 @@ commitment. Validators check both signatures; nothing else is needed.
 **Step 1: get the exact line.**
 
 ```bash
-uv run kokoah-subnet miner message --netuid 385 --hotkey <hotkey ss58> --address <0x your Hyperliquid address>
+uv run kokoah-subnet miner message --netuid 39 --hotkey <hotkey ss58> --address <0x your Hyperliquid address>
 ```
 
 It prints a line of this form:
 
 ```
-kokoah-bind-1 netuid=385 hotkey=<hotkey ss58> address=<0x address, lowercase>
+kokoah-bind-1 netuid=39 hotkey=<hotkey ss58> address=<0x address, lowercase>
 ```
 
 **Step 2: sign it with the wallet that controls the address.** Use an Ethereum personal-message signature
@@ -82,7 +81,7 @@ kokoah-bind-1 netuid=385 hotkey=<hotkey ss58> address=<0x address, lowercase>
 Kokoah app, or from the command line:
 
 ```bash
-cast wallet sign --interactive "kokoah-bind-1 netuid=385 hotkey=<hotkey ss58> address=<0x...>"   # Foundry
+cast wallet sign --interactive "kokoah-bind-1 netuid=39 hotkey=<hotkey ss58> address=<0x...>"   # Foundry
 ```
 
 The result is a 0x-hex signature of 132 characters.
@@ -90,7 +89,7 @@ The result is a 0x-hex signature of 132 characters.
 **Step 3: publish the link from your hotkey.**
 
 ```bash
-uv run kokoah-subnet miner bind --network test --netuid 385 \
+uv run kokoah-subnet miner bind --network finney --netuid 39 \
     --address <0x...> --signature <0x signature> --wallet miner --wallet-hotkey default
 ```
 
@@ -100,7 +99,7 @@ computer, not on chain. Publishing uses only the hotkey; no coldkey password is 
 **Step 4: confirm it.**
 
 ```bash
-uv run kokoah-subnet miner show --network test --netuid 385
+uv run kokoah-subnet miner show --network finney --netuid 39
 ```
 
 Your hotkey should appear with your address and a valid signature.
@@ -180,7 +179,7 @@ on your hotkey; manage them with `btcli stake`.
 
 - **Leaderboard:** `https://api.kokoah.com/subnet/leaderboard` (JSON), with every miner's rank and pay once a day
   is scored. Any validator's interface serves the same data at `/leaderboard`, with a page at `/`.
-- **Bindings:** `uv run kokoah-subnet miner show --network test --netuid 385`, or `/bindings` on a validator's
+- **Bindings:** `uv run kokoah-subnet miner show --network finney --netuid 39`, or `/bindings` on a validator's
   interface.
 - **Your record:** `https://api.kokoah.com/subnet/accounts/<your address>` (or `/accounts/<address>` on any
   validator's interface): every day's return as the validators score it, the growth curve, the 90-day return and
@@ -205,7 +204,7 @@ registration. Your pay history, skill record and any penalty stay with you whate
 the new address *and* with the old address, then publish both:
 
 ```bash
-uv run kokoah-subnet miner bind --network test --netuid 385 --address <new> --signature <new address's signature> \
+uv run kokoah-subnet miner bind --network finney --netuid 39 --address <new> --signature <new address's signature> \
     --previous-address <old> --previous-signature <old address's signature> --wallet miner --wallet-hotkey default
 ```
 
