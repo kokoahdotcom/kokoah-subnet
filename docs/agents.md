@@ -88,7 +88,7 @@ opens nothing either.
 Then sign the start permission with your hotkey, on your own computer (your wallet never goes to the machine):
 
 ```bash
-uv run kokoah-subnet agent authorize --netuid 385 --master <your own Hyperliquid address> \
+uv run kokoah-subnet agent authorize --netuid 39 --master <your own Hyperliquid address> \
   --submission <submission id> --wallet <wallet> --wallet-hotkey <hotkey> --out ~/kokoah-agent/permit.txt
 ```
 
@@ -116,7 +116,7 @@ gcloud compute instances create kokoah-agent \
   --service-account=<service account with the Confidential Computing Workload User role> --scopes=cloud-platform \
   --metadata="^~^tee-image-reference=docker.io/kokoahdotcom/kokoah-subnet-agent@sha256:<approved digest>\
 ~tee-env-KOKOAH_AGENT_SUBMISSION=<submission id>\
-~tee-env-KOKOAH_AGENT_NETUID=385\
+~tee-env-KOKOAH_AGENT_NETUID=39\
 ~tee-env-KOKOAH_AGENT_HOTKEY=<your hotkey ss58>\
 ~tee-env-KOKOAH_AGENT_MASTER=<your own Hyperliquid address: the only withdrawal destination>\
 ~tee-env-KOKOAH_AGENT_NETWORK=mainnet" \
@@ -140,7 +140,7 @@ names); the `^~^` at the start makes `~` the separator between them, so leave no
 
 ```bash
 curl http://<machine>:8080/status
-# {"address": the agent account, "netuid": 385, "hotkey": yours, "master": your address, "code_sha256": the
+# {"address": the agent account, "netuid": 39, "hotkey": yours, "master": your address, "code_sha256": the
 #  fingerprint `agent package` printed, "harness_version", "builder_approved": false until the account is funded,
 #  "network": "mainnet", "started_at"}
 curl "http://<machine>:8080/attestation?challenge=$(openssl rand -hex 32)"   # a token: the machine proves itself
@@ -174,7 +174,7 @@ uv run kokoah-subnet agent release --service https://api.kokoah.com/miners --acc
 ## 5. Bind and fund
 
 ```bash
-uv run kokoah-subnet agent bind --netuid 385 --network test --endpoint http://<machine>:8080 \
+uv run kokoah-subnet agent bind --netuid 39 --network finney --endpoint http://<machine>:8080 \
   --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
