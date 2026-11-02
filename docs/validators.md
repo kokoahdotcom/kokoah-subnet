@@ -85,7 +85,7 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 | `--network` | `finney` | The Bittensor network. |
 | `--netuid` | `39` | The subnet. |
 | `--builder` | `0x43ccc0618e4358494f87a4b8699230203dc4ab67` | Kokoah's builder address: whose builder fills are scored. |
-| `--burn-hotkey` | the operator's, when it publishes one | The subnet's burn hotkey. It receives a day only when no miner has any weight; without one, such a day goes to the owner hotkey. |
+| `--burn-hotkey` | optional, unset by default | The subnet's burn hotkey. A day on which no miner has any weight goes to it; unset, to the owner hotkey. Every validator uses the same setting. |
 | `--agent-service` | `https://api.kokoah.com/miners` | The subnet's service: the released agent keys and the unlinks signed by linked addresses. Without it, no account counts as a verified agent and no unlink is applied. |
 | `--data-dir` | a directory | Cached builder files and local state. |
 | `--db-url` | default `$KOKOAH_SUBNET_DB_URL` | The record; SQLite in `--data-dir` when unset. A record serves one subnet: the validator refuses one made on another network or netuid. |
