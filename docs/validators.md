@@ -8,8 +8,8 @@ public data computes the same scores.
 This guide covers setup, configuration, operation and monitoring. What the validator computes is described in the
 [whitepaper](whitepaper.md) and, formula by formula, in the [specification](design/02-mechanism-spec.md).
 
-**Networks.** The subnet runs on the Bittensor test network as **netuid 385** today. The mainnet netuid will be
-published at launch. Examples use the test network (`--network test`); on mainnet use `--network finney`.
+**Network.** The subnet runs on Bittensor's main network as **netuid 39** (`--network finney --netuid 39`), and the
+examples below use it.
 
 ## Contents
 
