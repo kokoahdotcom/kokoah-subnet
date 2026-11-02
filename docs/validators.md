@@ -8,8 +8,8 @@ public data computes the same scores.
 This guide covers setup, configuration, operation and monitoring. What the validator computes is described in the
 [whitepaper](whitepaper.md) and, formula by formula, in the [specification](design/02-mechanism-spec.md).
 
-**Networks.** The subnet runs on the Bittensor test network as **netuid 385** today. The mainnet netuid will be
-published at launch. Examples use the test network (`--network test`); on mainnet use `--network finney`.
+**Network.** The subnet runs on Bittensor's main network as **netuid 39** (`--network finney --netuid 39`), and the
+examples below use it.
 
 ## Contents
 
@@ -53,7 +53,7 @@ uv run kokoah-subnet verify     # optional: the specification's numerical checks
 
 ```bash
 uv run btcli wallet create -w validator -H default                      # on a secure machine
-uv run btcli tx burned-register --netuid 385 -w validator -H default --network test
+uv run btcli tx burned-register --netuid 39 -w validator -H default --network finney
 uv run btcli stake add --help                                           # stake to reach a validator permit
 ```
 
@@ -82,10 +82,10 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 
 | Option | Value | Notes |
 |---|---|---|
-| `--network` | `test` or `finney` | The Bittensor network. |
-| `--netuid` | `385` on testnet | The subnet. |
+| `--network` | `finney` | The Bittensor network. |
+| `--netuid` | `39` | The subnet. |
 | `--builder` | `0x43ccc0618e4358494f87a4b8699230203dc4ab67` | Kokoah's builder address: whose builder fills are scored. |
-| `--burn-hotkey` | testnet: `5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz` | The subnet's burn hotkey, published by the operator. It receives a day only when no miner has any weight; without one, such a day goes to the owner hotkey. |
+| `--burn-hotkey` | optional, unset by default | The subnet's burn hotkey. A day on which no miner has any weight goes to it; unset, to the owner hotkey. Every validator uses the same setting. |
 | `--agent-service` | `https://api.kokoah.com/miners` | The subnet's service: the released agent keys and the unlinks signed by linked addresses. Without it, no account counts as a verified agent and no unlink is applied. |
 | `--data-dir` | a directory | Cached builder files and local state. |
 | `--db-url` | default `$KOKOAH_SUBNET_DB_URL` | The record; SQLite in `--data-dir` when unset. A record serves one subnet: the validator refuses one made on another network or netuid. |
@@ -102,9 +102,8 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 **One pass**, to check the configuration: score the oldest pending day, submit weights, exit.
 
 ```bash
-uv run kokoah-subnet validator run --network test --netuid 385 \
+uv run kokoah-subnet validator run --network finney --netuid 39 \
     --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 \
-    --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz \
     --agent-service https://api.kokoah.com/miners \
     --data-dir ~/kokoah-subnet-data --wallet validator --wallet-hotkey default \
     --start-day <YYYY-MM-DD> --once
@@ -134,7 +133,7 @@ sudo install -d -m 755 /etc/kokoah-subnet && sudo install -d -g kokoah-subnet -m
 sudo install -g kokoah-subnet -m 640 ~/.local/share/kokoah/subnet-db.env /etc/kokoah-subnet/db.env
 grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
-echo 'KOKOAH_SUBNET_ARGS=--network test --netuid 385 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --burn-hotkey 5E1ZiPv2T1qTCUjmbkGZr7CZYVcvWSQ25iUd9DMFx5JnrnEz --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
+echo 'KOKOAH_SUBNET_ARGS=--network finney --netuid 39 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/validator-main.env
 
 sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
@@ -263,4 +262,4 @@ The scripts and unit files are copied again, so changes to them take effect too.
 | "no TAO perpetual" | Pass `--tao-usd-fallback <price>`. |
 | No verified agents | `--agent-service https://api.kokoah.com/miners` must be set and reachable. |
 | Different figures from another validator | Compare the `/days/<day>` artifacts, and check that both run the same release. |
-| The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`. Days are scored and closed in order only: the day must be the one after the latest scored day. |
+| The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`, passing the hotkey the announcement names (the owner hotkey when no burn hotkey is published). Days are scored and closed in order only: the day must be the one after the latest scored day. |
