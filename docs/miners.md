@@ -29,7 +29,7 @@ examples below use it.
 
 - **A Bittensor wallet**: a coldkey (holds your funds; keep it offline) and a hotkey (your miner identity).
 - **TAO for registration.** Registering a hotkey on the subnet burns a registration fee set by the chain; `btcli`
-  shows the current amount before you confirm. Test TAO has no value and is available from the Bittensor community.
+  shows the current amount before you confirm.
 - **A Hyperliquid account controlled by an ordinary wallet** (one private key, such as MetaMask or a hardware
   wallet). Smart-contract wallets cannot sign the link message.
 - **An average account value of at least $10,000** on the days you want to be paid (section 6).
