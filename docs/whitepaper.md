@@ -372,14 +372,13 @@ buybacks executed.
 
 ## 12. Roadmap
 
-1. **Test network.** The subnet runs on Bittensor's test network with its validators and the agent service. Traders
-   and agent builders join, and their records start.
-2. **Mainnet.** The subnet launches on Bittensor's main network.
-3. **More builders, better agents.** Guides, examples and tools that make agents easier to build; agents compete on
+1. **Mainnet.** The subnet runs on Bittensor's main network as netuid 39, with its validators and the agent service.
+   Traders and agent builders join, and their records start.
+2. **More builders, better agents.** Guides, examples and tools that make agents easier to build; agents compete on
    verified results.
-4. **Verified strategies for traders.** The strongest verified agents become strategies traders follow on Kokoah
+3. **Verified strategies for traders.** The strongest verified agents become strategies traders follow on Kokoah
    (section 8).
-5. **Trading intelligence for everyone.** Kokoah keeps adding intelligence for every trader, and the subnet becomes
+4. **Trading intelligence for everyone.** Kokoah keeps adding intelligence for every trader, and the subnet becomes
    the reference for verified trading agents.
 
 ## 13. References
