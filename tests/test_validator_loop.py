@@ -1280,6 +1280,25 @@ def _swap_hotkey_a(store: Store, chain: _FakeChain, registered: tuple[int, int])
     )
 
 
+async def test_a_departed_hotkeys_link_left_on_chain_frees_the_address_for_a_new_hotkey(tmp_path: Path) -> None:
+    """Hotkey A left the subnet; the chain keeps its commitment. A new registration on another coldkey links the same
+    account: it is accepted, nothing is refused, and A is reported as having left."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    store.put_bindings({HK_A: AcceptedBinding(HK_A, addr_a, 9_000, 9_000)}, day="2026-10-20")
+    a = ACCOUNTS["a"]
+    chain.neurons[1] = _Neuron(1, "hkN", "ckN", _Balance(10 * 10**9), block_at_registration=9_600)
+    chain._commitments["hkN"] = _Commitment(
+        encode_binding(Binding(a.address, sign_binding(a.key, 2, "hkN", a.address))), 9_700
+    )
+    assert HK_A in chain._commitments  # left on chain
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert {hk: b.address for hk, b in store.bindings().items() if hk in (HK_A, "hkN")} == {"hkN": addr_a}
+    events = store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}'")
+    assert {"event": "left", "hotkey": HK_A} in events and {"event": "accepted", "hotkey": "hkN"} in events
+    assert json.loads(store.day(DAY) or "{}")["bindings_refused"] == {}
+    await hl.close()
+
+
 async def test_a_hotkey_swap_is_detected_between_two_scored_days(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     _swap_hotkey_a(store, chain, (100, 100))
@@ -1365,19 +1384,35 @@ async def test_the_skill_record_counts_only_the_days_after_the_binding(
 
 
 async def test_a_new_registration_starts_a_new_record_from_its_block(tmp_path: Path) -> None:
-    """The link stays on chain while the hotkey is away; registering again starts the record from the registration
-    block (the later of the two), the same for every validator."""
+    """The old link stays on chain while the hotkey is away but no longer counts once it registers again; the link it
+    publishes again dates the record, so only the days after it count, the same for every validator."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     _bind_days_before(chain, HK_A, 100)
+    old = chain._commitments[HK_A]
     chain.neurons[1].block_at_registration = 7_000
-    chain.block_times[7_000] = _noon_days_before(35)
+    chain.block_times[7_000] = _noon_days_before(36)
     _walk(store, addr_a, 120)
+    store.put_bindings({HK_A: AcceptedBinding(HK_A, addr_a, 5_000, 5_000)}, day="2026-10-20")  # from before
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert HK_A not in {r.hotkey for r in result.records}  # the link from the earlier registration does not count
+    events = store.execute_sql(f"select event, hotkey, reason from binding_events where day = '{DAY}'")
+    assert {"event": "reregistered", "hotkey": HK_A} in [{k: e[k] for k in ("event", "hotkey")} for e in events]
+    refused = json.loads(store.day(DAY) or "{}")["bindings_refused"]
+    assert refused == {HK_A: "published before the hotkey's current registration: publish the binding again"}
+    chain._commitments[HK_A] = _Commitment(old.data, 7_500)  # published again after registering
+    chain.block_times[7_500] = _noon_days_before(35)
+    store.put_bindings({HK_A: AcceptedBinding(HK_A, addr_a, 5_000, 5_000)}, day="2026-10-20")  # as if not seen yet
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    seen = [
+        (e["event"], e["hotkey"])
+        for e in store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}'")
+    ]
+    assert ("reregistered", HK_A) in seen and ("accepted", HK_A) in seen and ("migrated", HK_A) not in seen
     a = next(r for r in result.records if r.hotkey == HK_A)
     assert a.returns_days == 35
     row = next(m for m in store.miner_days(HK_A) if m["day"] == DAY)
     assert row["joined_day"] == _noon_days_before(35).strftime("%Y-%m-%d")
-    assert store.get_meta("block_day:7000") == row["joined_day"]  # read once, kept
+    assert store.get_meta("block_day:7500") == row["joined_day"]  # read once, kept
     await hl.close()
 
 

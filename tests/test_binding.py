@@ -9,6 +9,7 @@ from kokoah_subnet.binding import (
     AcceptedBinding,
     Binding,
     PublishedBinding,
+    Unlink,
     binding_message,
     decode_binding,
     encode_binding,
@@ -166,6 +167,53 @@ def test_departed_hotkeys_release_their_address() -> None:
         registered=[HK2],
     )
     assert HK not in again.accepted and again.accepted[HK2].address == a.address.lower()
+
+
+def test_a_departed_hotkeys_commitment_left_on_chain_does_not_hold_its_address() -> None:
+    """The chain keeps a commitment after its hotkey leaves: it holds no address while the hotkey is away, so a new
+    hotkey can take the address."""
+    a = Account.create()
+    old = _pub(HK, 100, Binding(a.address, sign_binding(a.key, 2, HK, a.address)))
+    new = _pub(HK2, 300, Binding(a.address, sign_binding(a.key, 2, HK2, a.address)))
+    first = resolve_bindings({}, [old], block=200, registered=[HK])
+    away = resolve_bindings(first.accepted, [old], block=250, registered=[])
+    assert away.accepted == {} and away.refused == {}
+    again = resolve_bindings(away.accepted, [old, new], block=400, registered=[HK2])
+    assert set(again.accepted) == {HK2} and again.refused == {}
+
+
+def test_who_holds_an_address_after_a_hotkey_returns_depends_only_on_the_chain() -> None:
+    """HK binds A and leaves; HK2 binds A; HK registers again. A validator that ran throughout, one that starts fresh
+    and one that was offline while HK was away (it still has HK -> A stored) all give A to HK2: HK's commitment is
+    from its earlier registration. HK's binding published again is refused the same way everywhere."""
+    a = Account.create()
+    old = _pub(HK, 100, Binding(a.address, sign_binding(a.key, 2, HK, a.address)))
+    new = _pub(HK2, 300, Binding(a.address, sign_binding(a.key, 2, HK2, a.address)))
+    reg = {HK: 400, HK2: 250}  # HK's new registration is block 400
+    first = resolve_bindings({}, [old], block=200, registered=[HK], registered_at={HK: 50})
+    throughout = resolve_bindings(
+        resolve_bindings(first.accepted, [old, new], block=350, registered=[HK2], registered_at=reg).accepted,
+        [old, new],
+        block=450,
+        registered=[HK, HK2],
+        registered_at=reg,
+    )
+    fresh = resolve_bindings({}, [old, new], block=450, registered=[HK, HK2], registered_at=reg)
+    offline = resolve_bindings(first.accepted, [old, new], block=450, registered=[HK, HK2], registered_at=reg)
+    stale = {HK: "published before the hotkey's current registration: publish the binding again"}
+    for r in (throughout, fresh, offline):
+        assert {hk: b.address for hk, b in r.accepted.items()} == {HK2: a.address.lower()} and r.refused == stale
+    republished = _pub(HK, 500, Binding(a.address, sign_binding(a.key, 2, HK, a.address)))
+    for prev in ({}, throughout.accepted, first.accepted):
+        r = resolve_bindings(prev, [old, new, republished], block=550, registered=[HK, HK2], registered_at=reg)
+        assert set(r.accepted) == {HK2} and r.refused == {HK: "address already bound to another hotkey"}
+    # an address that unlinked HK says so, whichever registration the commitment is from
+    gone = Unlink(HK, a.address, 0, "0x")  # effective long before the day scored
+    r = resolve_bindings({}, [old], block=550, registered=[HK], registered_at=reg, unlinks=[gone], day="2026-10-21")
+    assert r.refused == {HK: "the address unlinked itself from this hotkey"}
+    # without HK2, the binding HK publishes again is accepted as a first binding
+    alone = resolve_bindings(first.accepted, [old, republished], block=550, registered=[HK], registered_at=reg)
+    assert alone.accepted[HK].accepted_block == 500
 
 
 def test_an_agent_field_round_trips_and_old_bindings_still_decode() -> None:

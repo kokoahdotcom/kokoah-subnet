@@ -385,13 +385,31 @@ async def collect_and_score(
     # the accepted bindings and their events are written once the day is scored, so a retried day resolves them
     # from the same bindings again
     before = store.bindings()
+    registered_block = {n.hotkey: n.block_at_registration or None for n in snap.neurons}
     resolution = resolve_bindings(
-        before, published, snap.block, registered=uid_of.keys(), unlinks=store.unlinks(), day=day
+        before,
+        published,
+        snap.block,
+        registered=uid_of.keys(),
+        unlinks=store.unlinks(),
+        day=day,
+        registered_at=registered_block,
     )
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
         old = before.get(hk)
-        if old is None:
+        if old is not None and old.accepted_block < (registered_block.get(hk) or 0):
+            # registered again and published again: a new first binding, not a migration
+            events.append(
+                {
+                    "hotkey": hk,
+                    "event": "reregistered",
+                    "address": old.address,
+                    "reason": "registered again: its earlier binding no longer counts",
+                }
+            )
+            events.append({"hotkey": hk, "event": "accepted", "address": acc.address, "reason": None})
+        elif old is None:
             events.append({"hotkey": hk, "event": "accepted", "address": acc.address, "reason": None})
         elif old.address != acc.address:
             events.append({"hotkey": hk, "event": "migrated", "address": acc.address, "reason": f"from {old.address}"})
@@ -399,6 +417,15 @@ async def collect_and_score(
         if hk not in uid_of:
             events.append(
                 {"hotkey": hk, "event": "left", "address": before[hk].address, "reason": "hotkey no longer registered"}
+            )
+        elif hk not in resolution.accepted and hk not in resolution.unlinked:
+            events.append(
+                {
+                    "hotkey": hk,
+                    "event": "reregistered",
+                    "address": before[hk].address,
+                    "reason": "registered again: its earlier binding no longer counts",
+                }
             )
     for hk, address in resolution.unlinked.items():
         events.append({"hotkey": hk, "event": "unlinked", "address": address, "reason": "the address ended the link"})
@@ -419,7 +446,6 @@ async def collect_and_score(
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
     collateral_locked = {n.hotkey: n.collateral_locked_alpha for n in snap.neurons}
-    registered_block = {n.hotkey: n.block_at_registration or None for n in snap.neurons}
     blocks = day_sample_blocks(snap.block, now.timestamp(), start_ms / 1000, snap.tempo, params.price_samples)
     samples = await price_samples(client, cfg.netuid, blocks)
     store.put_price_samples(day, samples)

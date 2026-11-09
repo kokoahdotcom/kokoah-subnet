@@ -349,14 +349,17 @@ the new address (§7a). A fresh binding starts from zero. Clusters (§3) cover l
 only a hotkey's latest commitment, so a validator enforces the 60-day limit from the bindings it has accepted; a
 validator that starts fresh accepts the current commitment on its signatures alone and converges with the others
 after 60 days. For the same reason it dates the skill record of a link published again unchanged from that latest
-publish, while the others keep the block they first accepted.
+publish, while the others keep the block they first accepted. Who holds an address after a hotkey leaves depends
+only on the chain: a departed hotkey's commitment, which the chain keeps, holds no address, and a binding published
+before the hotkey's current registration block never counts again.
 
 ### 14a. Leaving, returning, switching
 
 - **Deregistered or pruned, same hotkey comes back.** Records are kept by hotkey and pause while the hotkey is
   off the subnet (nothing can be paid to it); they resume when it is registered again, as a fresh identity for
   credit and qualification (§9a): the new registration must qualify again, and the entry test's record starts at
-  the new registration block (§7a).
+  the new registration block (§7a). Its binding from the earlier registration no longer counts: it publishes its
+  binding again, which is accepted if the address is still free.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
   new hotkey starts with no credit tail, no qualification and no smoothed skill (`g = 0`). The unpaid credit tail of
   the old hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of
