@@ -1,11 +1,12 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.4)
+# Kokoah subnet incentive mechanism: complete specification (v6.5)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
 record (§7a). Nothing is capped or burned in normal operation. The volume pool pays every miner in proportion to the
 builder fees it pays, and every builder fee funds the buyback (§10, §11). The skill pool is protected against luck
-by an entry test (a probabilistic Sharpe ratio of at least 0.95 over 90 days), a luck floor and a volume
-participation factor capped at $1M over 30 days; each account is weighed on its own record.
+by an entry test (a probabilistic Sharpe ratio of at least 0.95 over the record since joining, from 30 days up to
+the last 90, a longer record weighing more), a luck floor and a volume participation factor capped at $1M over 30
+days; each account is weighed on its own record.
 A miner's agent running in a cloud confidential VM with Kokoah's harness, verified by the validators themselves,
 earns 10% more skill weight (§16). Validator emissions and outside demand are out of scope.
 
@@ -204,21 +205,32 @@ No drawdown anywhere. The scale is set so that a strong trader scores 1.
 ```
 s_i = max(0, (g'_i − 0.25) / 0.75)                         skill above the luck floor
 v_i = min(1, V_i,30d / $1,000,000)                         participation: credited Kokoah notional, 30 days
-w_i = s_i × v_i × (1.1 if a verified agent account, §16)    skill weight
+r_i = 0.8 + 0.2 × clip01((n_i − 30) / 60)                  the record: 0.8 at 30 days, 1 at 90 days and more
+w_i = s_i × v_i × r_i × (1.1 if a verified agent account, §16)   skill weight
 ```
 
 `V_i,30d` is the credited notional (eligible trades only, §9a) of the last 30 days, today included. A miner takes
 part only when all of these hold: eligible today (§9a); the activity gates pass (§9); no mirror penalty (§3); and
-the **entry test**: the probabilistic Sharpe ratio of the last 90 capped daily returns against the benchmark daily
-Sharpe ratio of 0.03 is at least 0.95 (fewer than 90 known returns recorded: no entry). Then:
+the **entry test**: the probabilistic Sharpe ratio of the capped daily returns since the address joined (the last
+90 at most) against the benchmark daily Sharpe ratio of 0.03 is at least 0.95, with at least 30 of them known (fewer:
+no entry). `n_i` is the number of returns the test read (30 to 90). The address joined on the UTC day of the block
+that accepted its binding (§14), estimated at 12 seconds a block; only the returns of the days after it count, for
+the entry test and for the skill score (§7). Then:
 
 - **Each account on its own record.** Accounts that trade alike, copies of one another included, are each weighed
   on their own: copy trading is never punished.
-- **Why the entry test.** It admits only records whose edge is statistically real over 90 days, so luck does not
-  pay; proving an edge from daily returns takes months by design.
+- **Why the entry test.** It admits only records whose edge is statistically real, so luck does not pay. A record
+  can enter from 30 days, and the test keeps reading every day since joining until the record is 90 days long, so a
+  strong trader is paid within weeks while a lucky month rarely passes; the record weight `r_i` keeps a short record
+  below a proven one. From 90 days on, the test reads the last 90 days.
+- **Only days after joining.** The history from before the binding is never read by the test: otherwise an owner
+  of many old accounts could bind the one with the luckiest past and be paid at once. A new binding (a migration, an
+  unlink and a new link, a new registration, a hotkey swap's re-binding) starts a new record. A fresh record gains
+  nothing over an old one: over the first 90 days a zero-edge account is paid less often than an established one
+  (`kokoah-subnet verify`, check 4).
 - **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
-  back its records are one to seven days apart. The backfill therefore covers about 30 days, and the rest of the
-  90 days is the subnet's own daily record.
+  back its records are one to seven days apart. The backfill on an address's first scored day therefore covers about
+  30 days: it gives the first day its return and the record page its history, not the skill test.
 
 ## 8. Stake
 
@@ -274,8 +286,9 @@ ineligible days, and nothing is paid for them later.
 **Identity.** Credit (`Φ̂`, `F̂`) and qualification belong to one identity: one hotkey, one bound address, one
 registration. They start from zero when the bound address changes (migration), when the hotkey is swapped on
 chain, when the hotkey registers again after leaving, and naturally for a new hotkey. What a fresh identity must
-not escape is kept: the pay history, the skill record and any mirror penalty (which follows the address and the
-addresses its owner controls, §3).
+not escape is kept: the pay history and any mirror penalty (which follows the address and the addresses its owner
+controls, §3). The entry test's record starts at each new binding (§7a), so a fresh identity gains nothing there: it
+waits 30 days again.
 
 An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of capital, its own
 registration and its own qualification.
@@ -305,13 +318,13 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
-| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over 90 days; each account on its own record; verified agents ×1.1 |
+| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 12 h after the day: scored from the histories |
-| migration | once per 60 days, signed by old address, new address and hotkey; skill, pay history and penalties carry over, credit and qualification start from zero |
+| migration | once per 60 days, signed by old address, new address and hotkey; skill smoothing, pay history and penalties carry over, credit and qualification start from zero, the entry test's record starts with the new address |
 | agents | sealed machines on Google Cloud Confidential Space running an approved harness image; checked daily by each validator (§16) |
 | buyback | the collected fees, on the owner's cadence, by `add_stake_burn` |
 | owner share | `owner_cut_auto_lock_enabled` on |
@@ -320,7 +333,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 ## 13. Worked examples
 
 **Two traders, one with a proven record.** Equal smoothed builder fees today. A has 90 days of strong returns and
-passes the entry test with `s × v` = 0.8; B has none. Volume pool: 1,180.8 alpha each. Skill pool: all 590.4 alpha
+passes the entry test with `s × v` = 0.8 (`r` = 1); B has none. Volume pool: 1,180.8 alpha each. Skill pool: all 590.4 alpha
 to A. A is paid 1,771.2 alpha, B 1,180.8; nothing is burned.
 
 **An agent beside a human.** Two traders pass the entry test with the same `s × v`; one trades through a verified
@@ -345,8 +358,8 @@ after 60 days.
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
   new hotkey starts with no credit tail, no qualification and no smoothed skill (`g = 0`). The unpaid credit tail of
   the old hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of
-  that day's credit, 49% of the day before, and so on. The activity gates and the entry test read the address's own
-  record, which stays with the address, as do its penalties.
+  that day's credit, 49% of the day before, and so on. The activity gates read the address's own record; the entry
+  test reads the days after the new binding (§7a). Penalties stay with the address.
 - **Unlinking.** The linked address ends its link with one signature, without the hotkey:
   `kokoah-unlink-1 netuid=<netuid> hotkey=<ss58> address=<0x lowercase> time=<unix ms>` (EIP-191), sent to the
   subnet's service, which accepts it only within 10 minutes of its time and only for a link a binding on chain has
@@ -361,15 +374,15 @@ after 60 days.
 - **Hotkey swap on chain** (same UID, coldkey and registration block as on the previous scored day, new hotkey):
   the pay history, skill and penalties follow the new hotkey, the credit and qualification do not (the swap is
   recorded in `hotkey_swaps` and applied when the day is scored, so a re-score applies it again); the binding must
-  be published again because the signed line names the hotkey. A UID registered again, even by the same coldkey,
+  be published again because the signed line names the hotkey, and the entry test's record starts at that binding. A UID registered again, even by the same coldkey,
   is a new registration, not a swap.
 - **Trading before joining.** Fills of a day scored before the binding was accepted are recorded as unbound and
   never pay. The bindings are read when a day is scored and the day's file is scored as a whole, so a binding
   accepted before a day is scored covers that whole day, including its earlier fills (they also count toward
-  qualification). The account's own
-  history does count for skill: on the first day an address is scored, the exchange's portfolio history (perps
-  window) backfills daily account values, so a trader with a real record is recognized within days instead of
-  starting from nothing.
+  qualification). The account's history from before joining does not count for skill: on the first day an address
+  is scored, the exchange's portfolio history (perps window) backfills daily account values, which give that day its
+  return and the record page its history, but the entry test and the skill score read only the days after the
+  binding was accepted (§7a).
 
 ### 14b. Robustness rules
 
