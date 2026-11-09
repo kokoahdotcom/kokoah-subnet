@@ -199,6 +199,19 @@ async def _check_agent(
 UNLINK_PAGES = 1000  # the most pages read in one go
 
 
+def _storable(u: Unlink) -> bool:
+    """Whether the record can hold this unlink: a hotkey of printable ASCII that fits its column, a signature that fits
+    its own, and a time that has a day. The service checks all this, but a validator relies on none of its checks,
+    and one unlink it can't store would fail the day's unlinks every day; such an unlink matches no link anyway."""
+    if not (u.hotkey.isascii() and u.hotkey.isprintable() and len(u.hotkey) <= 64 and len(u.signature) <= 200):
+        return False
+    try:
+        u.effective_day
+    except (ValueError, OverflowError, OSError):
+        return False
+    return True
+
+
 async def fetch_unlinks(
     http: httpx.AsyncClient, service: str, netuid: int, known: Iterable[tuple[str, str]] = ()
 ) -> list[Unlink]:
@@ -217,8 +230,8 @@ async def fetch_unlinks(
                 u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
             except (KeyError, TypeError, ValueError):
                 continue
-            if not (u.hotkey.isascii() and u.hotkey.isprintable()):
-                continue  # never a hotkey: the service checks them, and a validator relies on none of its checks
+            if not _storable(u):
+                continue
             if (u.hotkey, u.address) not in seen and u.signed_by_address(netuid):
                 seen.add((u.hotkey, u.address))
                 out.append(u)

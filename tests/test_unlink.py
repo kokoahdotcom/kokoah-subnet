@@ -123,8 +123,16 @@ async def test_validators_keep_only_unlinks_the_address_itself_signed() -> None:
     t = ms("2026-10-24")
     good = signed(owner, H1, t)
     forged = Unlink(H1, owner.address, t, sign_unlink(other.key, NETUID, H1, owner.address, t))
-    odd = signed(owner, H1[:20] + "\x00" + H1[21:], t)  # signed by the address, but no hotkey
-    rows = [good, forged, odd]
+    # signed by the address, but the record could not hold them: no hotkey, a hotkey or a signature too long for its
+    # column, a time with no day
+    odd = [
+        signed(owner, H1[:20] + "\x00" + H1[21:], t),
+        signed(owner, H1 + "x" * 20, t),
+        Unlink(H1, owner.address, t, good.signature + " " * 300),
+        signed(owner, H2, 10**20),
+    ]
+    assert Unlink(H1, owner.address, t, good.signature + " " * 300).signed_by_address(NETUID)  # spaces are read
+    rows = [good, forged, *odd]
 
     def answer(request: httpx.Request) -> httpx.Response:
         listed = [
@@ -193,6 +201,8 @@ def test_the_unlink_list_comes_in_pages_oldest_first_and_misses_none(tmp_path: P
         after = page["next"]
     assert sorted(seen) == sorted(k.address.lower() for k in keys) and len(seen) == 5 and pages == 3
     assert c.get("/unlinks", params={"after": "nonsense"}).status_code == 400
+    for cursor in (f"1.5|{H1[:20]}\x00{H1[21:]}|{keys[0].address}", f"1.5|{H1}|0x{'zz' * 20}"):  # no hotkey, no address
+        assert c.get("/unlinks", params={"after": cursor}).status_code == 400
 
 
 def test_an_unlink_filed_after_the_clock_went_back_still_comes_after_a_reader_s_place(tmp_path: Path) -> None:
