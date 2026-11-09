@@ -123,7 +123,8 @@ async def test_validators_keep_only_unlinks_the_address_itself_signed() -> None:
     t = ms("2026-10-24")
     good = signed(owner, H1, t)
     forged = Unlink(H1, owner.address, t, sign_unlink(other.key, NETUID, H1, owner.address, t))
-    rows = [good, forged]
+    odd = signed(owner, H1[:20] + "\x00" + H1[21:], t)  # signed by the address, but no hotkey
+    rows = [good, forged, odd]
 
     def answer(request: httpx.Request) -> httpx.Response:
         listed = [

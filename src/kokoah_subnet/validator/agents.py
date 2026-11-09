@@ -217,6 +217,8 @@ async def fetch_unlinks(
                 u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
             except (KeyError, TypeError, ValueError):
                 continue
+            if not (u.hotkey.isascii() and u.hotkey.isprintable()):
+                continue  # never a hotkey: the service checks them, and a validator relies on none of its checks
             if (u.hotkey, u.address) not in seen and u.signed_by_address(netuid):
                 seen.add((u.hotkey, u.address))
                 out.append(u)
