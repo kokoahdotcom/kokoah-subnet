@@ -206,10 +206,9 @@ def _storable(u: Unlink) -> bool:
     if not (u.hotkey.isascii() and u.hotkey.isprintable() and len(u.hotkey) <= 64 and len(u.signature) <= 200):
         return False
     try:
-        u.effective_day
+        return bool(u.effective_day)
     except (ValueError, OverflowError, OSError):
         return False
-    return True
 
 
 async def fetch_unlinks(
