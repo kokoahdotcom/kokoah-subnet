@@ -634,7 +634,10 @@ class Store:
         with self._engine.begin() as c:
             c.execute(delete(S.commitments).where(S.commitments.c.day == day))
             for r in rows:
-                c.execute(insert(S.commitments).values(day=day, **dict(r)))
+                row = dict(r)
+                if isinstance(row.get("data"), str):
+                    row["data"] = _commitment_text(row["data"])
+                c.execute(insert(S.commitments).values(day=day, **row))
 
     def put_binding_events(self, day: str, rows: Iterable[Mapping[str, Any]]) -> None:
         with self._engine.begin() as c:
@@ -995,6 +998,13 @@ class Store:
             raise ValueError("SELECT only")
         with self._engine.connect() as c:
             return [dict(r) for r in c.execute(text(sql)).mappings().all()]
+
+
+def _commitment_text(data: str) -> str:
+    """A commitment's data as stored. Any hotkey can commit any bytes, and Postgres text can't hold a NUL character,
+    so data with one is kept as 0x-hex of its UTF-8 bytes: the form the chain client already gives data that isn't
+    UTF-8."""
+    return "0x" + data.encode().hex() if "\x00" in data else data
 
 
 def _put_penalty(c: Connection, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
