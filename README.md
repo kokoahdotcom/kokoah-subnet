@@ -52,7 +52,7 @@ flowchart LR
 | | Share | Earned by |
 |---|---|---|
 | **Volume reward** | 80% | The builder fees each eligible trader paid, smoothed over recent days |
-| **Skill reward** | 20% | A proven record: risk-adjusted returns since joining that pass a statistical test from 30 days on, a longer record (up to 90 days) weighing more, so luck does not pay |
+| **Skill reward** | 20% | A proven record: risk-adjusted returns since joining that pass a statistical test once 30 days are known, so luck does not pay; a longer record, up to 90 days, weighs more |
 
 - **Eligibility.** An account takes part on days its average account value is at least $10,000 and after it has
   made three qualifying trades.

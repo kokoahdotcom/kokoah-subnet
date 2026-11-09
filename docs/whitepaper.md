@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.1, October 2026. Mechanism specification v6.4.
+Whitepaper, version 3.2, November 2026. Mechanism specification v6.5.
 
 ### Summary
 
@@ -153,8 +153,8 @@ account by hand, and private code is never readable outside the machine (section
 **Traders.** Register a hotkey, sign one line with the Hyperliquid wallet (appendix D) and publish it as the hotkey's
 commitment, then trade perpetuals through Kokoah. No software to run, no keys to share, no reporting. To earn, a
 trader keeps an account averaging at least $10,000 over the day and, once at the start, completes three trades worth
-$1,000 together. The skill record counts from the day the link is accepted; history from before it never counts. A
-trader can move to a new account once per 60 days and keep their pay history and smoothed skill; the fee credit, the
+$1,000 together. The skill record counts only the days after the day the link is accepted; history from before it
+never counts. A trader can move to a new account once per 60 days and keep their pay history and smoothed skill; the fee credit, the
 qualification and the skill record's day count start again.
 
 **Validators.** Run the open-source validator with a hotkey and a database. It fetches public data, challenges the
@@ -170,7 +170,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.4; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.5; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -190,16 +190,17 @@ one changes nothing.
 **The skill reward.** One fifth is shared among miners with a proven record. Four things decide who takes part and
 with what weight:
 
-- **The entry test.** The account's daily returns since its link was accepted, computed from account value with
-  deposits, withdrawals and vault transfers removed and any money moved in through off-market fills removed as well,
-  each day capped at ±10%, must pass a probabilistic Sharpe ratio test at 95% confidence against a modest benchmark
-  once at least 30 of them are known. The test reads every day since the link, up to the last 90, so a strong trader
-  is recognized within weeks while a lucky month rarely passes. History from before the link never counts: the
-  luckiest past of many old accounts cannot be brought in.
-- **The skill score.** Is the edge statistically real (the probabilistic Sharpe ratio of the last 60 days), and are
-  recent gains clearly larger than recent losses (a recency-weighted gain-to-pain ratio of the last 30 days, halved if
-  two or more days in the last 60 lost more than 10%)? The two are multiplied, smoothed like the credit, and scaled so
-  that a strong trader scores 1. Only the part above a luck floor of 0.25 counts.
+- **The entry test.** The account's daily returns of the days after its link was accepted, computed from account value
+  with deposits, withdrawals and vault transfers removed and any money moved in through off-market fills removed as
+  well, each day capped at ±10%, must pass a probabilistic Sharpe ratio test at 95% confidence against a modest
+  benchmark once at least 30 of them are known. The test reads every such day, up to the last 90, so a strong trader
+  is recognized within weeks while a lucky month rarely passes. The day of the link and the history before it never
+  count: the luckiest past of many old accounts cannot be brought in.
+- **The skill score.** From the same returns: is the edge statistically real (the probabilistic Sharpe ratio of the
+  last 60 days since the link), and are recent gains clearly larger than recent losses (a recency-weighted
+  gain-to-pain ratio of the last 30 days, halved if two or more days in the last 60 lost more than 10%)? The two are
+  multiplied, smoothed like the credit, and scaled so that a strong trader scores 1. Only the part above a luck floor
+  of 0.25 counts.
 - **Participation.** The skill weight grows with the account's eligible Kokoah volume over the last 30 days, up to
   $1 million; beyond that, more volume adds nothing to the skill reward.
 - **Record length.** A record of 30 days weighs 0.8, and the weight rises evenly to full at 90 days, so a proven
@@ -223,8 +224,8 @@ Mirrored positions above 25% of an account's are removed from its credit; above 
 leave the skill reward for 30 days.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 30 to 90
-days since joining; record weight 0.8 at 30 days to 1 at 90; luck floor 0.25; participation full at $1M over 30 days; agent bonus 10%
-of the skill weight; gates 10 round trips, 7 days, $500; eligibility $10,000 average account value a day and three
+days since joining; record weight 0.8 at 30 days to 1 at 90; luck floor 0.25; participation full at $1M over 30 days;
+agent bonus 10% of the skill weight; gates 10 round trips, 7 days, $500; eligibility $10,000 average account value a day and three
 qualifying trades worth $1,000; mirror thresholds 25% and 50%; migration once per 60 days; emission split miners 41%,
 validators 41%, owner 18% (locked). Changes follow section 10.
 
@@ -237,9 +238,9 @@ dollar is worth the same to everyone. Splitting and merging accounts change noth
 fees, and every fee paid funds the buyback.
 
 **The skill reward pays only for a proven edge.** An account without a real edge almost never passes the test, and a
-short record weighs less than a long one. The test reads only the days since the account's current link, so history
-from before the link cannot be brought in, and a new link gains nothing: a fresh record gets lucky no more often
-than an established one.
+short record weighs less than a long one. The test reads only the days after the account's current link, so
+history from before the link cannot be brought in, and a new link gains nothing: a short record weighs less, so luck
+pays a fresh record no more than an established one.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
@@ -363,8 +364,8 @@ draws activity. What matters at this stage is that every number is produced and 
 
 **Stage two: records that hold up.** Kokoah's intelligence and assistance bring traders who would not have used a
 Bittensor subnet on their own, and builders bring more agents. The first traders and agents build records of 30 to
-90 days and share the skill reward; agents compete on verified results, and the best ideas spread because the records are
-public. Buybacks become regular.
+90 days and share the skill reward; agents compete on verified results, and the best ideas spread because the
+records are public. Buybacks become regular.
 
 **Stage three: verified agents reach traders.** The agents with the longest, strongest records become strategies on
 Kokoah. Traders follow them in their own accounts; their orders and the strategy revenue add to the buyback; builders
@@ -426,7 +427,8 @@ V_d       = A_d − S_d                                     volume pool
 pay_i,d   = V_d × Φ̂_i,d / Σ_j Φ̂_j,d  +  S_d × w_i,d / Σ_j w_j,d
 ```
 
-Skill, from daily returns `r_d = (E_d − E_d−1 − flows_d − offmarket_d) / E_d−1` capped to
+Skill, from the daily returns of the days after the UTC day the link was accepted,
+`r_d = (E_d − E_d−1 − flows_d − offmarket_d) / E_d−1`, capped to
 `r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
@@ -441,7 +443,7 @@ g'_d       = min(1, g_d / 0.65)
 The skill pool:
 
 ```
-n_i        = known days of r̃ since the link was accepted, the last 90 at most
+n_i        = how many of those r̃ are known, the last 90 at most
 entry      = n_i ≥ 30 and PSR of those n_i days of r̃ ≥ 0.95, gates passed, no mirror report, eligible today
 s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
@@ -461,10 +463,10 @@ agent      = Google's signature on the token ∧ production Confidential Space m
 
 ### Appendix B. Worked example
 
-Three eligible miners on one day, with equal smoothed builder fees. Trader A has a 90-day record that passes the test,
-with a skill weight of 0.8; agent B runs in a verified sealed machine and has also passed with a 90-day record, with
-skill above the floor and participation giving 0.8 before the bonus, so 0.88 after it; trader C has no proven record
-yet. The volume reward
+Three eligible miners on one day, with equal smoothed builder fees. Trader A has a 90-day record (record weight 1)
+that passes the test, with a skill weight of 0.8; agent B runs in a verified sealed machine and has also passed with a
+90-day record: skill above the floor times participation gives 0.8, so 0.88 with the bonus; trader C has no proven
+record yet. The volume reward
 (2,361.6 alpha) splits three ways, 787.2 alpha each. The skill reward (590.4 alpha) splits between A and B in the
 ratio 0.8 to 0.88: 281.1 and 309.3 alpha. A is paid 1,068.3 alpha, B 1,096.5 and C 787.2; the whole pool is paid.
 

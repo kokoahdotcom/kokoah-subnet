@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.4)
+# Incentive mechanism in plain words (v6.5)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -78,7 +78,7 @@ and a record that keeps holding up to 90 days weighs the most.
 
 ## Leaving and coming back
 
-Come back with the same hotkey and your records resume, but as a new registration you qualify again with three
-trades. Moving to a new address, or swapping the hotkey, keeps your pay history and any penalty, but your fee credit
-and your qualification start again. The test reads only the days since the account's current link, so a new link
-starts its count again, and history from before a link never counts.
+Come back with the same hotkey and your records resume (your link still stands on chain), but as a new registration
+you qualify again with three trades. Moving to a new address, or swapping the hotkey, keeps your pay history and any
+penalty, but your fee credit and your qualification start again. The test reads only the days after the day of the
+account's current link, so a new link starts its count again, and history from before a link never counts.

@@ -159,9 +159,9 @@ earns nothing extra: the reward is proportional to fees.
 
 **Skill reward: 20%.** Shared among miners who prove a real trading record:
 
-- **Entry test.** At least 30 days of daily returns since your link was accepted, whose risk-adjusted performance
-  passes a statistical test at 95% confidence, so a lucky streak does not pay. The test reads every day since the
-  link, up to the last 90; days before the link never count.
+- **Entry test.** At least 30 daily returns from the days after the day your link was accepted, whose risk-adjusted
+  performance passes a statistical test at 95% confidence, so a lucky streak does not pay. The test reads every such
+  day, up to the last 90; the day of the link and the days before it never count.
 - **Activity.** In the last 30 days: at least 10 completed round trips, at least 7 days with a Kokoah fill, and an
   average account value of at least $500.
 - **Weight.** Skill above a luck floor, multiplied by participation (full at $1 million of eligible Kokoah volume
@@ -194,14 +194,15 @@ on your hotkey; manage them with `btcli stake`.
 ## 9. Changing address, hotkey or registration
 
 Your fee credit and your qualification belong to one **identity**: one hotkey, one linked address, one
-registration. Your pay history and any penalty stay with you whatever changes. The entry test counts the days since
-your current link was accepted on chain, so a link published again starts that count again.
+registration. Your pay history and any penalty stay with you whatever changes. The entry test counts the days after
+the day your current link was accepted on chain. Publishing the same link again while registered changes nothing; a
+new link starts that count again.
 
 | Change | Fee credit and qualification | Days counted for the entry test | Smoothed skill, pay history, penalties |
 |---|---|---|---|
 | **New Hyperliquid address** (allowed once per 60 days) | start again | start again | carry over |
 | **Hotkey swap on chain** (same UID, coldkey and registration) | start again | start again (the link is published again) | carry over |
-| **Deregistered, same hotkey registers again** | start again | start again when the link is published again | carry over |
+| **Deregistered, same hotkey registers again** | start again | continue while its link still stands on chain (publishing it again starts them again) | carry over |
 | **A new hotkey links an address** | start from zero | start from zero | smoothed skill and pay history from zero; gates and penalties stay with the address |
 
 **Moving to a new address.** Get the line for the new address (`miner message ... --address <new>`), sign it with
