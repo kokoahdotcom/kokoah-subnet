@@ -115,7 +115,13 @@ class Store:
         with self._engine.begin() as c:
             c.execute(
                 insert(S.errors).values(
-                    at=_now(), day=day, hotkey=hotkey, address=address, stage=stage, message=message[:2000], level=level
+                    at=_now(),
+                    day=day,
+                    hotkey=hotkey,
+                    address=address,
+                    stage=stage,
+                    message=_no_nul(message[:2000]),
+                    level=level,
                 )
             )
 
@@ -786,7 +792,8 @@ class Store:
         with self._engine.begin() as c:
             c.execute(delete(S.agent_checks).where(S.agent_checks.c.day == day))
             for r in rows:
-                c.execute(insert(S.agent_checks).values(day=day, checked_at=_now(), **dict(r)))
+                row = {k: _no_nul(v) if isinstance(v, str) else v for k, v in r.items()}
+                c.execute(insert(S.agent_checks).values(day=day, checked_at=_now(), **row))
 
     def put_builder_rewards(self, builder: str, rewards: Mapping[str, float]) -> None:
         with self._engine.begin() as c:
@@ -1005,6 +1012,12 @@ def _commitment_text(data: str) -> str:
     so data with one is kept as 0x-hex of its UTF-8 bytes: the form the chain client already gives data that isn't
     UTF-8."""
     return "0x" + data.encode().hex() if "\x00" in data else data
+
+
+def _no_nul(text: str) -> str:
+    """Text for a message or an agent check, which can quote what a miner's machine or another outside source sent:
+    Postgres text can't hold a NUL character, so each one becomes U+FFFD (the replacement character)."""
+    return text.replace("\x00", "\ufffd")
 
 
 def _put_penalty(c: Connection, address: str, until_day: int, day: str, hotkey: str, reason: str) -> None:
