@@ -407,6 +407,15 @@ async def collect_and_score(
             events.append(
                 {"hotkey": hk, "event": "left", "address": before[hk].address, "reason": "hotkey no longer registered"}
             )
+        elif hk not in resolution.accepted and hk not in resolution.unlinked:
+            events.append(
+                {
+                    "hotkey": hk,
+                    "event": "reregistered",
+                    "address": before[hk].address,
+                    "reason": "registered again: its earlier binding no longer counts",
+                }
+            )
     for hk, address in resolution.unlinked.items():
         events.append({"hotkey": hk, "event": "unlinked", "address": address, "reason": "the address ended the link"})
     for old_hk, new_hk in swaps:

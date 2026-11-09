@@ -199,8 +199,9 @@ def test_who_holds_an_address_after_a_hotkey_returns_depends_only_on_the_chain()
     )
     fresh = resolve_bindings({}, [old, new], block=450, registered=[HK, HK2], registered_at=reg)
     offline = resolve_bindings(first.accepted, [old, new], block=450, registered=[HK, HK2], registered_at=reg)
+    stale = {HK: "published before the hotkey's current registration: publish the binding again"}
     for r in (throughout, fresh, offline):
-        assert {hk: b.address for hk, b in r.accepted.items()} == {HK2: a.address.lower()} and r.refused == {}
+        assert {hk: b.address for hk, b in r.accepted.items()} == {HK2: a.address.lower()} and r.refused == stale
     republished = _pub(HK, 500, Binding(a.address, sign_binding(a.key, 2, HK, a.address)))
     for prev in ({}, throughout.accepted, first.accepted):
         r = resolve_bindings(prev, [old, new, republished], block=550, registered=[HK, HK2], registered_at=reg)

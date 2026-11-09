@@ -83,7 +83,9 @@ def resolve_bindings(
         if live is not None and hk not in live:
             continue  # the chain keeps a departed hotkey's commitment: it holds no address while the hotkey is away
         if not this_registration(hk, pb.block):
-            continue  # left on chain from an earlier registration: the hotkey publishes its binding again
+            # left on chain from an earlier registration: the hotkey publishes its binding again
+            refused[hk] = "published before the hotkey's current registration: publish the binding again"
+            continue
         if not pb.valid:
             refused[hk] = "signature does not match"
             continue
