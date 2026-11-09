@@ -2,8 +2,8 @@
 
     s_i = max(0, (g'_i - floor) / (1 - floor))                      the skill above the luck floor
     v_i = min(1, V_i,30d / cap)                                     participation: eligible Kokoah notional, capped
-    r_i = start + (1 - start) x clip01((n_i - min_days) / (days - min_days))   the record: longer weighs more
-    w_i = s_i x v_i x r_i x (1 + agent_bonus if a verified agent)   the skill weight
+    L_i = start + (1 - start) x clip01((n_i - min_days) / (days - min_days))   the record: longer weighs more
+    w_i = s_i x v_i x L_i x (1 + agent_bonus if a verified agent)   the skill weight
 
 A miner takes part only when it is eligible that day, passes the activity gates, has no mirror penalty, and passes
 the entry test: the probabilistic Sharpe ratio of its capped daily returns since it joined (the last `entry_days` of
