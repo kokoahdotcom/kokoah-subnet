@@ -1384,13 +1384,18 @@ async def test_a_new_registration_starts_a_new_record_from_its_block(tmp_path: P
 async def test_an_unreadable_block_time_fails_the_day_before_the_deadline(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     _bind_days_before(chain, HK_A, 40)
+    # the head sits where block 5000 is noon 40 days before DAY at 12 s a block (the estimate's own measure)
+    chain._block = 5_000 + int((datetime.now(tz=UTC) - _noon_days_before(40)).total_seconds() / 12)
+    _walk(store, addr_a, 120)
     chain.block_info_fails = True
     with pytest.raises(RuntimeError, match="time of block 5000"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
-    # after the deadline the estimate stands in, never earlier than the block's real time
+    # after the deadline the estimate stands in (never earlier than the block's real time), and is not kept
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=DAY_MS / 1000 + 3 * 86_400)
     a = next(r for r in result.records if r.hotkey == HK_A)
-    assert a.hotkey == HK_A and store.get_meta("block_day:5000") is None
+    row = next(m for m in store.miner_days(HK_A) if m["day"] == DAY)
+    assert row["joined_day"] == _noon_days_before(40).strftime("%Y-%m-%d") and a.returns_days == 40
+    assert store.get_meta("block_day:5000") is None
     await hl.close()
 
 

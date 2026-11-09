@@ -17,7 +17,7 @@ perpetuals through the Kokoah builder code, by hand or with an agent. Validators
 the bound addresses and chain state, each miner's share of the daily miner emission. Kokoah collects the builder fee
 on every such trade and spends it buying back and burning the subnet's token (alpha). The purpose: trading agents,
 and traders, whose records are verified from public data. The intention: activity rewarded in proportion to the
-builder fees it pays; a separate reward for proven trading skill that luck cannot capture; more skill weight for verified agents, the subnet's main purpose; and the whole emission paid to miners
+builder fees it pays; a separate reward for proven trading skill that chance rarely captures; more skill weight for verified agents, the subnet's main purpose; and the whole emission paid to miners
 every day. Verified agents with long records are to be offered to traders on Kokoah as strategies, and that revenue
 goes to the buyback too; that happens outside the mechanism and never changes a score.
 
@@ -220,10 +220,10 @@ The day is published per miner (`joined_day`). Then:
 
 - **Each account on its own record.** Accounts that trade alike, copies of one another included, are each weighed
   on their own: copy trading is never punished.
-- **Why the entry test.** It admits only records whose edge is statistically real, so luck does not pay. A record
-  can enter from 30 days, and the test keeps reading every day since joining until the record is 90 days long, so a
-  strong trader is paid within weeks while a lucky month rarely passes; the record weight `L_i` keeps a short record
-  below a proven one. From 90 days on, the test reads the last 90 days.
+- **Why the entry test.** It asks for 95% confidence that the edge is statistically real. A record can enter from
+  30 days, and the test keeps reading every day since joining until the record is 90 days long, so a strong trader
+  is paid within weeks; the record weight `L_i` keeps a short record below a proven one. From 90 days on, the test
+  reads the last 90 days.
 - **Only days after joining.** The history from before the binding is never read by the test: otherwise an owner
   of many old accounts could bind the one with the luckiest past and be paid at once. A new link (a migration, an
   unlink and a new link, a hotkey swap's re-binding) or a new registration starts a new record; publishing the same
@@ -389,7 +389,7 @@ publish, while the others keep the block they first accepted.
 ### 14b. Robustness rules
 
 - A failed read of the account's recorded history (§9a), the fill history, the explorer, a linked account, the minute
-  candles or the unlinks fails the day's scoring, which is retried within the hour, until the deadline: the file
+  candles, the unlinks or a join block's time (§7a) fails the day's scoring, which is retried within the hour, until the deadline: the file
   deadline, and never sooner than `retry_grace_hours` (3) after this validator's first attempt at the day. The days of
   a backlog (days already over when the day before them was first attempted, as after an outage) share the first one's
   window, so a validator back from an outage retries for 3 hours in all, and a validator that was away from a day it
@@ -397,7 +397,9 @@ publish, while the others keep the block they first accepted.
   failed read is final for that day on that validator. Past the deadline the day is scored and only what depends on
   the failed read is lost: without the recorded history the day is measured from points an earlier read stored if they
   reach past the day's end, otherwise the account's average is unknown and it is not eligible that day; without the
-  fill history its return is unknown; fills that needed a failed read go uncounted (§3). The minute candles of a coin
+  fill history its return is unknown; fills that needed a failed read go uncounted (§3); without a join block's time
+  the join day is estimated at 12 seconds a block back from the current block, which is never earlier than the
+  block's real time. The minute candles of a coin
   the exchange does not list are settled at once the same way, so no trader can hold everyone's day with it, and so
   are those of a day older than the exchange keeps (§3). The other
   reads (account value, flows, positions, fee rates, stake) fall back. Every failure is recorded.

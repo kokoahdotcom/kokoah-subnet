@@ -125,7 +125,7 @@ def luck_weight() -> None:
     strong = means["strong edge (Sharpe 3.2/yr)"]
     check("zero-edge luck takes under a tenth of a strong trader's weight", means["zero edge"] < 0.1 * strong)
     check(
-        "a fresh zero-edge account is paid no more than an established one (new accounts do not farm luck)",
+        "a zero-edge account gains nothing by starting fresh",
         young["zero edge"] <= grown["zero edge"],
     )
 
