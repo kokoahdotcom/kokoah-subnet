@@ -32,6 +32,29 @@ def test_the_skill_record_counts_only_days_after_joining(tmp_path: Path) -> None
     assert s.returns("0xA", 90, after="2026-10-05") == []
 
 
+def test_a_commitment_with_a_nul_character_is_kept_as_hex(tmp_path: Path) -> None:
+    """Any hotkey can commit any bytes, and Postgres text refuses NUL: such data is stored as 0x-hex so the day
+    still scores; other data is stored as it is."""
+    from sqlalchemy import select
+
+    from kokoah_subnet.validator import schema as S
+
+    s = Store(tmp_path / "v.sqlite")
+    raw = "\x00\x08\x0eexample.org/model\x00\x00"
+    row = {"block": 1, "is_binding": False, "valid": None, "address": None, "previous_address": None}
+    s.put_commitments(
+        "2026-11-08",
+        [
+            {**row, "hotkey": "hkNul", "data": raw, "encrypted": False},
+            {**row, "hotkey": "hkText", "data": "plain text", "encrypted": False},
+        ],
+    )
+    with s._engine.begin() as c:
+        stored = {r.hotkey: r.data for r in c.execute(select(S.commitments.c.hotkey, S.commitments.c.data))}
+    assert stored == {"hkNul": "0x" + raw.encode().hex(), "hkText": "plain text"}
+    assert "\x00" not in stored["hkNul"]
+
+
 def test_positions_aligned_over_days(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
     s.put_positions("0xA", "2026-10-01", {"BTC": 1000.0, "ETH": -500.0})
