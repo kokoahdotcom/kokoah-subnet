@@ -241,9 +241,25 @@ def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path)
         c.execute(text("UPDATE meta SET value = '11' WHERE key = 'schema_version'"))
     old.close()
     s = Store(path)
-    assert s.migrations_applied == ["12: penalties: one row per report"]
+    assert s.migrations_applied == ["12: penalties: one row per report", "13: miner_days.joined_day"]
     s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
     assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
+    assert Store(path).migrations_applied == []
+
+
+def test_step_13_adds_the_join_day_to_an_existing_record(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    path = tmp_path / "old.sqlite"
+    old = Store(path)
+    with old._engine.begin() as c:  # a record from before the join day was published
+        c.execute(text("ALTER TABLE miner_days DROP COLUMN joined_day"))
+        c.execute(text("UPDATE meta SET value = '12' WHERE key = 'schema_version'"))
+    old.close()
+    s = Store(path)
+    assert s.migrations_applied == ["13: miner_days.joined_day"]
+    s.put_miner_days("2026-10-21", [{"hotkey": "hk", "address": "0xa", "joined_day": "2026-09-30"}])
+    assert s.miner_days("hk")[0]["joined_day"] == "2026-09-30"
     assert Store(path).migrations_applied == []
 
 

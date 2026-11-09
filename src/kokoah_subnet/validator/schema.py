@@ -198,6 +198,7 @@ miner_days = Table(
     Column("credited_fills", Integer),
     Column("identity_reset", String(32)),  # why credit and qualification were dropped today, if they were
     Column("registered_block", BigInteger),
+    Column("joined_day", String(10)),  # the skill record counts the days after it (spec 7a)
     # the two pools
     Column("volume_pay_alpha", Float),
     Column("skill_pay_alpha", Float),

@@ -354,7 +354,8 @@ class Store:
         """An address's record as this validator scored it (None if never scored): its daily returns (with money moved
         in or out and off-market profit removed; the skill test reads those after the address joined), the growth of 1
         over them (carried over days the exchange did not record), and each scored day's figures. The "90d" figures
-        are over the last 90 known returns, the entry test's longest window."""
+        are over the last 90 known returns, the entry test's longest window; `joined_day` is the day after which the
+        skill test counts."""
         a = address.lower()
         with self._engine.connect() as c:
             scored = (
@@ -368,6 +369,7 @@ class Store:
                         S.miner_days.c.eligible,
                         S.miner_days.c.agent_verified,
                         S.miner_days.c.avg_equity_usd,
+                        S.miner_days.c.joined_day,
                     )
                     .where(S.miner_days.c.address == a)
                     .order_by(S.miner_days.c.day)
@@ -403,6 +405,8 @@ class Store:
             "agent_days": sum(1 for m in scored if m["agent_verified"]),
             "first_day": days[0],
             "last_day": days[-1],
+            # the skill record counts the days after this one (the latest scored day's link)
+            "joined_day": scored[-1]["joined_day"],
         }
         out: dict[str, Any] = {"address": a, "hotkey": str(scored[-1]["hotkey"]), "linked": linked, "record": record}
         if with_days:

@@ -205,29 +205,29 @@ No drawdown anywhere. The scale is set so that a strong trader scores 1.
 ```
 s_i = max(0, (g'_i − 0.25) / 0.75)                         skill above the luck floor
 v_i = min(1, V_i,30d / $1,000,000)                         participation: credited Kokoah notional, 30 days
-r_i = 0.8 + 0.2 × clip01((n_i − 30) / 60)                  the record: 0.8 at 30 days, 1 at 90 days and more
-w_i = s_i × v_i × r_i × (1.1 if a verified agent account, §16)   skill weight
+L_i = 0.8 + 0.2 × clip01((n_i − 30) / 60)                  the record: 0.8 at 30 days, 1 at 90 days and more
+w_i = s_i × v_i × L_i × (1.1 if a verified agent account, §16)   skill weight
 ```
 
 `V_i,30d` is the credited notional (eligible trades only, §9a) of the last 30 days, today included. A miner takes
 part only when all of these hold: eligible today (§9a); the activity gates pass (§9); no mirror penalty (§3); and
 the **entry test**: the probabilistic Sharpe ratio of the capped daily returns since the address joined (the last
 90 at most) against the benchmark daily Sharpe ratio of 0.03 is at least 0.95, with at least 30 of them known (fewer:
-no entry). `n_i` is the number of returns the test read (30 to 90). The address joined on the UTC day of the block
-that accepted its binding (§14), estimated at 12 seconds a block; only the returns of the days after it count, for
-the entry test and for the skill score (§7). Then:
+no entry). `n_i` is the number of returns the test read (30 to 90). The address joined on the UTC day, by the
+chain's own timestamp of the block, of the later of the block that accepted its binding (§14) and the hotkey's
+registration block; only the returns of the days after it count, for the entry test and for the skill score (§7).
+The day is published per miner (`joined_day`). Then:
 
 - **Each account on its own record.** Accounts that trade alike, copies of one another included, are each weighed
   on their own: copy trading is never punished.
 - **Why the entry test.** It admits only records whose edge is statistically real, so luck does not pay. A record
   can enter from 30 days, and the test keeps reading every day since joining until the record is 90 days long, so a
-  strong trader is paid within weeks while a lucky month rarely passes; the record weight `r_i` keeps a short record
+  strong trader is paid within weeks while a lucky month rarely passes; the record weight `L_i` keeps a short record
   below a proven one. From 90 days on, the test reads the last 90 days.
 - **Only days after joining.** The history from before the binding is never read by the test: otherwise an owner
-  of many old accounts could bind the one with the luckiest past and be paid at once. A new binding (a migration, an
-  unlink and a new link, a new registration, a hotkey swap's re-binding) starts a new record. A fresh record gains
-  nothing over an old one: over the first 90 days a zero-edge account is paid less often than an established one
-  (`kokoah-subnet verify`, check 4).
+  of many old accounts could bind the one with the luckiest past and be paid at once. A new link (a migration, an
+  unlink and a new link, a hotkey swap's re-binding) or a new registration starts a new record; publishing the same
+  link again does not. A validator that starts fresh dates an unchanged link from its latest publish (§14).
 - **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
   back its records are one to seven days apart. The backfill on an address's first scored day therefore covers about
   30 days: it gives the first day its return and the record page its history, not the skill test.
@@ -287,7 +287,7 @@ ineligible days, and nothing is paid for them later.
 registration. They start from zero when the bound address changes (migration), when the hotkey is swapped on
 chain, when the hotkey registers again after leaving, and naturally for a new hotkey. What a fresh identity must
 not escape is kept: the pay history and any mirror penalty (which follows the address and the addresses its owner
-controls, §3). The entry test's record starts at each new binding (§7a), so a fresh identity gains nothing there: it
+controls, §3). The entry test's record starts again with a new link or a new registration (§7a): a fresh identity
 waits 30 days again.
 
 An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of capital, its own
@@ -344,17 +344,19 @@ volume pool is split by fees alone.
 
 A miner's smoothed credit, skill and pay history belong to the binding. Migration to a new address is allowed
 once per 60 days by a message signed by the old address, the new address and the hotkey; skill, pay history and
-penalties carry over, while credit and qualification start from zero (§9a). A fresh binding starts from
-zero. Clusters (§3) cover linked addresses. The chain keeps
+penalties carry over, while credit and qualification start from zero (§9a) and the entry test's record starts with
+the new address (§7a). A fresh binding starts from zero. Clusters (§3) cover linked addresses. The chain keeps
 only a hotkey's latest commitment, so a validator enforces the 60-day limit from the bindings it has accepted; a
 validator that starts fresh accepts the current commitment on its signatures alone and converges with the others
-after 60 days.
+after 60 days. For the same reason it dates the skill record of a link published again unchanged from that latest
+publish, while the others keep the block they first accepted.
 
 ### 14a. Leaving, returning, switching
 
 - **Deregistered or pruned, same hotkey comes back.** Records are kept by hotkey and pause while the hotkey is
   off the subnet (nothing can be paid to it); they resume when it is registered again, as a fresh identity for
-  credit and qualification (§9a): the new registration must qualify again.
+  credit and qualification (§9a): the new registration must qualify again, and the entry test's record starts at
+  the new registration block (§7a).
 - **Deregistered, a new hotkey binds the same address.** A hotkey that left the subnet releases its address; the
   new hotkey starts with no credit tail, no qualification and no smoothed skill (`g = 0`). The unpaid credit tail of
   the old hotkey is lost to the trader: with 70/30 smoothing, leaving right after a trading day forfeits about 70% of

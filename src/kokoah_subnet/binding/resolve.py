@@ -6,7 +6,8 @@ signatures are on the commitment); the same address again changes nothing; a mig
 accepted only when the previous address is the one currently accepted, its signature checks out, and the last
 accepted change is at least `migration_days` old; anything else keeps the earlier binding and is flagged. One
 address can be bound to one hotkey: a later claim on an address already accepted elsewhere is refused. A validator
-that starts fresh therefore agrees with the others except on the 60-day limit during its own first 60 days.
+that starts fresh therefore agrees with the others except on the 60-day limit during its own first 60 days, and on
+the block of a link published again unchanged (it sees only the latest publish, which dates the skill record).
 
 Unlinks (signed by the address, see `unlink.py`) count from their effective day: the hotkey's link to that address
 ends, the address is free for another hotkey, and the pair is never accepted again. They depend only on the published

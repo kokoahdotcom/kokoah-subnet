@@ -65,7 +65,15 @@ def create_app(store: Store) -> FastAPI:
     def record_fields(address: str) -> dict[str, Any]:
         found = store.account_record(address, with_days=False)
         r = found["record"] if found else {}
-        keys = ("record_days", "return_90d", "worst_drop_90d", "losing_days_90d", "return_days_90d", "agent_days")
+        keys = (
+            "record_days",
+            "return_90d",
+            "worst_drop_90d",
+            "losing_days_90d",
+            "return_days_90d",
+            "agent_days",
+            "joined_day",
+        )
         return {k: r.get(k, 0 if k in ("record_days", "agent_days") else None) for k in keys}
 
     @app.get("/accounts/{address}")

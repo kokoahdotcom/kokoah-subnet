@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import bittensor as bt
@@ -90,6 +91,8 @@ class _FakeChain:
         self.staking = self
         self.hyperparameters = self
         self.rate_limit = 100
+        self.block_times: dict[int, datetime] = {}  # set by a test; others are 12 s a block back from now
+        self.block_info_fails = False
         self.neurons = [
             _Neuron(0, OWNER, "ckOwner"),
             _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
@@ -100,6 +103,13 @@ class _FakeChain:
 
     async def weights_rate_limit(self, netuid: int, block: int | None = None) -> int:
         return self.rate_limit
+
+    async def block_info(self, block: int | None = None) -> Any:
+        if self.block_info_fails:
+            raise RuntimeError("node unavailable")
+        n = self._block if block is None else block
+        stamp = self.block_times.get(n) or datetime.now(tz=UTC) - timedelta(seconds=12 * (self._block - n))
+        return SimpleNamespace(number=n, timestamp=stamp)
 
     async def block(self) -> int:
         return self._block
@@ -1304,12 +1314,14 @@ async def test_a_new_registration_on_the_same_uid_is_not_a_swap(tmp_path: Path) 
     await hl.close()
 
 
-def _bind_days_before(chain: _FakeChain, hotkey: str, days: int) -> None:
-    """Move the hotkey's binding to noon UTC `days` before DAY, as the validator estimates block times (12 s)."""
-    when = datetime.fromisoformat(DAY).replace(tzinfo=UTC) - timedelta(days=days) + timedelta(hours=12)
-    back = int((datetime.now(tz=UTC) - when).total_seconds() / 12)
-    chain._block = max(chain._block, back + 10_000)
-    chain._commitments[hotkey] = _Commitment(chain._commitments[hotkey].data, chain._block - back)
+def _noon_days_before(days: int) -> datetime:
+    return datetime.fromisoformat(DAY).replace(tzinfo=UTC) - timedelta(days=days) + timedelta(hours=12)
+
+
+def _bind_days_before(chain: _FakeChain, hotkey: str, days: int, block: int = 5_000) -> None:
+    """Move the hotkey's binding to a block whose chain time is noon UTC `days` before DAY."""
+    chain._commitments[hotkey] = _Commitment(chain._commitments[hotkey].data, block)
+    chain.block_times[block] = _noon_days_before(days)
 
 
 def _walk(store: Store, address: str, days: int, skip: int | None = None) -> None:
@@ -1349,6 +1361,36 @@ async def test_the_skill_record_counts_only_the_days_after_the_binding(
     assert a.returns_days == counted
     assert (a.entry_psr is not None) == (counted >= 30)
     assert len(store.returns(addr_a, 200)) == 120  # the history itself stays stored
+    await hl.close()
+
+
+async def test_a_new_registration_starts_a_new_record_from_its_block(tmp_path: Path) -> None:
+    """The link stays on chain while the hotkey is away; registering again starts the record from the registration
+    block (the later of the two), the same for every validator."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    _bind_days_before(chain, HK_A, 100)
+    chain.neurons[1].block_at_registration = 7_000
+    chain.block_times[7_000] = _noon_days_before(35)
+    _walk(store, addr_a, 120)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    a = next(r for r in result.records if r.hotkey == HK_A)
+    assert a.returns_days == 35
+    row = next(m for m in store.miner_days(HK_A) if m["day"] == DAY)
+    assert row["joined_day"] == _noon_days_before(35).strftime("%Y-%m-%d")
+    assert store.get_meta("block_day:7000") == row["joined_day"]  # read once, kept
+    await hl.close()
+
+
+async def test_an_unreadable_block_time_fails_the_day_before_the_deadline(tmp_path: Path) -> None:
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    _bind_days_before(chain, HK_A, 40)
+    chain.block_info_fails = True
+    with pytest.raises(RuntimeError, match="time of block 5000"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)
+    # after the deadline the estimate stands in, never earlier than the block's real time
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=DAY_MS / 1000 + 3 * 86_400)
+    a = next(r for r in result.records if r.hotkey == HK_A)
+    assert a.hotkey == HK_A and store.get_meta("block_day:5000") is None
     await hl.close()
 
 
