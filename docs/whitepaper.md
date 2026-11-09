@@ -239,8 +239,7 @@ fees, and every fee paid funds the buyback.
 
 **The skill reward pays only for a proven edge.** An account without a real edge almost never passes the test, and a
 short record weighs less than a long one. The test reads only the days after the account's current link, so
-history from before the link cannot be brought in, and a new link gains nothing: a short record weighs less, so luck
-pays a fresh record no more than an established one.
+history from before the link cannot be brought in, and a new link or a new registration starts the count from zero.
 
 **What the protections do not need.** No rule asks a miner why they trade. A market maker earns the volume reward on
 every fill like everyone else; a swing trader with a real edge earns both; an agent earns both and the agent bonus.
@@ -427,7 +426,8 @@ V_d       = A_d − S_d                                     volume pool
 pay_i,d   = V_d × Φ̂_i,d / Σ_j Φ̂_j,d  +  S_d × w_i,d / Σ_j w_j,d
 ```
 
-Skill, from the daily returns of the days after the UTC day the link was accepted,
+Skill, from the daily returns of the days after the join day (the UTC day, by the chain's block time, of the later
+of the block that accepted the link and the hotkey's registration block),
 `r_d = (E_d − E_d−1 − flows_d − offmarket_d) / E_d−1`, capped to
 `r̃_d = clip(r_d, −0.10, +0.10)`:
 
@@ -447,8 +447,8 @@ n_i        = how many of those r̃ are known, the last 90 at most
 entry      = n_i ≥ 30 and PSR of those n_i days of r̃ ≥ 0.95, gates passed, no mirror report, eligible today
 s_i        = max(0, (g'_i − 0.25) / 0.75)
 v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
-r_i        = 0.8 + 0.2 × clip((n_i − 30) / 60, 0, 1)
-w_i        = s_i × v_i × r_i × (1.1 for a verified agent)       when entry holds, else 0
+L_i        = 0.8 + 0.2 × clip((n_i − 30) / 60, 0, 1)
+w_i        = s_i × v_i × L_i × (1.1 for a verified agent)       when entry holds, else 0
 ```
 
 The agent check, by each validator:

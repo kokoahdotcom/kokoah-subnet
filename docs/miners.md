@@ -184,7 +184,7 @@ on your hotkey; manage them with `btcli stake`.
 - **Bindings:** `uv run kokoah-subnet miner show --network finney --netuid 39`, or `/bindings` on a validator's
   interface.
 - **Your record:** `https://api.kokoah.com/subnet/accounts/<your address>` (or `/accounts/<address>` on any
-  validator's interface): every day's return as the validators score it (days before your link are shown but do
+  validator's interface): every day's return as the validators score it (days up to `joined_day` are shown but do
   not count for skill), the growth curve, the 90-day return and worst drop, and the days your account passed as a
   verified agent.
 - **Your day in detail:** a validator's `/days/latest` and `/days/<YYYY-MM-DD>` publish every miner's figures:
@@ -195,14 +195,14 @@ on your hotkey; manage them with `btcli stake`.
 
 Your fee credit and your qualification belong to one **identity**: one hotkey, one linked address, one
 registration. Your pay history and any penalty stay with you whatever changes. The entry test counts the days after
-the day your current link was accepted on chain. Publishing the same link again while registered changes nothing; a
-new link starts that count again.
+the day your current link was accepted on chain (or after your registration, if that came later). Publishing the
+same link again while registered changes nothing; a new link or a new registration starts that count again.
 
 | Change | Fee credit and qualification | Days counted for the entry test | Smoothed skill, pay history, penalties |
 |---|---|---|---|
 | **New Hyperliquid address** (allowed once per 60 days) | start again | start again | carry over |
 | **Hotkey swap on chain** (same UID, coldkey and registration) | start again | start again (the link is published again) | carry over |
-| **Deregistered, same hotkey registers again** | start again | continue while its link still stands on chain (publishing it again starts them again) | carry over |
+| **Deregistered, same hotkey registers again** | start again | start again from the new registration | carry over |
 | **A new hotkey links an address** | start from zero | start from zero | smoothed skill and pay history from zero; gates and penalties stay with the address |
 
 **Moving to a new address.** Get the line for the new address (`miner message ... --address <new>`), sign it with
