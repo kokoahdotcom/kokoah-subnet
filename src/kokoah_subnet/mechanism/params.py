@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "6.4"
+SPEC_VERSION = "6.5"
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,9 @@ class Params:
     skill_floor: float = 0.25  # s = max(0, (g' - floor) / (1 - floor))
     skill_volume_cap_usd: float = 1_000_000.0  # v = min(1, eligible Kokoah notional over the window / cap)
     skill_volume_days: int = 30
-    entry_days: int = 90  # entry test: PSR of the capped daily returns over this many days
+    entry_days: int = 90  # entry test: PSR of the capped daily returns since joining, at most this many days
+    entry_min_days: int = 30  # fewer known returns since joining: no entry
+    record_start_weight: float = 0.8  # skill weight x this at entry_min_days, rising evenly to 1 at entry_days
     entry_psr: float = 0.95  # must reach this (benchmark `psr_benchmark`)
     agent_bonus: float = 0.10  # skill weight x (1 + bonus) for a verified sealed-machine agent account
     # activity gates (section 9): for the skill pool
@@ -84,8 +86,10 @@ class Params:
             raise ValueError("skill_floor must be in [0, 1)")
         if self.skill_volume_cap_usd <= 0 or self.agent_bonus < 0:
             raise ValueError("skill_volume_cap_usd must be positive and agent_bonus non-negative")
-        if not 0.5 < self.entry_psr < 1 or self.entry_days < self.psr_min_days:
-            raise ValueError("entry_psr must be in (0.5, 1) and entry_days at least psr_min_days")
+        if not 0.5 < self.entry_psr < 1 or not self.psr_min_days <= self.entry_min_days <= self.entry_days:
+            raise ValueError("entry_psr must be in (0.5, 1) and psr_min_days <= entry_min_days <= entry_days")
+        if not 0 < self.record_start_weight <= 1:
+            raise ValueError("record_start_weight must be in (0, 1]")
         if self.min_equity_usd < 0 or self.qualify_trades < 1 or self.qualify_notional_usd < 0:
             raise ValueError("eligibility thresholds must be non-negative and at least one trade")
         if self.equity_min_points < 2:

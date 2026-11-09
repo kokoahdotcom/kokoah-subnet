@@ -31,6 +31,7 @@ from .skill import SkillParts, skill_factor, skill_raw
 from .skillpool import (
     adjusted_skill,
     entry_psr,
+    record_days,
     skill_weight,
     volume_factor,
 )
@@ -43,7 +44,7 @@ class MinerInputs:
 
     hotkey: str
     address: str  # lowercase
-    returns: Sequence[float] = ()  # daily returns, newest last, flows removed, uncapped
+    returns: Sequence[float] = ()  # daily returns since the address joined, newest last, flows removed, uncapped
     mean_equity_usd: float = 0.0  # over the gate window
     staked_min_alpha: float = 0.0  # recorded for information
     collateral_min_alpha: float = 0.0  # recorded
@@ -234,12 +235,18 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         elif not gates:
             pool_reason = "activity gates"
         elif not entry:
-            pool_reason = "entry test" if psr is not None else f"fewer than {params.entry_days} days of returns"
+            pool_reason = (
+                "entry test" if psr is not None else f"fewer than {params.entry_min_days} days of returns since joining"
+            )
         elif s <= 0:
             pool_reason = "skill at or below the floor"
         elif v <= 0:
             pool_reason = "no Kokoah volume in the window"
-        weight = skill_weight(skill, volume_window, m.agent_verified, params) if pool_reason is None else 0.0
+        weight = (
+            skill_weight(skill, volume_window, m.agent_verified, params, days=record_days(m.returns, params))
+            if pool_reason is None
+            else 0.0
+        )
         work.append(
             _Work(
                 m, state, reset, fees, credited, qual, eligible, reason, mirrored, action.credit_factor,
