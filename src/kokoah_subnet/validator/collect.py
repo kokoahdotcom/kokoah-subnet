@@ -416,6 +416,14 @@ async def collect_and_score(
 
     fills_by_address = by_user(fills)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
+    # the skill record counts the days after the address joined: the UTC day of the block that accepted its binding
+    # (a new binding starts a new record: a migration, an unlink, a re-registration, a hotkey swap's re-binding), so
+    # no history from before it counts
+    joined_day = {
+        hk: block_time(snap.block, a.accepted_block, now).strftime("%Y-%m-%d") if a.accepted_block > 0 else day
+        for hk, a in resolution.accepted.items()
+        if hk in uid_of
+    }
     # agent accounts: challenge every sealed machine and verify its attestation (the skill bonus)
     if agent_status is None:
         agent_bindings = {
@@ -873,7 +881,9 @@ async def collect_and_score(
             MinerInputs(
                 hotkey=hk,
                 address=address,
-                returns=store.returns(address, max(params.confidence_days, params.entry_days), day),
+                returns=store.returns(
+                    address, max(params.confidence_days, params.entry_days), day, after=joined_day[hk]
+                ),
                 mean_equity_usd=store.mean_equity(address, params.gate_days, day),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),

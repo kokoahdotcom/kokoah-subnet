@@ -20,6 +20,18 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
 
 
+def test_the_skill_record_counts_only_days_after_joining(tmp_path: Path) -> None:
+    """The backfilled history before the binding stays stored (the record page shows it) but the skill test reads
+    only the returns of the days after the address joined: a lucky past cannot be brought in."""
+    s = Store(tmp_path / "v.sqlite")
+    for i, value in enumerate((1000.0, 1100.0, 1210.0, 1331.0, 1197.9)):
+        s.put_equity("0xA", f"2026-10-{i + 1:02d}", value, 0.0)
+    assert s.returns("0xA", 90) == pytest.approx([0.1, 0.1, 0.1, -0.1])
+    assert s.returns("0xA", 90, after="2026-10-03") == pytest.approx([0.1, -0.1])
+    assert list(s.dated_returns("0xA", 90, "2026-10-04", after="2026-10-03")) == ["2026-10-04"]
+    assert s.returns("0xA", 90, after="2026-10-05") == []
+
+
 def test_positions_aligned_over_days(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
     s.put_positions("0xA", "2026-10-01", {"BTC": 1000.0, "ETH": -500.0})

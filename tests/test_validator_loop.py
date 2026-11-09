@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1304,21 +1304,51 @@ async def test_a_new_registration_on_the_same_uid_is_not_a_swap(tmp_path: Path) 
     await hl.close()
 
 
+def _bind_days_before(chain: _FakeChain, hotkey: str, days: int) -> None:
+    """Move the hotkey's binding to noon UTC `days` before DAY, as the validator estimates block times (12 s)."""
+    when = datetime.fromisoformat(DAY).replace(tzinfo=UTC) - timedelta(days=days) + timedelta(hours=12)
+    back = int((datetime.now(tz=UTC) - when).total_seconds() / 12)
+    chain._block = max(chain._block, back + 10_000)
+    chain._commitments[hotkey] = _Commitment(chain._commitments[hotkey].data, chain._block - back)
+
+
+def _walk(store: Store, address: str, days: int, skip: int | None = None) -> None:
+    import random
+
+    rng = random.Random(5)
+    value = 25_000.0
+    for back in range(days, 0, -1):
+        value *= 1 + rng.gauss(0.002, 0.01)
+        if back != skip:
+            store.put_equity(address, (date.fromisoformat(DAY) - timedelta(days=back)).isoformat(), value, 0.0)
+
+
 async def test_one_missing_day_keeps_a_long_record_in_the_entry_test(tmp_path: Path) -> None:
     """A's 120 stored days miss one day ten days ago (an account read that failed): the entry test still has its 90
     returns."""
-    import random
-
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
-    rng = random.Random(5)
-    value = 25_000.0
-    for back in range(120, 0, -1):
-        value *= 1 + rng.gauss(0.002, 0.01)
-        if back != 10:
-            store.put_equity(addr_a, (date.fromisoformat(DAY) - timedelta(days=back)).isoformat(), value, 0.0)
+    _bind_days_before(chain, HK_A, 130)
+    _walk(store, addr_a, 120, skip=10)
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     a = next(r for r in result.records if r.hotkey == HK_A)
     assert a.entry_psr is not None and a.returns_days == 90
+    await hl.close()
+
+
+@pytest.mark.parametrize(("joined", "counted"), [(40, 40), (20, 20), (0, 0)])
+async def test_the_skill_record_counts_only_the_days_after_the_binding(
+    tmp_path: Path, joined: int, counted: int
+) -> None:
+    """120 days of history are stored (as a backfill would), but only the returns after the day the binding was
+    accepted reach the skill test: a lucky past cannot be brought in, and under 30 days there is no entry."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    _bind_days_before(chain, HK_A, joined)
+    _walk(store, addr_a, 120)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    a = next(r for r in result.records if r.hotkey == HK_A)
+    assert a.returns_days == counted
+    assert (a.entry_psr is not None) == (counted >= 30)
+    assert len(store.returns(addr_a, 200)) == 120  # the history itself stays stored
     await hl.close()
 
 
