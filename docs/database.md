@@ -26,8 +26,10 @@ validator/schema.py`; the tables, by what they answer:
 | What went wrong | `errors` (day, hotkey, address, stage, message, and the level: `error` for a failure the health check raises, `note` for a routine fact it only records, such as history fills that are not Kokoah orders or a lookup cap reached) |
 
 Conventions: `day` is the scored UTC day (YYYY-MM-DD); money is USD; alpha is in alpha, not rao; addresses are
-lowercase; `raw` columns keep the source record as JSON. Registration and binding times are estimated from block
-heights at 12 seconds a block; epoch and submission times are wall-clock at the validator.
+lowercase; `raw` columns keep the source record as JSON; error messages and agent checks, which can quote what an
+outside source sent, have each NUL character (which Postgres text can't hold) replaced with U+FFFD. Registration and
+binding times are estimated from block heights at 12 seconds a block; epoch and submission times are wall-clock at the
+validator.
 
 Connect: `scripts/db.sh psql` opens a shell; the URLs are in `~/.local/share/kokoah/subnet-db.env`:
 `KOKOAH_SUBNET_DB_URL`, which the validator reads when `--db-url` is not given;

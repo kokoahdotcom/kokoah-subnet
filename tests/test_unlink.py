@@ -1,6 +1,7 @@
 """Unlinking (spec section 14): only the address itself can end its link, from the next UTC day; the address is then
 free, the pair never comes back, and the subnet's service can neither make an unlink up nor take one back."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -123,16 +124,24 @@ async def test_validators_keep_only_unlinks_the_address_itself_signed() -> None:
     t = ms("2026-10-24")
     good = signed(owner, H1, t)
     forged = Unlink(H1, owner.address, t, sign_unlink(other.key, NETUID, H1, owner.address, t))
-    rows = [good, forged]
+    # signed by the address, but the record could not hold them: no hotkey, a hotkey too long for its column, a time
+    # with no day
+    odd = [signed(owner, H1[:20] + "\x00" + H1[21:], t), signed(owner, H1 + "x" * 20, t), signed(owner, H2, 10**20)]
+    # a signature written with spaces still checks, and is kept in its plain form
+    plain = signed(owner, H2, t)
+    spaced = Unlink(H2, owner.address, t, plain.signature + " " * 300)
+    rows = [good, forged, *odd, spaced]
 
     def answer(request: httpx.Request) -> httpx.Response:
         listed = [
             {"hotkey": u.hotkey, "address": u.address, "time_ms": u.time_ms, "signature": u.signature} for u in rows
         ]
-        return httpx.Response(200, json={"unlinks": [*listed, {"hotkey": H2}]})
+        infinite = {"hotkey": H1, "address": owner.address, "time_ms": float("inf"), "signature": good.signature}
+        body = json.dumps({"unlinks": [infinite, *listed, {"hotkey": H2}]})  # Python's JSON writes and reads Infinity
+        return httpx.Response(200, content=body.encode(), headers={"content-type": "application/json"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
-        assert await fetch_unlinks(http, "http://svc", NETUID) == [good]
+        assert await fetch_unlinks(http, "http://svc", NETUID) == [good, plain]
 
 
 def test_a_validator_keeps_every_unlink_it_saw_and_the_first_per_pair(tmp_path: Path) -> None:
@@ -192,6 +201,8 @@ def test_the_unlink_list_comes_in_pages_oldest_first_and_misses_none(tmp_path: P
         after = page["next"]
     assert sorted(seen) == sorted(k.address.lower() for k in keys) and len(seen) == 5 and pages == 3
     assert c.get("/unlinks", params={"after": "nonsense"}).status_code == 400
+    for cursor in (f"1.5|{H1[:20]}\x00{H1[21:]}|{keys[0].address}", f"1.5|{H1}|0x{'zz' * 20}"):  # no hotkey, no address
+        assert c.get("/unlinks", params={"after": cursor}).status_code == 400
 
 
 def test_an_unlink_filed_after_the_clock_went_back_still_comes_after_a_reader_s_place(tmp_path: Path) -> None:

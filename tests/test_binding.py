@@ -236,6 +236,30 @@ def test_an_agent_field_round_trips_and_old_bindings_still_decode() -> None:
     assert decode_binding(encode_binding(Binding(acct.address, sig, agent=v6))).agent.url == "http://[2001:db8::1]:443"  # type: ignore[union-attr]
 
 
+def test_an_agent_host_with_a_nul_or_control_character_is_no_binding() -> None:
+    """The host field is padded with NULs; one left inside the host (or any control character) is not a host name,
+    and such text must never reach a validator's records."""
+    import base64
+
+    from eth_account import Account
+
+    from kokoah_subnet.binding import AgentRef, Binding, decode_binding, encode_binding, sign_binding
+
+    for host in ("evil\x00.example.org", "203.0.113.7\n", "\x01"):
+        with pytest.raises(ValueError, match="bad agent endpoint"):
+            AgentRef("ab" * 32, host, 8080)
+    acct = Account.create()
+    plain = encode_binding(Binding(acct.address, sign_binding(acct.key, 2, "5Hk", acct.address)))
+
+    def with_host(host: bytes) -> str:
+        raw = b"A1" + bytes.fromhex("ab" * 32) + (8080).to_bytes(2, "big") + host + b"\x00" * (51 - len(host))
+        return plain + base64.b64encode(raw).decode("ascii")
+
+    assert decode_binding(with_host(b"evil\x00.example.org")) is None
+    good = decode_binding(with_host(b"agent.example.org"))
+    assert good is not None and good.agent is not None and good.agent.host == "agent.example.org"
+
+
 def test_a_commitment_with_an_unreadable_signature_is_refused_not_a_crash() -> None:
     """Anyone with a registered hotkey can publish any commitment: a 65-byte signature that is not a signature
     (bad v, r or s) must make that binding invalid, never stop the validator's day."""

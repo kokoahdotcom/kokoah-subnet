@@ -28,7 +28,7 @@ import re
 import secrets
 import socket
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -199,6 +199,19 @@ async def _check_agent(
 UNLINK_PAGES = 1000  # the most pages read in one go
 
 
+def _storable(u: Unlink) -> bool:
+    """Whether the record can hold this unlink: a hotkey of printable ASCII that fits its column and a time that has a
+    day (the signature is kept in its plain form once checked). The service checks all this, but a validator relies on
+    none of its checks, and one unlink it can't store would fail the day's unlinks every day; such an unlink matches no
+    link anyway."""
+    if not (u.hotkey.isascii() and u.hotkey.isprintable() and len(u.hotkey) <= 64):
+        return False
+    try:
+        return bool(u.effective_day)
+    except (ValueError, OverflowError, OSError):
+        return False
+
+
 async def fetch_unlinks(
     http: httpx.AsyncClient, service: str, netuid: int, known: Iterable[tuple[str, str]] = ()
 ) -> list[Unlink]:
@@ -215,11 +228,14 @@ async def fetch_unlinks(
         for x in page["unlinks"]:
             try:
                 u = Unlink(str(x["hotkey"]), str(x["address"]), int(x["time_ms"]), str(x["signature"]))
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError, OverflowError):  # OverflowError: a time of Infinity
+                continue
+            if not _storable(u):
                 continue
             if (u.hotkey, u.address) not in seen and u.signed_by_address(netuid):
                 seen.add((u.hotkey, u.address))
-                out.append(u)
+                # in its plain form, 0x and 130 hex: the check also reads a signature written with spaces
+                out.append(replace(u, signature="0x" + bytes.fromhex(u.signature.removeprefix("0x")).hex()))
         following = page.get("next")
         if not following or following == after:
             break

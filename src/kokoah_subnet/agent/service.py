@@ -819,7 +819,7 @@ def create_app(
         if after:
             try:
                 at, hk, a = after.split("|")
-                q = q.where(order > tuple_(literal(float(at)), literal(hk), literal(a)))
+                q = q.where(order > tuple_(literal(float(at)), literal(check_hotkey(hk)), literal(check_address(a))))
             except ValueError:
                 raise HTTPException(status_code=400, detail="bad cursor") from None
         if address is not None:

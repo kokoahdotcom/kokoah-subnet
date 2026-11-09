@@ -55,6 +55,37 @@ def test_a_commitment_with_a_nul_character_is_kept_as_hex(tmp_path: Path) -> Non
     assert "\x00" not in stored["hkNul"]
 
 
+def test_messages_and_agent_checks_keep_no_nul_character(tmp_path: Path) -> None:
+    """Error messages and agent checks can quote what a miner's machine sent, and Postgres text refuses NUL: each
+    one is stored as U+FFFD."""
+    from sqlalchemy import select
+
+    from kokoah_subnet.validator import schema as S
+
+    s = Store(tmp_path / "v.sqlite")
+    s.put_error("2026-11-08", "hk", None, "agent checks", 'unknown key "a\x00b"')
+    s.put_agent_checks(
+        "2026-11-08",
+        [
+            {
+                "hotkey": "hk",
+                "address": "0x" + "11" * 20,
+                "code_sha256": "ab" * 32,
+                "endpoint": "http://203.0.113.7:8080",
+                "ok": False,
+                "reason": 'attestation: no key "k\x00"',
+                "image_digest": None,
+                "hardware": None,
+                "instance_id": None,
+            }
+        ],
+    )
+    with s._engine.begin() as c:
+        message = c.execute(select(S.errors.c.message)).scalar_one()
+        reason = c.execute(select(S.agent_checks.c.reason)).scalar_one()
+    assert message == 'unknown key "a\ufffdb"' and reason == 'attestation: no key "k\ufffd"'
+
+
 def test_positions_aligned_over_days(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
     s.put_positions("0xA", "2026-10-01", {"BTC": 1000.0, "ETH": -500.0})
