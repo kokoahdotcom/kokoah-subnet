@@ -202,7 +202,7 @@ same link again while registered changes nothing; a new link or a new registrati
 |---|---|---|---|
 | **New Hyperliquid address** (allowed once per 60 days) | start again | start again | carry over |
 | **Hotkey swap on chain** (same UID, coldkey and registration) | start again | start again (the link is published again) | carry over |
-| **Deregistered, same hotkey registers again** | start again | start again from the new registration | carry over |
+| **Deregistered, same hotkey registers again** | start again | start again from the link published after the new registration | carry over |
 | **A new hotkey links an address** | start from zero | start from zero | smoothed skill and pay history from zero; gates and penalties stay with the address |
 
 **Moving to a new address.** Get the line for the new address (`miner message ... --address <new>`), sign it with
@@ -214,6 +214,9 @@ uv run kokoah-subnet miner bind --network finney --netuid 39 --address <new> --s
 ```
 
 **After a hotkey swap**, publish the link again: the signed line names the hotkey.
+
+**After registering again** (the hotkey was deregistered), publish the link again: a link from an earlier
+registration no longer counts. It is accepted if no other hotkey has linked the address in the meantime.
 
 **Unlinking.** The linked address can end its link at any time with one signature, without the hotkey: on
 kokoah.com (Settings, subnet miner), or from the command line:
