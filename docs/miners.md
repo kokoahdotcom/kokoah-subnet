@@ -160,8 +160,8 @@ earns nothing extra: the reward is proportional to fees.
 **Skill reward: 20%.** Shared among miners who prove a real trading record:
 
 - **Entry test.** At least 30 daily returns from the days after the day your link was accepted, whose risk-adjusted
-  performance passes a statistical test at 95% confidence, so a lucky streak does not pay. The test reads every such
-  day, up to the last 90; the day of the link and the days before it never count.
+  performance passes a statistical test at 95% confidence that the edge is real. The test reads every such day, up
+  to the last 90; the day of the link and the days before it never count.
 - **Activity.** In the last 30 days: at least 10 completed round trips, at least 7 days with a Kokoah fill, and an
   average account value of at least $500.
 - **Weight.** Skill above a luck floor, multiplied by participation (full at $1 million of eligible Kokoah volume
