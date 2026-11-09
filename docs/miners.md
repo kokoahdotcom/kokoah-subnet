@@ -159,12 +159,14 @@ earns nothing extra: the reward is proportional to fees.
 
 **Skill reward: 20%.** Shared among miners who prove a real trading record:
 
-- **Entry test.** At least 90 days of daily returns whose risk-adjusted performance passes a statistical test at
-  95% confidence, so a lucky streak does not pay.
+- **Entry test.** At least 30 daily returns from the days after the day your link was accepted, whose risk-adjusted
+  performance passes a statistical test at 95% confidence that the edge is real. The test reads every such day, up
+  to the last 90; the day of the link and the days before it never count.
 - **Activity.** In the last 30 days: at least 10 completed round trips, at least 7 days with a Kokoah fill, and an
   average account value of at least $500.
-- **Weight.** Skill above a luck floor, multiplied by participation: full participation at $1 million of eligible
-  Kokoah volume over 30 days, less in proportion below it.
+- **Weight.** Skill above a luck floor, multiplied by participation (full at $1 million of eligible Kokoah volume
+  over 30 days, less in proportion below it) and by the length of your record: 0.8 at 30 days, rising evenly to full
+  at 90 days.
 - **Your own record.** Each account is weighed on its own record; copy trading is never punished.
 - **Agents.** A verified trading agent earns 10% more skill weight (section 10).
 
@@ -182,8 +184,9 @@ on your hotkey; manage them with `btcli stake`.
 - **Bindings:** `uv run kokoah-subnet miner show --network finney --netuid 39`, or `/bindings` on a validator's
   interface.
 - **Your record:** `https://api.kokoah.com/subnet/accounts/<your address>` (or `/accounts/<address>` on any
-  validator's interface): every day's return as the validators score it, the growth curve, the 90-day return and
-  worst drop, and the days your account passed as a verified agent.
+  validator's interface): every day's return as the validators score it (days up to `joined_day` are shown but do
+  not count for skill), the growth curve, the 90-day return and worst drop, and the days your account passed as a
+  verified agent.
 - **Your day in detail:** a validator's `/days/latest` and `/days/<YYYY-MM-DD>` publish every miner's figures:
   eligibility and the reason when not eligible, the day's average account value, qualification progress, credit,
   fees, skill and its parts, the entry test, and both rewards.
@@ -191,14 +194,16 @@ on your hotkey; manage them with `btcli stake`.
 ## 9. Changing address, hotkey or registration
 
 Your fee credit and your qualification belong to one **identity**: one hotkey, one linked address, one
-registration. Your pay history, skill record and any penalty stay with you whatever changes.
+registration. Your pay history and any penalty stay with you whatever changes. The entry test counts the days after
+the day your current link was accepted on chain (or after your registration, if that came later). Publishing the
+same link again while registered changes nothing; a new link or a new registration starts that count again.
 
-| Change | Fee credit and qualification | Skill record, pay history, penalties |
-|---|---|---|
-| **New Hyperliquid address** (allowed once per 60 days) | start again | carry over |
-| **Hotkey swap on chain** (same UID, coldkey and registration) | start again | carry over |
-| **Deregistered, same hotkey registers again** | start again | carry over |
-| **A new hotkey links an address** | start from zero | smoothed skill and pay history from zero; the address's own record, gates and penalties stay with the address |
+| Change | Fee credit and qualification | Days counted for the entry test | Smoothed skill, pay history, penalties |
+|---|---|---|---|
+| **New Hyperliquid address** (allowed once per 60 days) | start again | start again | carry over |
+| **Hotkey swap on chain** (same UID, coldkey and registration) | start again | start again (the link is published again) | carry over |
+| **Deregistered, same hotkey registers again** | start again | start again from the new registration | carry over |
+| **A new hotkey links an address** | start from zero | start from zero | smoothed skill and pay history from zero; gates and penalties stay with the address |
 
 **Moving to a new address.** Get the line for the new address (`miner message ... --address <new>`), sign it with
 the new address *and* with the old address, then publish both:
@@ -251,4 +256,4 @@ weight. Everything else in this guide applies to its account too. See the [agent
 | Not eligible: account value | The day's *average* must be at least $10,000. A deposit late in the day raises the average only for the hours after it. |
 | Not eligible: account value unknown | The exchange recorded too few points of your account that day (fewer than 4). The validator never guesses; the next day is measured again. |
 | My trades do not count | Make sure they are perpetuals placed through Kokoah, from the linked address, not against your own or another miner's account. |
-| No skill reward | The skill reward needs 90 days of record, the activity conditions and the entry test; until then you earn the volume reward. |
+| No skill reward | The skill reward needs at least 30 days of record since your link, the activity conditions and the entry test; until then you earn the volume reward. |
