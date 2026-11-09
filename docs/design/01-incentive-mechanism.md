@@ -32,9 +32,10 @@ The whole miner emission is paid out every day, in two parts:
 
 1. **80% for activity.** Shared by the Kokoah fees each miner paid on perpetuals (smoothed: 30% today, 70% the
    running figure). Twice the fees, twice the share. Splitting an account in two changes nothing.
-2. **20% for proven skill.** Shared only among miners whose daily returns pass a strict test over the last 90 days
-   (a 95% confidence that the edge is real). Inside it, the share grows with the skill score above a luck floor and
-   with the miner's Kokoah volume over 30 days, up to $1 million. Verified agents get 10% more. Each account is
+2. **20% for proven skill.** Shared only among miners whose daily returns since joining pass a strict test (a 95%
+   confidence that the edge is real), from 30 days of record up to the last 90. Inside it, the share grows with the
+   skill score above a luck floor, with the miner's Kokoah volume over 30 days, up to $1 million, and with the
+   record's length (0.8 at 30 days, full at 90). Verified agents get 10% more. Each account is
    weighed on its own record; copy trading is never punished. On a day nobody passes, this part joins the activity
    part.
 
@@ -48,7 +49,7 @@ coldkey, or a master and its sub-accounts) keep opposite positions for weeks, th
 it is more than a quarter of the account's positions; above half, both accounts also leave the skill reward for 30
 days. A day's profit made in a coin that hardly anyone else traded does not count for skill, though a loss there
 does. The skill reward needs
-a real edge, proven over 90 days.
+a real edge, proven over at least 30 days since joining.
 
 ## Agents
 
@@ -72,11 +73,12 @@ alarm.
 
 It asks two things of the daily returns, with deposits removed and each day capped at ±10%: is the edge
 statistically real (probabilistic Sharpe ratio over 60 days), and is the recent month's profit much larger than its
-losses (gain-to-pain over 30 days)? Only a record that holds up over 90 days passes the test.
+losses (gain-to-pain over 30 days)? Only a record that holds up passes the test: at least 30 days since joining,
+and a record that keeps holding up to 90 days weighs the most.
 
 ## Leaving and coming back
 
 Come back with the same hotkey and your records resume, but as a new registration you qualify again with three
-trades. Moving to a new address, or swapping the hotkey, keeps your track record, your pay history and any penalty,
-but your fee credit and your qualification start again. The 90-day test always reads the account's own record,
-whatever hotkey it is linked to.
+trades. Moving to a new address, or swapping the hotkey, keeps your pay history and any penalty, but your fee credit
+and your qualification start again. The test reads only the days since the account's current link, so a new link
+starts its count again, and history from before a link never counts.
