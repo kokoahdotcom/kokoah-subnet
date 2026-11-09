@@ -52,7 +52,8 @@ class AgentRef:
         object.__setattr__(self, "code_sha256", self.code_sha256.lower())
         if len(self.code_sha256) != 64:
             raise ValueError("the code fingerprint must be 64 hex characters")
-        if not 0 < self.port < 65536 or not self.host or len(self.host.encode()) > 51:
+        # printable: the field is padded with NULs, and a NUL or control character left inside is no host name
+        if not 0 < self.port < 65536 or not self.host.isprintable() or not self.host or len(self.host.encode()) > 51:
             raise ValueError("bad agent endpoint")
 
     @property
