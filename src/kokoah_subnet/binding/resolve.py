@@ -7,7 +7,10 @@ accepted only when the previous address is the one currently accepted, its signa
 accepted change is at least `migration_days` old; anything else keeps the earlier binding and is flagged. One
 address can be bound to one hotkey: a later claim on an address already accepted elsewhere is refused. A validator
 that starts fresh therefore agrees with the others except on the 60-day limit during its own first 60 days, and on
-the block of a link published again unchanged (it sees only the latest publish, which dates the skill record).
+the block of a link published again unchanged (it sees only the latest publish, which dates the skill record). A
+departed hotkey's commitment stays on chain but holds no address, and a binding published before the hotkey's current
+registration never counts again, so who holds an address after a hotkey leaves and comes back depends only on the
+chain, not on what a validator stored.
 
 Unlinks (signed by the address, see `unlink.py`) count from their effective day: the hotkey's link to that address
 ends, the address is free for another hotkey, and the pair is never accepted again. They depend only on the published
@@ -48,14 +51,24 @@ def resolve_bindings(
     registered: Iterable[str] | None = None,
     unlinks: Iterable[Unlink] = (),
     day: str | None = None,
+    registered_at: Mapping[str, int | None] | None = None,
 ) -> Resolution:
     """`registered`, when given, is the set of hotkeys on the subnet today: a hotkey that left releases its address
-    (its records stay in the store and resume if the same hotkey comes back). `unlinks` (signatures already checked)
-    count for `day` (the day being scored) from their effective day on."""
+    (its records stay in the store and resume if the same hotkey comes back). `registered_at` gives each hotkey's
+    current registration block (None or 0: unknown): a binding from before it, accepted or still on chain, belongs to
+    an earlier registration and no longer counts, so a hotkey that comes back publishes its binding again. Both depend
+    only on the chain, so every validator decides alike. `unlinks` (signatures already checked) count for `day` (the
+    day being scored) from their effective day on."""
+    since = dict(registered_at or {})
+
+    def this_registration(hotkey: str, at_block: int) -> bool:
+        return at_block >= (since.get(hotkey) or 0)
+
     accepted: dict[str, AcceptedBinding] = dict(previous)
     live = set(registered) if registered is not None else None
     if live is not None:
         accepted = {hk: b for hk, b in accepted.items() if hk in live}
+    accepted = {hk: b for hk, b in accepted.items() if this_registration(hk, b.accepted_block)}
     refused: dict[str, str] = {}
     unlinked: dict[str, str] = {}
     ended = {(u.hotkey, u.address) for u in unlinks if day is not None and u.effective_day <= day}
@@ -69,6 +82,8 @@ def resolve_bindings(
         hk, b = pb.hotkey, pb.binding
         if live is not None and hk not in live:
             continue  # the chain keeps a departed hotkey's commitment: it holds no address while the hotkey is away
+        if not this_registration(hk, pb.block):
+            continue  # left on chain from an earlier registration: the hotkey publishes its binding again
         if not pb.valid:
             refused[hk] = "signature does not match"
             continue

@@ -385,8 +385,15 @@ async def collect_and_score(
     # the accepted bindings and their events are written once the day is scored, so a retried day resolves them
     # from the same bindings again
     before = store.bindings()
+    registered_block = {n.hotkey: n.block_at_registration or None for n in snap.neurons}
     resolution = resolve_bindings(
-        before, published, snap.block, registered=uid_of.keys(), unlinks=store.unlinks(), day=day
+        before,
+        published,
+        snap.block,
+        registered=uid_of.keys(),
+        unlinks=store.unlinks(),
+        day=day,
+        registered_at=registered_block,
     )
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
@@ -419,7 +426,6 @@ async def collect_and_score(
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
     collateral_locked = {n.hotkey: n.collateral_locked_alpha for n in snap.neurons}
-    registered_block = {n.hotkey: n.block_at_registration or None for n in snap.neurons}
     blocks = day_sample_blocks(snap.block, now.timestamp(), start_ms / 1000, snap.tempo, params.price_samples)
     samples = await price_samples(client, cfg.netuid, blocks)
     store.put_price_samples(day, samples)
