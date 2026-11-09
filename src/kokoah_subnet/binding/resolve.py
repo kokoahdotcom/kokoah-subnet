@@ -53,8 +53,8 @@ def resolve_bindings(
     (its records stay in the store and resume if the same hotkey comes back). `unlinks` (signatures already checked)
     count for `day` (the day being scored) from their effective day on."""
     accepted: dict[str, AcceptedBinding] = dict(previous)
-    if registered is not None:
-        live = set(registered)
+    live = set(registered) if registered is not None else None
+    if live is not None:
         accepted = {hk: b for hk, b in accepted.items() if hk in live}
     refused: dict[str, str] = {}
     unlinked: dict[str, str] = {}
@@ -67,6 +67,8 @@ def resolve_bindings(
     min_gap = migration_days * BLOCKS_PER_DAY
     for pb in sorted(published, key=lambda p: (p.block, p.hotkey)):
         hk, b = pb.hotkey, pb.binding
+        if live is not None and hk not in live:
+            continue  # the chain keeps a departed hotkey's commitment: it holds no address while the hotkey is away
         if not pb.valid:
             refused[hk] = "signature does not match"
             continue

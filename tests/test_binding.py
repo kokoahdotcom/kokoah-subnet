@@ -168,6 +168,22 @@ def test_departed_hotkeys_release_their_address() -> None:
     assert HK not in again.accepted and again.accepted[HK2].address == a.address.lower()
 
 
+def test_a_departed_hotkeys_commitment_left_on_chain_does_not_hold_its_address() -> None:
+    """The chain keeps a commitment after its hotkey leaves: it is not accepted again while the hotkey is away, so
+    the address is free for a new hotkey; when the old hotkey comes back, its link counts again only if the address
+    is still free."""
+    a = Account.create()
+    old = _pub(HK, 100, Binding(a.address, sign_binding(a.key, 2, HK, a.address)))
+    new = _pub(HK2, 300, Binding(a.address, sign_binding(a.key, 2, HK2, a.address)))
+    first = resolve_bindings({}, [old], block=200, registered=[HK])
+    away = resolve_bindings(first.accepted, [old], block=250, registered=[])
+    assert away.accepted == {} and away.refused == {}
+    again = resolve_bindings(away.accepted, [old, new], block=400, registered=[HK2])
+    assert set(again.accepted) == {HK2} and again.refused == {}
+    back = resolve_bindings(again.accepted, [old, new], block=500, registered=[HK, HK2])
+    assert set(back.accepted) == {HK2} and back.refused == {HK: "address already bound to another hotkey"}
+
+
 def test_an_agent_field_round_trips_and_old_bindings_still_decode() -> None:
     from eth_account import Account
 
