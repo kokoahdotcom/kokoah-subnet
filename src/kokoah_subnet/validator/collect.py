@@ -398,7 +398,18 @@ async def collect_and_score(
     events: list[dict[str, Any]] = []
     for hk, acc in resolution.accepted.items():
         old = before.get(hk)
-        if old is None:
+        if old is not None and old.accepted_block < (registered_block.get(hk) or 0):
+            # registered again and published again: a new first binding, not a migration
+            events.append(
+                {
+                    "hotkey": hk,
+                    "event": "reregistered",
+                    "address": old.address,
+                    "reason": "registered again: its earlier binding no longer counts",
+                }
+            )
+            events.append({"hotkey": hk, "event": "accepted", "address": acc.address, "reason": None})
+        elif old is None:
             events.append({"hotkey": hk, "event": "accepted", "address": acc.address, "reason": None})
         elif old.address != acc.address:
             events.append({"hotkey": hk, "event": "migrated", "address": acc.address, "reason": f"from {old.address}"})

@@ -486,7 +486,7 @@ unlinks = Table(  # every unlink seen (signed by the address, checked here), fro
     Column("first_seen_day", String(10)),
 )
 
-binding_events = Table(  # accepted, migrated, refused (with the reason), per day
+binding_events = Table(  # accepted, migrated, left, reregistered, unlinked, swapped, refused (with the reason)
     "binding_events",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),

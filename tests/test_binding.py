@@ -9,6 +9,7 @@ from kokoah_subnet.binding import (
     AcceptedBinding,
     Binding,
     PublishedBinding,
+    Unlink,
     binding_message,
     decode_binding,
     encode_binding,
@@ -206,6 +207,10 @@ def test_who_holds_an_address_after_a_hotkey_returns_depends_only_on_the_chain()
     for prev in ({}, throughout.accepted, first.accepted):
         r = resolve_bindings(prev, [old, new, republished], block=550, registered=[HK, HK2], registered_at=reg)
         assert set(r.accepted) == {HK2} and r.refused == {HK: "address already bound to another hotkey"}
+    # an address that unlinked HK says so, whichever registration the commitment is from
+    gone = Unlink(HK, a.address, 0, "0x")  # effective long before the day scored
+    r = resolve_bindings({}, [old], block=550, registered=[HK], registered_at=reg, unlinks=[gone], day="2026-10-21")
+    assert r.refused == {HK: "the address unlinked itself from this hotkey"}
     # without HK2, the binding HK publishes again is accepted as a first binding
     alone = resolve_bindings(first.accepted, [old, republished], block=550, registered=[HK], registered_at=reg)
     assert alone.accepted[HK].accepted_block == 500

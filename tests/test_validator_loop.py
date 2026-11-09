@@ -1401,7 +1401,13 @@ async def test_a_new_registration_starts_a_new_record_from_its_block(tmp_path: P
     assert refused == {HK_A: "published before the hotkey's current registration: publish the binding again"}
     chain._commitments[HK_A] = _Commitment(old.data, 7_500)  # published again after registering
     chain.block_times[7_500] = _noon_days_before(35)
+    store.put_bindings({HK_A: AcceptedBinding(HK_A, addr_a, 5_000, 5_000)}, day="2026-10-20")  # as if not seen yet
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    seen = [
+        (e["event"], e["hotkey"])
+        for e in store.execute_sql(f"select event, hotkey from binding_events where day = '{DAY}'")
+    ]
+    assert ("reregistered", HK_A) in seen and ("accepted", HK_A) in seen and ("migrated", HK_A) not in seen
     a = next(r for r in result.records if r.hotkey == HK_A)
     assert a.returns_days == 35
     row = next(m for m in store.miner_days(HK_A) if m["day"] == DAY)
