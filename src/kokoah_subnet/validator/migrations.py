@@ -154,6 +154,7 @@ STEPS: list[tuple[int, str, Step]] = [
     (10, "runs.config: the database password hidden", _hide_run_passwords),
     (11, "errors.level", _add_column("errors", "level", "varchar(8)")),
     (12, "penalties: one row per report", _penalty_per_report),
+    (13, "miner_days.joined_day", _add_column("miner_days", "joined_day", "varchar(10)")),
 ]
 
 

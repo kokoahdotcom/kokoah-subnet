@@ -126,6 +126,22 @@ def block_time(now_block: int, block: int, now: datetime | None = None) -> datet
     return base - timedelta(seconds=(now_block - block) * BLOCK_SECONDS)
 
 
+async def block_day(client: Any, store: Store, block: int) -> str:
+    """The UTC day of a block from the chain's own timestamp (the block's `Timestamp.set`), the same for every
+    validator; kept once read, since a block's time never changes."""
+    key = f"block_day:{block}"
+    known = store.get_meta(key)
+    if known:
+        return known
+    info = await client.block_info(block)
+    stamp = getattr(info, "timestamp", None)
+    if not isinstance(stamp, datetime):
+        raise RuntimeError(f"no timestamp for block {block}")
+    found = stamp.astimezone(UTC).strftime("%Y-%m-%d")
+    store.set_meta(key, found)
+    return found
+
+
 async def tao_usd_mark(
     hl: HyperliquidInfo, coin: str, fallback: float, start_ms: int | None = None, end_ms: int | None = None
 ) -> tuple[float, str]:
@@ -416,6 +432,27 @@ async def collect_and_score(
 
     fills_by_address = by_user(fills)
     address_of_hotkey = {hk: a.address for hk, a in resolution.accepted.items() if hk in uid_of}
+    # the skill record counts the days after the address joined: the UTC day (the chain's own block time) of the later
+    # of the block that accepted its binding and the hotkey's registration block. A new link (a migration, an unlink
+    # and a new link, a hotkey swap's re-binding) or a new registration starts a new record, and no history from
+    # before it counts
+    joined_day: dict[str, str] = {}
+    for hk, acc in resolution.accepted.items():
+        if hk not in uid_of:
+            continue
+        join_block = max(acc.accepted_block, registered_block.get(hk) or 0)
+        if join_block <= 0:
+            joined_day[hk] = day  # unknown: nothing before today counts
+            continue
+        try:
+            joined_day[hk] = await block_day(client, store, join_block)
+        except Exception as exc:  # noqa: BLE001
+            store.put_error(day, hk, acc.address, "join day", f"time of block {join_block}: {exc}")
+            if not past_deadline:
+                raise RuntimeError(f"time of block {join_block} unavailable: {exc}") from exc
+            # after the deadline: the estimate, which is never earlier than the block's real time (missed slots only
+            # make the chain slower than 12 s a block), so no day before the link can count
+            joined_day[hk] = block_time(snap.block, join_block, now).strftime("%Y-%m-%d")
     # agent accounts: challenge every sealed machine and verify its attestation (the skill bonus)
     if agent_status is None:
         agent_bindings = {
@@ -873,7 +910,9 @@ async def collect_and_score(
             MinerInputs(
                 hotkey=hk,
                 address=address,
-                returns=store.returns(address, max(params.confidence_days, params.entry_days), day),
+                returns=store.returns(
+                    address, max(params.confidence_days, params.entry_days), day, after=joined_day[hk]
+                ),
                 mean_equity_usd=store.mean_equity(address, params.gate_days, day),
                 staked_min_alpha=staked,
                 collateral_min_alpha=collateral_min.get(hk, 0.0),
@@ -1059,6 +1098,7 @@ async def collect_and_score(
                 "credited_fills": r.credited.fills,
                 "identity_reset": r.identity_reset,
                 "registered_block": registered_block.get(r.hotkey),
+                "joined_day": joined_day.get(r.hotkey),
             }
             for r in result.records
         ],

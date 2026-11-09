@@ -289,15 +289,17 @@ class Store:
             ).scalar()
         return float(total or 0.0)
 
-    def dated_returns(self, address: str, days: int, through: str | None = None) -> dict[str, float]:
+    def dated_returns(
+        self, address: str, days: int, through: str | None = None, after: str | None = None
+    ) -> dict[str, float]:
         """The last `days` known daily returns by day up to `through` (default: all stored days), oldest first (the
-        same series as `returns`). A return needs two consecutive stored days whose values are known; a day without
-        one is skipped and the series reaches further back, over at most the last 2 x `days` + 1 stored days, so one
-        missing day never shortens the window."""
+        same series as `returns`), only of days after `after` when given. A return needs two consecutive stored days
+        whose values are known; a day without one is skipped and the series reaches further back, over at most the
+        last 2 x `days` + 1 stored days, so one missing day never shortens the window."""
         series = self._equity_rows(address, 2 * days + 1, through)
         out: dict[str, float] = {}
         for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
-            if k0 and k1 and e0 > 0 and _next_day(d0) == d1:
+            if k0 and k1 and e0 > 0 and _next_day(d0) == d1 and (after is None or d1 > after):
                 out[d1] = (e1 - e0 - f1) / e0
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
@@ -342,16 +344,18 @@ class Store:
             ).all()
         return [(str(d), float(v), float(f) + float(o or 0.0)) for d, v, f, o in reversed(rows)]
 
-    def returns(self, address: str, days: int, through: str | None = None) -> list[float]:
+    def returns(self, address: str, days: int, through: str | None = None, after: str | None = None) -> list[float]:
         """The last `days` known daily returns up to `through`, oldest first, with deposits, withdrawals and money
-        moved in through off-market fills removed."""
-        return list(self.dated_returns(address, days, through).values())
+        moved in through off-market fills removed; only of days after `after` when given (the skill record counts
+        the days after the address joined)."""
+        return list(self.dated_returns(address, days, through, after).values())
 
     def account_record(self, address: str, with_days: bool = True) -> dict[str, Any] | None:
-        """An address's record as this validator scored it (None if never scored): its daily returns (the series the
-        skill test reads, with money moved in or out and off-market profit removed), the growth of 1 over them
-        (carried over days the exchange did not record), and each scored day's figures. The "90d" figures are over
-        the last 90 known returns, the window of the entry test."""
+        """An address's record as this validator scored it (None if never scored): its daily returns (with money moved
+        in or out and off-market profit removed; the skill test reads those after the address joined), the growth of 1
+        over them (carried over days the exchange did not record), and each scored day's figures. The "90d" figures
+        are over the last 90 known returns, the entry test's longest window; `joined_day` is the day after which the
+        skill test counts."""
         a = address.lower()
         with self._engine.connect() as c:
             scored = (
@@ -365,6 +369,7 @@ class Store:
                         S.miner_days.c.eligible,
                         S.miner_days.c.agent_verified,
                         S.miner_days.c.avg_equity_usd,
+                        S.miner_days.c.joined_day,
                     )
                     .where(S.miner_days.c.address == a)
                     .order_by(S.miner_days.c.day)
@@ -400,6 +405,8 @@ class Store:
             "agent_days": sum(1 for m in scored if m["agent_verified"]),
             "first_day": days[0],
             "last_day": days[-1],
+            # the skill record counts the days after this one (the latest scored day's link)
+            "joined_day": scored[-1]["joined_day"],
         }
         out: dict[str, Any] = {"address": a, "hotkey": str(scored[-1]["hotkey"]), "linked": linked, "record": record}
         if with_days:

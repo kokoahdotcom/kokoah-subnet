@@ -107,6 +107,24 @@ def test_agent_bonus_is_ten_percent_more_skill_weight() -> None:
     assert ra.skill_weight == pytest.approx(1.1 * rb.skill_weight * ra.skill_adjusted / rb.skill_adjusted)
 
 
+def test_the_skill_record_enters_at_thirty_days_and_weighs_full_at_ninety() -> None:
+    c = "0xcccc000000000000000000000000000000000003"
+    steady = [0.012, -0.002] * 45  # 90 days of a clear edge
+    fills = taker_fills(A, 10, 100_000.0) + taker_fills(B, 10, 100_000.0, coin="ETH") + taker_fills(c, 10, 100_000.0)
+    states = {hk: established(a, 0.65) for hk, a in (("hkA", A), ("hkB", B), ("hkC", c))}
+    inputs = DayInputs(
+        day_index=5, price_usd=1.0, fills=fills, states=states,
+        miners=[miner("hkA", A, steady[:29]), miner("hkB", B, steady[:30]), miner("hkC", c, steady)],
+    )  # fmt: skip
+    ra, rb, rc = score_day(inputs, DEFAULT).records
+    assert ra.entry_psr is None and ra.skill_pool_reason == "fewer than 30 days of returns since joining"
+    assert ra.skill_weight == 0.0 and ra.skill_pay_alpha == 0.0
+    assert rb.entry_pass and rc.entry_pass and rb.returns_days == 30 and rc.returns_days == 90
+    assert rb.skill_weight == pytest.approx(0.8 * rb.skill_adjusted * rb.volume_factor)
+    assert rc.skill_weight == pytest.approx(rc.skill_adjusted * rc.volume_factor)
+    assert rb.skill_pay_alpha > 0 and rc.skill_pay_alpha > rb.skill_pay_alpha
+
+
 def test_fresh_miner_earns_volume_pay_but_not_yet_skill_pay() -> None:
     fills = taker_fills(A, 10, 10_000.0)
     inputs = DayInputs(

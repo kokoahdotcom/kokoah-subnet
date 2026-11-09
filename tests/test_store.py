@@ -20,6 +20,18 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
 
 
+def test_the_skill_record_counts_only_days_after_joining(tmp_path: Path) -> None:
+    """The backfilled history before the binding stays stored (the record page shows it) but the skill test reads
+    only the returns of the days after the address joined: a lucky past cannot be brought in."""
+    s = Store(tmp_path / "v.sqlite")
+    for i, value in enumerate((1000.0, 1100.0, 1210.0, 1331.0, 1197.9)):
+        s.put_equity("0xA", f"2026-10-{i + 1:02d}", value, 0.0)
+    assert s.returns("0xA", 90) == pytest.approx([0.1, 0.1, 0.1, -0.1])
+    assert s.returns("0xA", 90, after="2026-10-03") == pytest.approx([0.1, -0.1])
+    assert list(s.dated_returns("0xA", 90, "2026-10-04", after="2026-10-03")) == ["2026-10-04"]
+    assert s.returns("0xA", 90, after="2026-10-05") == []
+
+
 def test_positions_aligned_over_days(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
     s.put_positions("0xA", "2026-10-01", {"BTC": 1000.0, "ETH": -500.0})
@@ -229,9 +241,25 @@ def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path)
         c.execute(text("UPDATE meta SET value = '11' WHERE key = 'schema_version'"))
     old.close()
     s = Store(path)
-    assert s.migrations_applied == ["12: penalties: one row per report"]
+    assert s.migrations_applied == ["12: penalties: one row per report", "13: miner_days.joined_day"]
     s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
     assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
+    assert Store(path).migrations_applied == []
+
+
+def test_step_13_adds_the_join_day_to_an_existing_record(tmp_path: Path) -> None:
+    from sqlalchemy import text
+
+    path = tmp_path / "old.sqlite"
+    old = Store(path)
+    with old._engine.begin() as c:  # a record from before the join day was published
+        c.execute(text("ALTER TABLE miner_days DROP COLUMN joined_day"))
+        c.execute(text("UPDATE meta SET value = '12' WHERE key = 'schema_version'"))
+    old.close()
+    s = Store(path)
+    assert s.migrations_applied == ["13: miner_days.joined_day"]
+    s.put_miner_days("2026-10-21", [{"hotkey": "hk", "address": "0xa", "joined_day": "2026-09-30"}])
+    assert s.miner_days("hk")[0]["joined_day"] == "2026-09-30"
     assert Store(path).migrations_applied == []
 
 
