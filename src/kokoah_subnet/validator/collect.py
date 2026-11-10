@@ -66,7 +66,9 @@ from .hyperliquid import (
     mean_close,
     minutes_lost,
     off_market_transfer,
+    portfolio_empty_until,
     portfolio_held_nothing,
+    portfolio_made_up,
     portfolio_origin,
     portfolio_pnl_points,
     portfolio_points,
@@ -699,22 +701,36 @@ async def collect_and_score(
                 raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
             windows = []
             recorded = False
-        # an account that held nothing all week has a made-up history (zero points that end at the request): its
-        # average is zero and its day has no change, known at once instead of waiting for made-up points to pass the
-        # day's end. Its points are timed by the request, so they differ from one validator to the next: none of them
-        # is stored, and once the account holds something its next day reads only the exchange's recorded points
-        held_nothing = recorded and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
-        if recorded and not held_nothing:
+        # an account that has held nothing has a made-up history (zero points that end at the request), and so does
+        # one just funded until the exchange records it (only the live point shows the money). Those points are timed
+        # by the request, so they differ from one validator to the next: none of them is stored, and once the account
+        # is recorded its days read only the exchange's recorded points. Held nothing all week: its average is zero
+        # and its day has no change, known at once. Just funded: the record is waited for until the deadline
+        made_up = recorded and portfolio_made_up(windows, params.equity_window)
+        held_nothing = made_up and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
+        if made_up and not held_nothing and not past_deadline:
+            raise RuntimeError(f"the recorded history of {address} does not show its money yet")
+        if recorded and not made_up:
             store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
             store.put_equity_points(
                 address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
             )
-        origin = portfolio_origin(windows, params.equity_origin_window) if recorded else store.last_origin(address)
+        # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
+        # the week when the week shows nothing held before it (an account funded after an empty spell)
+        if not recorded:
+            origin = store.last_origin(address)
+        elif made_up:
+            origin = None
+        else:
+            starts = (
+                portfolio_origin(windows, params.equity_origin_window),
+                portfolio_empty_until(windows, params.equity_window),
+            )
+            origin = max((t for t in starts if t is not None), default=None)
         stored = store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
         history_known = recorded or any(t >= end_ms for t, _ in stored)
         if held_nothing:
-            inside = sum(start_ms <= t < end_ms for t, _ in stored)
-            avg = EquityAverage(0.0, inside, "the perps account held nothing all week")
+            avg = EquityAverage(0.0, 0, "the perps account held nothing all week")
         elif history_known:
             avg = daily_average_equity(stored, start_ms, end_ms, origin, params.equity_min_points)
         else:
@@ -848,6 +864,7 @@ async def collect_and_score(
                 ),
                 start_ms,
                 end_ms,
+                origin,
             )
         )
         if change.value_start is not None and change.value_end is None:

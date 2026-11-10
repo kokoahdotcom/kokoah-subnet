@@ -1263,6 +1263,72 @@ async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_p
     await hl.close()
 
 
+def _funded_windows(asked: int, funded: int, value: float, origin: int) -> list[Any]:
+    """The exchange's windows for an account that held nothing until `funded`: a zero far edge, a zero point just
+    before the deposit, recorded points every two hours, the live point last; the all-time window begins at `origin`."""
+    recorded = [[funded - 17 * 60_000, "0.0"]] + [[t, str(value)] for t in range(funded, asked, 7_200_000)]
+
+    def window(first: int) -> dict[str, list[list[Any]]]:
+        values = [[first, "0.0"], *recorded, [asked, str(value)]]
+        return {"accountValueHistory": values, "pnlHistory": [[t, "0.0"] for t, _ in values]}
+
+    return [["perpMonth", window(asked - 30 * 86_400_000)], ["perpWeek", window(asked - 7 * 86_400_000)],
+            ["perpAllTime", window(origin)]]  # fmt: skip
+
+
+@pytest.mark.parametrize("old_account", [False, True])
+async def test_the_day_an_empty_account_is_funded_starts_from_nothing(tmp_path: Path, old_account: bool) -> None:
+    """Funded at 13:54 after an empty week, a brand-new account or an old one alike: the record begins that day, so
+    the day counts nothing before it (a known average), starts from a zero value (a known day, its deposit money
+    moved in), and nothing is recorded as an error, on every validator alike."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+    asked, funded = end + 3 * 3_600_000, DAY_MS + 13 * 3_600_000 + 54 * 60_000
+    origin = DAY_MS - 200 * 86_400_000 if old_account else funded - 77 * 60_000
+    LIVE[addr_a] = 20_000.0
+
+    def funded_day(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "portfolio" and body["user"].lower() == addr_a:
+            return httpx.Response(200, json=_funded_windows(asked, funded, 20_000.0, origin))
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(funded_day))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=asked / 1000)
+    (daily,) = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
+    held = 20_000.0 * ((end - funded) + 17 * 60_000 / 2) / 86_400_000
+    assert daily["avg_equity_usd"] == pytest.approx(held) and daily["note"] == "account history begins during the day"
+    (row,) = store.execute_sql(
+        f"select value, flows, return_known from equity where address = '{addr_a}' and day = '{DAY}'"
+    )
+    assert row["value"] == pytest.approx(20_000.0) and row["flows"] == pytest.approx(20_000.0) and row["return_known"]
+    errors = store.execute_sql(f"select stage from errors where address = '{addr_a}' and level = 'error'")
+    assert errors == []
+    await hl.close()
+
+
+async def test_an_account_funded_but_not_yet_recorded_is_waited_for(tmp_path: Path) -> None:
+    """A made-up week whose live point shows money: the account was just funded and the exchange has not recorded it
+    yet. Nothing of the read is stored, and the day waits for the record."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    asked = DAY_MS + 86_400_000 + 3_600_000
+    points = [[asked - 7 * 86_400_000 + i * 60_480_000, "0.0"] for i in range(10)] + [[asked, "20000.0"]]
+
+    def not_recorded(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "portfolio" and body["user"].lower() == addr_a:
+            week = {"accountValueHistory": points, "pnlHistory": [[t, "0.0"] for t, _ in points]}
+            return httpx.Response(200, json=[["perpMonth", week], ["perpWeek", week], ["perpAllTime", week]])
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(not_recorded))
+    with pytest.raises(RuntimeError, match="does not show its money yet"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=asked / 1000)
+    for window in ("perpWeek", "perpWeek:pnl"):
+        assert store.equity_points(addr_a, window, 0, 2**62) == []
+    await hl.close()
+
+
 def _taker_fills_after_midday(n: int) -> list[dict[str, Any]]:
     """Tiny taker fills after the file's cut, each its own transaction, none of them a Kokoah order."""
     return [

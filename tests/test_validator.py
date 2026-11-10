@@ -493,3 +493,30 @@ def test_a_day_end_size_comes_from_the_exchange_s_record_and_builder_markets_are
     out = end_of_day_positions(state, later, {"BTC": 100_000.0, "xyz:TSLA": 400.0})
     assert out["BTC"]["szi"] == pytest.approx(0.7)  # the size just before the first fill since the day's end
     assert "xyz:TSLA" not in out  # not in the main state: never made up from its fills
+
+
+def test_portfolio_made_up_and_empty_until() -> None:
+    """A made-up week: every point but the live one zero (the live one may show money not yet recorded). A week whose
+    zero far edge is followed by recorded points held nothing before the first of them."""
+    from kokoah_subnet.validator.hyperliquid import portfolio_empty_until, portfolio_made_up
+
+    day, h = 86_400_000, 3_600_000
+    asked = 1792627200000 + 3 * h
+
+    def week(points: list[tuple[int, str]]) -> list[Any]:
+        values = [[t, v] for t, v in points]
+        return [["perpWeek", {"accountValueHistory": values, "pnlHistory": [[t, "0.0"] for t, _ in points]}]]
+
+    made_up = [(asked - 7 * day + i * 60_480_000, "0.0") for i in range(11)]
+    assert portfolio_made_up(week(made_up), "perpWeek")
+    assert portfolio_made_up(week([*made_up[:-1], (asked, "5000")]), "perpWeek")  # funded, not yet recorded
+    assert portfolio_empty_until(week(made_up), "perpWeek") is None  # nothing recorded at all
+    funded = asked - 13 * h
+    recorded = [(asked - 7 * day, "0.0"), (funded - 17 * 60_000, "0.0"), (funded, "20000"), (funded + 2 * h, "20000")]
+    assert not portfolio_made_up(week([*recorded, (asked, "20000")]), "perpWeek")
+    assert portfolio_empty_until(week([*recorded, (asked, "20000")]), "perpWeek") == funded - 17 * 60_000
+    held = [(asked - 7 * day, "15000"), *recorded[1:]]  # something held at the far edge
+    assert portfolio_empty_until(week([*held, (asked, "20000")]), "perpWeek") is None
+    young = recorded[1:]  # no far edge: a young account's first point is a real one
+    assert portfolio_empty_until(week([*young, (asked, "20000")]), "perpWeek") is None
+    assert not portfolio_made_up([], "perpWeek") and portfolio_empty_until([], "perpWeek") is None

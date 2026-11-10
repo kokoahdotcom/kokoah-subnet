@@ -110,15 +110,26 @@ class DayChange:
 
 
 def day_change(
-    values: Iterable[tuple[int, float]], profits: Iterable[tuple[int, float]], start_ms: int, end_ms: int
+    values: Iterable[tuple[int, float]],
+    profits: Iterable[tuple[int, float]],
+    start_ms: int,
+    end_ms: int,
+    origin_ms: int | None = None,
 ) -> DayChange:
     """The day's account value at its start and end and the exchange's recorded profit over it, each read on the
     straight line between recorded points. Every validator reads the same recorded points, so the result does not
     depend on when it scores. Money moved in or out (deposits, withdrawals, transfers, vault moves) changes the
-    value but not the profit, so it never counts as a return."""
+    value but not the profit, so it never counts as a return. An account whose recorded history begins at
+    `origin_ms` held nothing before it: an edge of the day before then, with no recorded point around it, has a zero
+    value and a zero profit (the day it was funded starts from nothing)."""
     vals, pnls = list(values), list(profits)
     v0, v1 = value_at(vals, start_ms), value_at(vals, end_ms)
     p0, p1 = value_at(pnls, start_ms), value_at(pnls, end_ms)
+    if origin_ms is not None:
+        if start_ms < origin_ms:
+            v0, p0 = (0.0 if v0 is None else v0), (0.0 if p0 is None else p0)
+        if end_ms < origin_ms:
+            v1, p1 = (0.0 if v1 is None else v1), (0.0 if p1 is None else p1)
     if v0 is None or p0 is None:
         return DayChange(None, v1, None, "no recorded point at the start of the day")
     if v1 is None or p1 is None:
