@@ -553,12 +553,15 @@ def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.
             return -1
 
     monkeypatch.setattr(supervisor, "_libc", Refusing())
-    me = os.getuid()
+    # a uid nothing runs as, whose one "process" is this test: even as root, and even if the refusal above ever
+    # stopped applying, nothing is signalled (the kill goes only to a process still owned by that uid)
+    agent_uid = 61239
+    monkeypatch.setattr(supervisor, "processes_of", lambda uid: [os.getpid()] if uid == agent_uid else [])
     with pytest.raises(supervisor.KillFailed, match="pidfd_open"):  # not a PermissionError: no 403 on a signed stop
-        supervisor.kill_user_processes(me, rounds=1)
+        supervisor.kill_user_processes(agent_uid, rounds=1)
     kill = supervisor.kill_user_processes
     monkeypatch.setattr(supervisor, "kill_user_processes", lambda uid: kill(uid, rounds=2))  # not 1000 slow rounds
-    runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=me)
+    runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=agent_uid)
     with pytest.raises(supervisor.KillFailed):
         runner.start()  # no new agent beside processes that could not be ended
     assert runner.proc is None
