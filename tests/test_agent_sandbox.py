@@ -16,9 +16,6 @@ pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or platform.machine() not in ("x86_64", "aarch64"), reason="Linux seccomp only"
 )
 
-# CI's sandbox job sets this: there every test below must run, so a host that cannot run one fails instead of skipping
-REQUIRED = os.environ.get("KOKOAH_SANDBOX_TESTS") == "required"
-
 
 def run_sandboxed(code: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
     script = tmp_path / "probe.py"
@@ -146,8 +143,6 @@ def test_the_filter_uses_the_kernel_s_numbers() -> None:
             checked += 1
         assert all(name in SYSCALLS[machine] for name in DENIED if name in found), machine
     if not checked:
-        if REQUIRED:
-            pytest.fail("no kernel headers here")
         pytest.skip("no kernel headers here")
 
 
@@ -188,8 +183,7 @@ def _user_namespaces() -> bool:
 
 
 needs_root_and_namespaces = pytest.mark.skipif(
-    not REQUIRED and (os.geteuid() != 0 or not _user_namespaces()),
-    reason="switching users needs root; the view needs user namespaces",
+    os.geteuid() != 0 or not _user_namespaces(), reason="switching users needs root; the view needs user namespaces"
 )
 
 
@@ -204,7 +198,7 @@ def _agent_user_namespaces() -> bool:
 
 
 needs_the_agents_own_view = pytest.mark.skipif(
-    not REQUIRED and (os.geteuid() != 0 or not _agent_user_namespaces()),
+    os.geteuid() != 0 or not _agent_user_namespaces(),
     reason="switching users needs root; the agent's user must be allowed user namespaces for its own view",
 )
 
@@ -559,12 +553,15 @@ def test_a_kill_that_cannot_be_made_is_never_taken_for_done(monkeypatch: pytest.
             return -1
 
     monkeypatch.setattr(supervisor, "_libc", Refusing())
-    me = os.getuid()
+    # a uid nothing runs as, whose one "process" is this test: even as root, and even if the refusal above ever
+    # stopped applying, nothing is signalled (the kill goes only to a process still owned by that uid)
+    agent_uid = 61239
+    monkeypatch.setattr(supervisor, "processes_of", lambda uid: [os.getpid()] if uid == agent_uid else [])
     with pytest.raises(supervisor.KillFailed, match="pidfd_open"):  # not a PermissionError: no 403 on a signed stop
-        supervisor.kill_user_processes(me, rounds=1)
+        supervisor.kill_user_processes(agent_uid, rounds=1)
     kill = supervisor.kill_user_processes
     monkeypatch.setattr(supervisor, "kill_user_processes", lambda uid: kill(uid, rounds=2))  # not 1000 slow rounds
-    runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=me)
+    runner = supervisor.AgentRunner([sys.executable, "-c", "pass"], tmp_path, uid=agent_uid)
     with pytest.raises(supervisor.KillFailed):
         runner.start()  # no new agent beside processes that could not be ended
     assert runner.proc is None

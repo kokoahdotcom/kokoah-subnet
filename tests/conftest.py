@@ -1,6 +1,8 @@
 """Shared test settings: the documentation address ranges (RFC 5737, RFC 3849) stand in for public machines."""
 
 import ipaddress
+import os
+from collections.abc import Generator
 
 import pytest
 
@@ -20,3 +22,24 @@ def documentation_addresses_count_as_public(monkeypatch: pytest.MonkeyPatch) -> 
         return any(address in net for net in DOCUMENTATION) or real(ip)
 
     monkeypatch.setattr(agents, "address_allowed", allowed)
+
+
+# CI's sandbox job sets KOKOAH_SANDBOX_TESTS=required: there every test must run, so a skip fails, whatever skipped
+# it; any other value is refused rather than quietly read as "not required"
+SANDBOX_TESTS = os.environ.get("KOKOAH_SANDBOX_TESTS", "")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    if SANDBOX_TESTS not in ("", "required"):
+        raise pytest.UsageError(f"KOKOAH_SANDBOX_TESTS is 'required' or unset, not {SANDBOX_TESTS!r}")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    report = yield
+    if SANDBOX_TESTS == "required" and report.skipped:
+        report.outcome = "failed"
+        report.longrepr = f"skipped where every test must run: {report.longrepr}"
+    return report
