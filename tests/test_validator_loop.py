@@ -46,6 +46,7 @@ FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 EARLY = DAY_MS / 1000 + 86_400 + 3600  # an hour after the day ended: before the deadline
+OVERDUE = DAY_MS / 1000 + 86_400 + DEFAULT.file_quiet_hours * 3600 + 60  # a missing file is overdue
 
 
 @dataclass
@@ -401,14 +402,18 @@ def test_the_record_remembers_its_subnet(tmp_path: Path) -> None:
     store.close()
 
 
-async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:
-    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
-    HISTORY[addr_a] = _history_of_file_fills()  # a bound address traded through the builder: the file is waited for
-    (tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4").unlink()
-    cfg = ValidatorConfig(**{**cfg.__dict__, "builder_base_url": "http://127.0.0.1:9/none"})
+async def test_step_retries_a_missing_file_hourly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import collect as collect_module
+    from kokoah_subnet.validator.builder_feed import NotPublished
+
+    async def not_published(cfg: Any, day: str) -> Any:
+        raise NotPublished(day)
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
     now = DAY_MS / 1000 + 86_400 + 600
     report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
-    assert report["scored"]["day"] == DAY and ("missing" in report["scored"] or "error" in report["scored"])
+    assert report["scored"] == {"day": DAY, "missing": True} and FILLS_READ == []  # waited for, nothing read
     report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
     assert report["scored"] is None  # not retried within the hour
     await hl.close()
@@ -943,8 +948,11 @@ async def test_a_missing_file_waits_until_the_deadline_then_the_histories_score_
     monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
     HISTORY[addr_a] = _history_of_file_fills()
     end_s = DAY_MS / 1000 + 86_400
-    with pytest.raises(NotPublished, match="paid builder fees that day"):
+    with pytest.raises(NotPublished):  # not overdue yet: waited for, nothing read
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 3_600)
+    assert FILLS_READ == []
+    with pytest.raises(NotPublished, match="paid builder fees that day"):  # overdue, but a miner paid builder fees
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=OVERDUE)
     assert store.file(DAY) is None  # nothing recorded of the file while it is waited for
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 13 * 3_600)
     ra = next(r for r in result.records if r.hotkey == HK_A)
@@ -955,12 +963,13 @@ async def test_a_missing_file_waits_until_the_deadline_then_the_histories_score_
     await hl.close()
 
 
-async def test_a_day_no_bound_address_traded_through_the_builder_is_scored_without_waiting_for_a_file(
+async def test_a_day_no_bound_address_paid_builder_fees_is_scored_once_its_file_is_overdue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The exchange writes no file for a day without builder fills, and a file of other traders' fills pays nobody:
-    when no bound address's own history shows a builder fee that day, the day is scored at the first attempt, and
-    the missing file is a note, not an error, so the health check stays green."""
+    """The exchange writes no file for a day without builder fills, about an hour after the day otherwise. Until the
+    file is overdue it is simply waited for, with nothing read. After that, when no bound address's own history shows
+    a builder fee that day, the day is scored, and the missing file is a note, not an error, so the health check
+    stays green."""
     from kokoah_subnet.validator import collect as collect_module
     from kokoah_subnet.validator.builder_feed import NotPublished
     from kokoah_subnet.validator.health import check
@@ -970,26 +979,67 @@ async def test_a_day_no_bound_address_traded_through_the_builder_is_scored_witho
 
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
-    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)  # an hour after the day
+    with pytest.raises(NotPublished):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)  # an hour after the day
+    assert FILLS_READ == [] and store.file(DAY) is None
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=OVERDUE)
     assert {r.hotkey for r in result.records} == {HK_A, HK_B}
     assert all(r.fees.fills == 0 for r in result.records)
     assert store.file(DAY) == ("", 0)
     rows = store.execute_sql("select level, message from errors where stage = 'builder file'")
-    assert [r["level"] for r in rows] == ["note"] and "no bound address traded" in rows[0]["message"]
+    assert [r["level"] for r in rows] == ["note"] and "shows a builder fee" in rows[0]["message"]
     report = check(store)
     assert not any("errors recorded" in p for p in report["problems"])
     await hl.close()
 
 
+def _other_traders_file() -> str:
+    """A day's file holding only fills of traders no hotkey is bound to."""
+    lines = _csv("0x" + "77" * 20, "0x" + "88" * 20).splitlines()
+    return "\n".join(lines) + "\n"
+
+
+async def test_a_quiet_day_pays_the_same_with_a_file_of_other_traders_or_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a day no bound address paid builder fees, a file holds only other traders' fills, and those pay nobody:
+    the day scored without it gives every hotkey the same figures as with it."""
+    from kokoah_subnet.validator import collect as collect_module
+    from kokoah_subnet.validator.builder_feed import NotPublished
+
+    def figures(result: Any) -> list[tuple[Any, ...]]:
+        return sorted(
+            (r.hotkey, round(r.pay_alpha, 9), r.fees.fills, r.fees.notional, r.qual_trades, r.eligible)
+            for r in result.records
+        )
+
+    (tmp_path / "file").mkdir()
+    cfg, store, hl, chain, _, _ = _setup(tmp_path / "file")
+    cache = tmp_path / "file" / "fills" / "0xbuilder" / "20261021.csv.lz4"
+    cache.write_bytes(lz4.frame.compress(_other_traders_file().encode()))
+    with_file = figures(await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=OVERDUE))
+    await hl.close()
+
+    async def not_published(cfg: Any, day: str) -> Any:
+        raise NotPublished(day)
+
+    (tmp_path / "none").mkdir()
+    cfg, store, hl, chain, _, _ = _setup(tmp_path / "none")
+    monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
+    without = figures(await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=OVERDUE))
+    await hl.close()
+    assert with_file == without and {f[0] for f in without} == {HK_A, HK_B}
+
+
 async def test_a_day_is_known_quiet_only_from_histories_read_in_full() -> None:
-    """Only the day's fills that paid a builder fee within the rate count as activity; an unreadable history, a
-    millisecond left unread or a history the exchange may have cut leaves the day waiting for its file."""
+    """Any fill of the day that paid a builder fee counts as activity (the history cannot name the builder); an
+    unreadable history, a millisecond left unread or a history the exchange may have cut leaves the day waiting for
+    its file."""
     from kokoah_subnet.mechanism.fills import Fill
     from kokoah_subnet.validator.collect import bound_builder_activity
     from kokoah_subnet.validator.hyperliquid import FILLS_KEPT
 
     end = DAY_MS + 86_400_000
-    rate = DEFAULT.builder_fee_rate
 
     def fill(t: int, builder_fee: float) -> Fill:
         return Fill(t, "0xa", "BTC", "B", 100_000.0, 0.1, True, builder_fee)
@@ -1006,13 +1056,13 @@ async def test_a_day_is_known_quiet_only_from_histories_read_in_full() -> None:
             return self.fills
 
     async def activity(history: History) -> str | None:
-        return await bound_builder_activity(history, ["0xa"], DAY_MS, end, end + 3_600_000, rate)  # type: ignore[arg-type]
+        return await bound_builder_activity(history, ["0xa"], DAY_MS, end, end + 3_600_000)  # type: ignore[arg-type]
 
     assert await activity(History([])) is None
     assert await activity(History([fill(DAY_MS + 1, 0.0)])) is None  # no builder on the order
-    assert await activity(History([fill(end + 1, 2.5)])) is None  # after the day: tomorrow's file
-    assert await activity(History([fill(DAY_MS + 1, 50.0)])) is None  # a fee above the rate: another builder's
-    assert await activity(History([fill(DAY_MS + 1, 2.5)])) == "0xa paid builder fees that day"
+    assert await activity(History([fill(end, 2.5)])) is None  # after the day: tomorrow's file
+    for t, fee in ((DAY_MS, 2.5), (end - 1, 2.5), (DAY_MS + 1, 50.0)):  # a fee above the rate counts too
+        assert await activity(History([fill(t, fee)])) == "0xa paid builder fees that day"
     assert "may not hold the whole day" in str(await activity(History([], gaps=[DAY_MS + 5])))
     assert "may not hold the whole day" in str(await activity(History([fill(end + 1, 0.0)] * FILLS_KEPT)))
     assert "unavailable" in str(await activity(History([], fails=True)))

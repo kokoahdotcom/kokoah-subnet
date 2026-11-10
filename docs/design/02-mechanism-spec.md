@@ -326,7 +326,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
-| data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 12 h after the day: scored from the histories |
+| data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |
 | migration | once per 60 days, signed by old address, new address and hotkey; skill smoothing, pay history and penalties carry over, credit and qualification start from zero, the entry test's record starts with the new address |
 | agents | sealed machines on Google Cloud Confidential Space running an approved harness image; checked daily by each validator (§16) |
 | buyback | the collected fees, on the owner's cadence, by `add_stake_burn` |
@@ -413,16 +413,18 @@ before the hotkey's current registration block never counts again.
   advanced state.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
   recorded and flagged, the scored file stands.
-- **Late or missing files.** The exchange writes a day's file about an hour after the day ends, and none when the
-  part of the day it covers had no fills. The validator scores the days after its latest scored day in order. When a
-  day's file is not there, it first reads every bound address's own history from the day's start until now: if each
-  is read in full (fewer than 10,000 fills, no millisecond left unread) and none shows a fill of the day that paid a
-  builder fee within the rate, no bound address traded through the builder, a file could hold only other traders'
-  fills (which pay nobody), and the day is scored at once from the histories (recorded as a note). Otherwise it waits
-  for the file until 12 hours after the day ends (`file_deadline_hours`), and then scores the day from the bound
-  addresses' histories alone (recorded as an error, so the health check shows it). A file published later is
-  fetched by the re-check and its hash recorded; the scored day stands. `kokoah-subnet validator skip-day` remains
-  for a day to be closed by announcement as a day with no fills (an outage of the exchange's history itself).
+- **Late or missing files.** The exchange writes a day's file usually two to three hours after the day ends, at times
+  six or seven, and none when the part of the day it covers had no fills. The validator scores the days after its
+  latest scored day in order. A missing file is waited for until 8 hours after the day ends (`file_quiet_hours`). Then
+  the validator reads every bound address's own history from the day's start until now: if each is read in full (fewer
+  than 10,000 fills, no millisecond left unread) and none shows a fill of the day that paid any builder fee (the
+  history does not name the builder), a file could hold no paid fill of a bound address, and the day is scored from
+  the histories (recorded as a note). A fill that paid no builder fee at all (a zero-fee promotion) appears in the
+  file alone, which the exchange has written by then on every day seen so far. Otherwise it waits for the file until
+  12 hours after the day ends (`file_deadline_hours`), and then scores the day from the bound addresses' histories
+  alone (recorded as an error, so the health check shows it). A file published later is fetched by the re-check and
+  its hash recorded; the scored day stands. `kokoah-subnet validator skip-day` remains for a day to be closed by
+  announcement as a day with no fills (an outage of the exchange's history itself).
 - **Day zero** is a parameter of the mechanism (`Params.day_zero`), so every validator counts penalty windows from
   the same date.
 

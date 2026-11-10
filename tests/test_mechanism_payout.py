@@ -53,4 +53,7 @@ def test_params_validation() -> None:
         Params(entry_psr=0.4)
     with pytest.raises(ValueError):
         Params(skill_floor=1.0)
+    for quiet in (0.0, 13.0):  # a missing file is overdue after the day ends and no later than the deadline
+        with pytest.raises(ValueError):
+            Params(file_quiet_hours=quiet)
     assert Params().volume_share == 0.8 and Params().skill_share == 0.2

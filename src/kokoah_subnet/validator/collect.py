@@ -45,7 +45,6 @@ from kokoah_subnet.mechanism.fills import (
     assign_counterparties,
     builder_orders,
     confirm_builder,
-    history_candidate,
     merge_sources,
 )
 
@@ -284,12 +283,13 @@ async def builder_rewards(hl: HyperliquidInfo, builder: str) -> dict[str, float]
 
 
 async def bound_builder_activity(
-    hl: HyperliquidInfo, addresses: list[str], start_ms: int, end_ms: int, now_ms: int, rate: float
+    hl: HyperliquidInfo, addresses: list[str], start_ms: int, end_ms: int, now_ms: int
 ) -> str | None:
-    """Why the day may hold builder fills of a bound address, or None when it surely holds none: every bound address's
-    own history from the day's start until now was read in full (fewer fills than the exchange keeps, no millisecond
-    left unread) and shows no fill of the day that paid a builder fee within the rate. The file of such a day, if the
-    exchange writes one at all, holds only other traders' fills, and those pay nobody."""
+    """Why the day may hold builder fills of a bound address, or None when none shows any: every bound address's own
+    history from the day's start until now was read in full (fewer fills than the exchange keeps, no millisecond left
+    unread) and shows no fill of the day that paid a builder fee, whichever builder's. The history cannot name the
+    builder, nor show a fill that paid no builder fee at all (a zero-fee promotion): those are in the file alone,
+    which is why this is asked only once the file is overdue (`file_quiet_hours`)."""
     for address in addresses:
         gaps: list[int] = []
         try:
@@ -298,7 +298,7 @@ async def bound_builder_activity(
             return f"the fill history of {address} is unavailable ({str(exc)[:120]})"
         if gaps or len(fills) >= FILLS_KEPT:
             return f"the fill history of {address} may not hold the whole day"
-        if any(f.time_ms < end_ms and history_candidate(f, rate) for f in fills):
+        if any(f.time_ms < end_ms and f.builder_fee > 0 for f in fills):
             return f"{address} paid builder fees that day"
     return None
 
@@ -324,10 +324,13 @@ async def collect_and_score(
         data, downloaded = await fetch_builder_file(cfg, day)
         file_missing = False
     except NotPublished:
-        # the exchange writes a day's file about an hour after the day ends, and writes none when its part of the
-        # day had no fills: once the bindings are known, a day on which no bound address traded through the builder
-        # is scored at once, any other waits for the file until the deadline and is then scored from the bound
-        # addresses' own histories
+        # the exchange writes a day's file usually two to three hours after the day ends (at times six or seven), and
+        # none when its part of the day had no fills: until `file_quiet_hours` the file is simply waited for; after it,
+        # once the bindings are known, a day on which no bound address's own history shows a builder fee is scored at
+        # once, and any other waits for the file until the deadline and is then scored from the bound addresses' own
+        # histories
+        if clock * 1000 < end_ms + params.file_quiet_hours * 3_600_000:
+            raise
         data, downloaded = b"", False
         file_missing = True
     fills = parse_builder_csv(decompress(data)) if data else []
@@ -464,14 +467,12 @@ async def collect_and_score(
 
     if file_missing:
         bound_addresses = sorted({a.address for hk, a in resolution.accepted.items() if hk in uid_of})
-        busy = await bound_builder_activity(
-            hl, bound_addresses, start_ms, end_ms, int(clock * 1000), params.builder_fee_rate
-        )
+        busy = await bound_builder_activity(hl, bound_addresses, start_ms, end_ms, int(clock * 1000))
         if busy is not None and clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
             raise NotPublished(f"no builder fills file for {day} yet, and {busy}")
         if busy is None:
-            log.info("no builder file for %s and no bound address traded through the builder: scoring now", day)
-            quiet = "not published, and no bound address traded through the builder that day; scored from histories"
+            log.info("no builder file for %s and no builder fee in the bound addresses' histories: scoring now", day)
+            quiet = "not published, and no bound address's history shows a builder fee that day; scored from histories"
             store.put_note(day, None, None, "builder file", quiet)
         else:
             log.info("no builder file for %s past the deadline: scoring from the addresses' histories", day)
@@ -864,10 +865,10 @@ async def collect_and_score(
         # that many, part of the day's own history may be gone from what this validator read, and with it what the
         # thin-coin and off-market checks look at. Such a day is treated like a thin one: its loss counts, its profit
         # does not. This depends on when a validator reads: validators score a day within the hour after its builder
-        # file comes out, so they read alike, but one that reads later sees more fills since the day ended and, for an
-        # address near the limit, may find the day cut where an earlier one did not. It cannot see what was dropped,
-        # so it never counts a profit it could not check. Nor does one that could not read the fills since (past the
-        # deadline): it cannot tell
+        # file comes out (a day without a file, once it is overdue), so they read alike, but one that reads later sees
+        # more fills since the day ended and, for an address near the limit, may find the day cut where an earlier one
+        # did not. It cannot see what was dropped, so it never counts a profit it could not check. Nor does one that
+        # could not read the fills since (past the deadline): it cannot tell
         seen = len(public) + len(later or [])
         unread = read_state is not None and later is None
         cut = seen >= FILLS_KEPT or unread
