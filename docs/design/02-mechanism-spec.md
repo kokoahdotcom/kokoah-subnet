@@ -253,22 +253,22 @@ A miner is **eligible** on day `d` when both hold; otherwise it is paid nothing 
 ```
 
 `E(t)` comes from the exchange's own recorded history of the account (the `portfolio` endpoint, window
-`perpWeek`: the perps account value, recorded about every two hours), never from a single snapshot. Between
-recorded points the value is a straight line; the day's two edges are interpolated from the points around them.
-The window's live last point and the made-up point at its far edge are dropped, so every validator that asks
-while the day is inside the window reads the same points, and each validator keeps the points it read
-(`equity_points`). Fewer than 4 recorded points inside the day, or a history that does not reach back to the day's
-start, make `Ē_d` **unknown**, and unknown is ineligible (recorded as an error, raised by the health check). An
-account whose history begins during the day had nothing before its first point: its average counts zero before it,
-and its day starts from a zero value and a zero profit (the deposit is money moved in, not a return). The history
-begins at the all-time window's first point, or later at the week's first recorded point when the week's far edge
-shows nothing held (an account funded after an empty spell, however old its history). A window whose every point
-but the live one shows a zero value and a zero profit is made up by the exchange (it keeps no history for an account
-that held nothing and makes up evenly spaced zero points timed by the request), so none of its points is kept. When
-the live point is zero too and the window covers the day, the account held nothing all week: `Ē_d = 0` and the day
-has no change, known at once. When the live point shows money, the account was just funded and the exchange has not
-recorded it yet: the record is waited for until the deadline. A failed read of the history does not make a trader ineligible: the day is not
-scored and is retried within the hour. A drop below the floor costs that day only; there is no permanent
+`perpWeek`: the perps account value, recorded about every two hours), never from a single snapshot. Between recorded
+points the value is a straight line; the day's two edges are interpolated from the points around them. The window's
+live last point and the made-up point at its far edge are dropped, so every validator that asks while the day is
+inside the window reads the same points, and each validator keeps the points it read (`equity_points`). Fewer than 4
+recorded points inside the day, or a history that does not reach back to the day's start, make `Ē_d` **unknown**, and
+unknown is ineligible (recorded as an error, raised by the health check). An account whose history begins during the
+day had nothing before its first point: its average counts zero before it, and its day starts from a zero value and a
+zero profit (the deposit is money moved in, not a return). The history begins at the all-time window's first point, or
+later at the week's first recorded point when the week's far edge shows nothing held (an account funded after an empty
+spell that reaches back to the week's start, however old its history). A window whose every point but the live one
+shows a zero value and a zero profit is made up by the exchange (it keeps no history for an account that held nothing
+and makes up evenly spaced zero points timed by the request), so none of its points is kept. When the live point is
+zero too and the window covers the day, the account held nothing all week: `Ē_d = 0` and the day has no change, known
+at once. When the live point shows money, the account was just funded and the exchange has not recorded it yet: the
+record is waited for until the deadline. A failed read of the history does not make a trader ineligible: the day is
+not scored and is retried within the hour. A drop below the floor costs that day only; there is no permanent
 disqualification, and rewards resume on the next day at or above it.
 
 **Qualifying trades.** A new identity must first make `n_q = 3` qualifying trades with at least `N_q = $1,000` of

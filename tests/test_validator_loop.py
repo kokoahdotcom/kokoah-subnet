@@ -1256,8 +1256,12 @@ async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_p
         assert store.equity_points(addr_a, window, 0, 2**62) == []
     assert store.equity_points(rb.address, "perpWeek", 0, 2**62)  # a real history is stored as before
     assert rb.eligible and rb.pay_alpha > 0
-    daily = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
-    assert daily == [{"avg_equity_usd": 0.0, "note": "the perps account held nothing all week"}]
+    daily = store.execute_sql(
+        f"select avg_equity_usd, points, origin_ms, note from equity_daily where address = '{addr_a}'"
+    )
+    assert daily == [
+        {"avg_equity_usd": 0.0, "points": 0, "origin_ms": None, "note": "the perps account held nothing all week"}
+    ]
     assert store.execute_sql(f"select stage from errors where address = '{addr_a}' and level = 'error'") == []
     assert store.equity_value(addr_a, DAY) == 0.0
     await hl.close()
@@ -1276,14 +1280,17 @@ def _funded_windows(asked: int, funded: int, value: float, origin: int) -> list[
             ["perpAllTime", window(origin)]]  # fmt: skip
 
 
+@pytest.mark.parametrize("hours_after", [3, 9])
 @pytest.mark.parametrize("old_account", [False, True])
-async def test_the_day_an_empty_account_is_funded_starts_from_nothing(tmp_path: Path, old_account: bool) -> None:
+async def test_the_day_an_empty_account_is_funded_starts_from_nothing(
+    tmp_path: Path, old_account: bool, hours_after: int
+) -> None:
     """Funded at 13:54 after an empty week, a brand-new account or an old one alike: the record begins that day, so
     the day counts nothing before it (a known average), starts from a zero value (a known day, its deposit money
     moved in), and nothing is recorded as an error, on every validator alike."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     end = DAY_MS + 86_400_000
-    asked, funded = end + 3 * 3_600_000, DAY_MS + 13 * 3_600_000 + 54 * 60_000
+    asked, funded = end + hours_after * 3_600_000, DAY_MS + 13 * 3_600_000 + 54 * 60_000  # reads 3 h and 9 h after
     origin = DAY_MS - 200 * 86_400_000 if old_account else funded - 77 * 60_000
     LIVE[addr_a] = 20_000.0
 
@@ -1326,6 +1333,15 @@ async def test_an_account_funded_but_not_yet_recorded_is_waited_for(tmp_path: Pa
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=asked / 1000)
     for window in ("perpWeek", "perpWeek:pnl"):
         assert store.equity_points(addr_a, window, 0, 2**62) == []
+    points[-1][1] = (
+        "0.0"  # nothing on the live point either, but the week no longer covers the day: nothing to wait for
+    )
+    days_late = DAY_MS + 8 * 86_400_000
+    for i, p in enumerate(points):
+        p[0] = days_late - 7 * 86_400_000 + i * 60_480_000 if i < len(points) - 1 else days_late
+    late_cfg = ValidatorConfig(**{**cfg.__dict__, "retry_grace_hours": 3.0})  # a first attempt: not past the deadline
+    await collect_and_score(late_cfg, DAY, store, hl, chain, DEFAULT, now_ts=days_late / 1000)
+    assert store.equity_points(addr_a, "perpWeek", 0, 2**62) == []
     await hl.close()
 
 

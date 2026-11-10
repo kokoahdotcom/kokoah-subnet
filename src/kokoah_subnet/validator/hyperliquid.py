@@ -485,6 +485,18 @@ def portfolio_made_up(windows: list[Any], name: str) -> bool:
     return all(len(pts) >= 2 and all(v == 0.0 for _, v in pts[:-1]) for pts in series)
 
 
+def portfolio_live_holds(windows: list[Any], name: str) -> bool:
+    """Whether one portfolio window's live point (its last) shows money: a non-zero account value or profit."""
+    w = _window(windows, name)
+    if not w:
+        return False
+    try:
+        live = [float(pts[-1][1]) for pts in (w.get("accountValueHistory") or [], w.get("pnlHistory") or []) if pts]
+    except (TypeError, ValueError, IndexError):
+        return False
+    return any(v != 0.0 for v in live)
+
+
 def portfolio_empty_until(windows: list[Any], name: str, edge_days: float = 6.0) -> int | None:
     """When one portfolio window shows the account held nothing from its far edge until its first recorded point:
     that point's time. The point at the far edge is made up for the window's start but carries the account's value

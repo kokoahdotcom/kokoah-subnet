@@ -68,6 +68,7 @@ from .hyperliquid import (
     off_market_transfer,
     portfolio_empty_until,
     portfolio_held_nothing,
+    portfolio_live_holds,
     portfolio_made_up,
     portfolio_origin,
     portfolio_pnl_points,
@@ -708,7 +709,7 @@ async def collect_and_score(
         # and its day has no change, known at once. Just funded: the record is waited for until the deadline
         made_up = recorded and portfolio_made_up(windows, params.equity_window)
         held_nothing = made_up and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
-        if made_up and not held_nothing and not past_deadline:
+        if made_up and portfolio_live_holds(windows, params.equity_window) and not past_deadline:
             raise RuntimeError(f"the recorded history of {address} does not show its money yet")
         if recorded and not made_up:
             store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
