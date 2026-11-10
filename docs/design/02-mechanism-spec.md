@@ -259,9 +259,12 @@ The window's live last point and the made-up point at its far edge are dropped, 
 while the day is inside the window reads the same points, and each validator keeps the points it read
 (`equity_points`). Fewer than 4 recorded points inside the day, or a history that does not reach back to the day's
 start, make `Ē_d` **unknown**, and unknown is ineligible (recorded as an error, raised by the health check). An
-account whose history begins during the day had nothing before its first point. A failed read of the history does
-not make a trader ineligible: the day is not scored and is retried within the hour. A drop below the floor costs
-that day only; there is no permanent disqualification, and rewards resume on the next day at or above it.
+account whose history begins during the day had nothing before its first point. An account whose whole window, the
+live point included, shows a zero value and a zero profit held nothing all week (the exchange keeps no history for
+it and makes up evenly spaced zero points): `Ē_d = 0` and the day has no change, known at once. A failed read of the
+history does not make a trader ineligible: the day is not scored and is retried within the hour. A drop below
+the floor costs that day only; there is no permanent disqualification, and rewards resume on the next day at or
+above it.
 
 **Qualifying trades.** A new identity must first make `n_q = 3` qualifying trades with at least `N_q = $1,000` of
 eligible notional together. A trade is one execution: the eligible fills (§3, after the exclusions and the mark
