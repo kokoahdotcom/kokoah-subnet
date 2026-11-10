@@ -55,6 +55,9 @@ class Params:
     qualify_notional_usd: float = 1_000.0  # and their eligible notional
     # data plane (section 3): the builder file is incomplete, the address's own history is the primary source
     file_deadline_hours: float = 12.0  # after the day ends: no file by then, the day is scored from the histories
+    # after the day ends: no file by then (the exchange writes it about an hour after the day), a day on which no bound
+    # address's own history shows a builder fee is scored at once; until then a missing file is simply waited for
+    file_quiet_hours: float = 3.0
     max_linked_accounts: int = 25  # linked accounts per address whose trades are read to name counterparties
     # exclusions (section 3)
     mark_clip: float = 0.005
@@ -94,6 +97,8 @@ class Params:
             raise ValueError("eligibility thresholds must be non-negative and at least one trade")
         if self.equity_min_points < 2:
             raise ValueError("equity_min_points must be at least 2")
+        if not 0 < self.file_quiet_hours <= self.file_deadline_hours:
+            raise ValueError("file_quiet_hours must be in (0, file_deadline_hours]")
 
     @property
     def builder_fee_bps(self) -> float:
