@@ -24,8 +24,10 @@ def documentation_addresses_count_as_public(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(agents, "address_allowed", allowed)
 
 
-# CI's sandbox job sets KOKOAH_SANDBOX_TESTS=required: there every test must run, so a skip fails, whatever skipped
-# it; any other value is refused rather than quietly read as "not required"
+# CI's sandbox job sets KOKOAH_SANDBOX_TESTS=required: there every collected test must run, so a test that skips (in
+# its setup, its call or its teardown) fails, while an expected failure (xfail) stays one; a file that skips as a whole
+# collects nothing, and pytest then fails the run itself. Any other value is refused rather than quietly read as "not
+# required"
 SANDBOX_TESTS = os.environ.get("KOKOAH_SANDBOX_TESTS", "")
 
 
@@ -39,7 +41,7 @@ def pytest_runtest_makereport(
     item: pytest.Item, call: pytest.CallInfo[None]
 ) -> Generator[None, pytest.TestReport, pytest.TestReport]:
     report = yield
-    if SANDBOX_TESTS == "required" and report.skipped:
+    if SANDBOX_TESTS == "required" and report.skipped and not hasattr(report, "wasxfail"):
         report.outcome = "failed"
         report.longrepr = f"skipped where every test must run: {report.longrepr}"
     return report
