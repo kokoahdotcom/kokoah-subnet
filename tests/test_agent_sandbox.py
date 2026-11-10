@@ -16,6 +16,9 @@ pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or platform.machine() not in ("x86_64", "aarch64"), reason="Linux seccomp only"
 )
 
+# CI's sandbox job sets this: there every test below must run, so a host that cannot run one fails instead of skipping
+REQUIRED = os.environ.get("KOKOAH_SANDBOX_TESTS") == "required"
+
 
 def run_sandboxed(code: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
     script = tmp_path / "probe.py"
@@ -143,6 +146,8 @@ def test_the_filter_uses_the_kernel_s_numbers() -> None:
             checked += 1
         assert all(name in SYSCALLS[machine] for name in DENIED if name in found), machine
     if not checked:
+        if REQUIRED:
+            pytest.fail("no kernel headers here")
         pytest.skip("no kernel headers here")
 
 
@@ -183,7 +188,8 @@ def _user_namespaces() -> bool:
 
 
 needs_root_and_namespaces = pytest.mark.skipif(
-    os.geteuid() != 0 or not _user_namespaces(), reason="switching users needs root; the view needs user namespaces"
+    not REQUIRED and (os.geteuid() != 0 or not _user_namespaces()),
+    reason="switching users needs root; the view needs user namespaces",
 )
 
 
@@ -198,7 +204,7 @@ def _agent_user_namespaces() -> bool:
 
 
 needs_the_agents_own_view = pytest.mark.skipif(
-    os.geteuid() != 0 or not _agent_user_namespaces(),
+    not REQUIRED and (os.geteuid() != 0 or not _agent_user_namespaces()),
     reason="switching users needs root; the agent's user must be allowed user namespaces for its own view",
 )
 

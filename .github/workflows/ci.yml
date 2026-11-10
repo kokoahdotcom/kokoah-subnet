@@ -21,3 +21,22 @@ jobs:
           version: "0.11.19"
           python-version: "3.12"
       - run: scripts/check.sh
+
+  sandbox:
+    # The agent sandbox's tests that switch users and make namespaces need root, and on Ubuntu 24.04 AppArmor must
+    # let the agent's user make its own user namespace. Every one of them runs here: a test that would skip fails.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.19"
+          python-version: "3.12"
+      - run: uv sync --locked --quiet
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: sudo env KOKOAH_SANDBOX_TESTS=required .venv/bin/python -m pytest -q -rs -p no:cacheprovider tests/test_agent_sandbox.py
