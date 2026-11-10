@@ -324,10 +324,11 @@ async def collect_and_score(
         data, downloaded = await fetch_builder_file(cfg, day)
         file_missing = False
     except NotPublished:
-        # the exchange writes a day's file about an hour after the day ends, and writes none when its part of the
-        # day had no fills: until `file_quiet_hours` the file is simply waited for; after it, once the bindings are
-        # known, a day on which no bound address's own history shows a builder fee is scored at once, and any other
-        # waits for the file until the deadline and is then scored from the bound addresses' own histories
+        # the exchange writes a day's file usually two to three hours after the day ends (at times six or seven), and
+        # none when its part of the day had no fills: until `file_quiet_hours` the file is simply waited for; after it,
+        # once the bindings are known, a day on which no bound address's own history shows a builder fee is scored at
+        # once, and any other waits for the file until the deadline and is then scored from the bound addresses' own
+        # histories
         if clock * 1000 < end_ms + params.file_quiet_hours * 3_600_000:
             raise
         data, downloaded = b"", False
