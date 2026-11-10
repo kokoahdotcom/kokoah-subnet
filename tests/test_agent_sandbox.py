@@ -186,6 +186,22 @@ needs_root_and_namespaces = pytest.mark.skipif(
     os.geteuid() != 0 or not _user_namespaces(), reason="switching users needs root; the view needs user namespaces"
 )
 
+
+def _agent_user_namespaces() -> bool:
+    """Whether the agent's user (65534) may make the view's user namespace: root always may, and a host can refuse it
+    to every other user (`kernel.unprivileged_userns_clone = 0`), so the probe asks as that user."""
+    probe = ["setpriv", "--reuid=65534", "--regid=65534", "--clear-groups", "unshare", "-U", "-m", "true"]
+    try:
+        return subprocess.run(probe, capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
+needs_the_agents_own_view = pytest.mark.skipif(
+    os.geteuid() != 0 or not _agent_user_namespaces(),
+    reason="switching users needs root; the agent's user must be allowed user namespaces for its own view",
+)
+
 CONNECT = (
     "import socket, sys\n"
     "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
@@ -236,7 +252,7 @@ def as_agent(code: str, *args: str, hide: list[str] | None = None) -> str:
     return out.stdout.strip()
 
 
-@needs_root_and_namespaces
+@needs_the_agents_own_view
 def test_the_agent_cannot_reach_the_attestation_socket_though_its_folder_stays_as_it_is(launcher: Path) -> None:
     """Confidential Space mounts the launcher's folder read-only with its socket open to every user, so nothing can be
     changed there: the agent gets its own view of the filesystem in which the folder is empty."""
@@ -251,12 +267,12 @@ def test_the_agent_cannot_reach_the_attestation_socket_though_its_folder_stays_a
         root_client.connect(sock)
 
 
-@needs_root_and_namespaces
+@needs_the_agents_own_view
 def test_the_agent_cannot_take_the_cover_off_from_namespaces_of_its_own(launcher: Path) -> None:
     assert as_agent(UNCOVER, str(launcher), hide=[str(launcher)]) == "locked no namespaces []"
 
 
-@needs_root_and_namespaces
+@needs_the_agents_own_view
 def test_the_harness_starts_the_agent_only_once_a_probe_sees_nothing(
     launcher: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

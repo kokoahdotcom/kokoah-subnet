@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import lz4.frame
@@ -348,6 +349,38 @@ def test_daily_equity_from_portfolio() -> None:
     assert rows[1][:2] == ("2026-10-21", 1100.0) and rows[1][2] == pytest.approx(0.0)  # +100 value, +100 pnl
     assert rows[2][:2] == ("2026-10-22", 1600.0) and rows[2][2] == pytest.approx(500.0)  # +500 value, no pnl
     assert daily_equity_from_portfolio([["week", {}]]) == []
+
+
+def test_portfolio_held_nothing() -> None:
+    """The exchange's made-up week for an account that never held anything: evenly spaced zero points that end at
+    the moment of the request. Any value or profit, a window that misses either end of the day, or no profit history
+    is not such a week."""
+    from kokoah_subnet.validator.hyperliquid import portfolio_held_nothing
+
+    start, end = 1792540800000, 1792627200000
+    asked = end + 3_600_000
+
+    def week(value: str = "0.0", profit: str = "0.0", last: int = asked) -> list[Any]:
+        times = [last - 7 * 86_400_000 + i * 60_480_000 for i in range(11)]
+        history = {"accountValueHistory": [[t, value] for t in times], "pnlHistory": [[t, profit] for t in times]}
+        return [["perpWeek", history]]
+
+    assert portfolio_held_nothing(week(), "perpWeek", start, end)
+    assert not portfolio_held_nothing(week(value="0.5"), "perpWeek", start, end)
+    assert not portfolio_held_nothing(week(profit="-1"), "perpWeek", start, end)
+    assert not portfolio_held_nothing(week(), "perpWeek", start - 8 * 86_400_000, end)  # the day is older than it
+    assert not portfolio_held_nothing(week(last=end - 1), "perpWeek", start, end)  # asked before the day ended
+    windows = week()
+    windows[0][1]["accountValueHistory"][4][1] = "12000"
+    assert not portfolio_held_nothing(windows, "perpWeek", start, end)
+    windows = week()
+    windows[0][1]["pnlHistory"] = []
+    assert not portfolio_held_nothing(windows, "perpWeek", start, end)
+    windows = week()
+    windows[0][1]["accountValueHistory"][2] = [None, "0"]
+    assert not portfolio_held_nothing(windows, "perpWeek", start, end)
+    assert not portfolio_held_nothing(week(), "perpMonth", start, end)
+    assert not portfolio_held_nothing([], "perpWeek", start, end)
 
 
 def test_marks_and_off_market_transfers() -> None:
