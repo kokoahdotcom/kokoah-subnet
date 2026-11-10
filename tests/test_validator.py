@@ -374,6 +374,9 @@ def test_portfolio_held_nothing() -> None:
     windows[0][1]["accountValueHistory"][4][1] = "12000"
     assert not portfolio_held_nothing(windows, "perpWeek", start, end)
     windows = week()
+    windows[0][1]["accountValueHistory"][-1][1] = "500"  # funded after the day: only the live point shows it
+    assert not portfolio_held_nothing(windows, "perpWeek", start, end)
+    windows = week()
     windows[0][1]["pnlHistory"] = []
     assert not portfolio_held_nothing(windows, "perpWeek", start, end)
     windows = week()
