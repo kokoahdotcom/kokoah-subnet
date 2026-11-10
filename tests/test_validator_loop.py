@@ -46,6 +46,7 @@ FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 EARLY = DAY_MS / 1000 + 86_400 + 3600  # an hour after the day ended: before the deadline
+OVERDUE = DAY_MS / 1000 + 86_400 + DEFAULT.file_quiet_hours * 3600 + 60  # a missing file is overdue
 
 
 @dataclass
@@ -401,13 +402,18 @@ def test_the_record_remembers_its_subnet(tmp_path: Path) -> None:
     store.close()
 
 
-async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:
+async def test_step_retries_a_missing_file_hourly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from kokoah_subnet.validator import collect as collect_module
+    from kokoah_subnet.validator.builder_feed import NotPublished
+
+    async def not_published(cfg: Any, day: str) -> Any:
+        raise NotPublished(day)
+
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
-    (tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4").unlink()
-    cfg = ValidatorConfig(**{**cfg.__dict__, "builder_base_url": "http://127.0.0.1:9/none"})
+    monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
     now = DAY_MS / 1000 + 86_400 + 600
     report = await step(cfg, store, hl, chain, wallet=WALLET, now=now)
-    assert report["scored"]["day"] == DAY and ("missing" in report["scored"] or "error" in report["scored"])
+    assert report["scored"] == {"day": DAY, "missing": True} and FILLS_READ == []  # waited for, nothing read
     report = await step(cfg, store, hl, chain, wallet=WALLET, now=now + 60)
     assert report["scored"] is None  # not retried within the hour
     await hl.close()
@@ -946,7 +952,7 @@ async def test_a_missing_file_waits_until_the_deadline_then_the_histories_score_
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 3_600)
     assert FILLS_READ == []
     with pytest.raises(NotPublished, match="paid builder fees that day"):  # overdue, but a miner paid builder fees
-        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 4 * 3_600)
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=OVERDUE)
     assert store.file(DAY) is None  # nothing recorded of the file while it is waited for
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 13 * 3_600)
     ra = next(r for r in result.records if r.hotkey == HK_A)
@@ -955,9 +961,6 @@ async def test_a_missing_file_waits_until_the_deadline_then_the_histories_score_
     rows = store.execute_sql("select level, message from errors where stage = 'builder file'")
     assert [r["level"] for r in rows] == ["error"] and "paid builder fees that day" in rows[0]["message"]
     await hl.close()
-
-
-OVERDUE = DAY_MS / 1000 + 86_400 + DEFAULT.file_quiet_hours * 3600 + 60  # the file is overdue: quiet days score
 
 
 async def test_a_day_no_bound_address_paid_builder_fees_is_scored_once_its_file_is_overdue(

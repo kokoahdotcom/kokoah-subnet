@@ -152,7 +152,7 @@ All times are UTC.
 1. **After midnight**, the previous day becomes pending.
 2. **The exchange's daily builder file** (fills carrying Kokoah's builder code) is published within hours. The
    validator fetches it, records its hash and compares it with the hash the operator commits on chain. The exchange
-   writes no file for a day without Kokoah fills: when the file is still missing 3 hours after the day and no miner's
+   writes no file for a day without Kokoah fills: when the file is still missing 8 hours after the day and no miner's
    own history shows a builder fee that day, the day is scored then (a note in the record). Otherwise the validator
    waits up to 12 hours; after that it scores the day from the miners' own histories alone and records why (an
    error, shown by `validator check`).
@@ -262,7 +262,7 @@ The scripts and unit files are copied again, so changes to them take effect too.
 | Symptom | What to check |
 |---|---|
 | Weights are not accepted | The hotkey needs a validator permit (enough stake); the chain also limits how often weights can be set. |
-| A day stays pending | The builder file is late: for 3 hours on any day, and up to 12 when a miner's history shows builder fees; then the day is scored from the histories. Check the log and `validator check`. |
+| A day stays pending | The builder file is late: for 8 hours on any day, and up to 12 when a miner's history shows builder fees; then the day is scored from the histories. Check the log and `validator check`. |
 | Errors about the exchange's API | Public rate limits or an outage; the day is retried within the hour. A dedicated endpoint (`--hl-info-url`) avoids rate limits. |
 | "no TAO perpetual" | Pass `--tao-usd-fallback <price>`. |
 | No verified agents | `--agent-service https://api.kokoah.com/miners` must be set and reachable. |

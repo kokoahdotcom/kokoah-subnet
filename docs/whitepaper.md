@@ -472,7 +472,7 @@ splits between A and B in the ratio 0.8 to 0.88: 281.1 and 309.3 alpha. A is pai
 
 ### Appendix C. A validator's day
 
-1. Fetch the previous UTC day's per-builder fill file (waiting up to twelve hours after the day for it, or three
+1. Fetch the previous UTC day's per-builder fill file (waiting up to twelve hours after the day for it, or eight
    when no linked account's own history shows a builder fee that day); verify its hash against Kokoah's on-chain
    commitment.
 2. Read every commitment on the subnet; resolve which account each hotkey is linked to, and which links are agents.

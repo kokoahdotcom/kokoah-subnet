@@ -55,9 +55,10 @@ class Params:
     qualify_notional_usd: float = 1_000.0  # and their eligible notional
     # data plane (section 3): the builder file is incomplete, the address's own history is the primary source
     file_deadline_hours: float = 12.0  # after the day ends: no file by then, the day is scored from the histories
-    # after the day ends: no file by then (the exchange writes it about an hour after the day), a day on which no bound
-    # address's own history shows a builder fee is scored at once; until then a missing file is simply waited for
-    file_quiet_hours: float = 3.0
+    # after the day ends: no file by then (the exchange writes it usually two to three hours after the day, at times
+    # six or seven), a day on which no bound address's own history shows a builder fee is scored at once; until then a
+    # missing file is simply waited for
+    file_quiet_hours: float = 8.0
     max_linked_accounts: int = 25  # linked accounts per address whose trades are read to name counterparties
     # exclusions (section 3)
     mark_clip: float = 0.005
