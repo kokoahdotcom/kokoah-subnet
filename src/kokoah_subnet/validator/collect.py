@@ -699,20 +699,19 @@ async def collect_and_score(
                 raise RuntimeError(f"portfolio history for {address} unavailable: {exc}") from exc
             windows = []
             recorded = False
-        if recorded:
+        # an account that held nothing all week has a made-up history (zero points that end at the request): its
+        # average is zero and its day has no change, known at once instead of waiting for made-up points to pass the
+        # day's end. Its points are timed by the request, so they differ from one validator to the next: none of them
+        # is stored, and once the account holds something its next day reads only the exchange's recorded points
+        held_nothing = recorded and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
+        if recorded and not held_nothing:
             store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
             store.put_equity_points(
                 address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
             )
-            origin = portfolio_origin(windows, params.equity_origin_window)
-        else:
-            origin = store.last_origin(address)
+        origin = portfolio_origin(windows, params.equity_origin_window) if recorded else store.last_origin(address)
         stored = store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
         history_known = recorded or any(t >= end_ms for t, _ in stored)
-        # an account that held nothing all week has a made-up history (zero points that end at the request): its
-        # average is zero and its day has no change, known at once instead of waiting for made-up points to pass the
-        # day's end
-        held_nothing = recorded and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
         if held_nothing:
             inside = sum(start_ms <= t < end_ms for t, _ in stored)
             avg = EquityAverage(0.0, inside, "the perps account held nothing all week")

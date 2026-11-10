@@ -1225,13 +1225,16 @@ async def test_a_day_the_record_does_not_cover_has_no_return(tmp_path: Path) -> 
     await hl.close()
 
 
-async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hours_after", [1, 5])
+async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_path: Path, hours_after: int) -> None:
     """The exchange keeps no history for an account that never held anything: it makes up evenly spaced zero points
     that end at the request, so they pass the day's end only many hours later. Such an account's day is known at the
-    first attempt: its average is zero (below the floor), it has no change, and nothing is recorded as an error."""
+    first attempt: its average is zero (below the floor), it has no change, and nothing is recorded as an error. The
+    made-up points are timed by the request, so a validator reading an hour after the day and one reading five hours
+    after it would store different ones: neither stores any."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     LIVE[addr_a] = 0.0
-    asked = DAY_MS + 86_400_000 + 3_600_000  # an hour after the day ended
+    asked = DAY_MS + 86_400_000 + hours_after * 3_600_000
 
     def made_up(days: int) -> dict[str, list[list[Any]]]:
         points = [[asked - days * 86_400_000 + i * days * 8_640_000, "0.0"] for i in range(11)]
@@ -1245,9 +1248,13 @@ async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_p
         return _info_handler(request)
 
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(nothing_held))
-    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)  # before the deadline
+    now = asked / 1000  # before the deadline
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=now)
     ra, rb = (next(r for r in result.records if r.hotkey == hk) for hk in (HK_A, HK_B))
     assert not ra.eligible and ra.avg_equity_usd == 0.0 and ra.ineligible_reason == "average equity below the minimum"
+    for window in ("perpWeek", "perpWeek:pnl"):
+        assert store.equity_points(addr_a, window, 0, 2**62) == []
+    assert store.equity_points(rb.address, "perpWeek", 0, 2**62)  # a real history is stored as before
     assert rb.eligible and rb.pay_alpha > 0
     daily = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
     assert daily == [{"avg_equity_usd": 0.0, "note": "the perps account held nothing all week"}]

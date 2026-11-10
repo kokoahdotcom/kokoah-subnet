@@ -251,3 +251,18 @@ def test_identical_inputs_give_identical_results() -> None:
     one = run(4, fills, miners, {})
     two = run(4, shuffled, miners, {})
     assert one.records == two.records and one.states == two.states
+
+
+def test_an_account_funded_late_in_the_day_reads_the_same_whether_or_not_it_was_seen_empty() -> None:
+    """Funded at 21:54 after a week of nothing: the exchange's record begins that day (a zero point, then the
+    deposit), so the day counts zero before it. A made-up zero point kept from a read while the account was empty
+    would put a point before the day and ask for the full day's points instead: that is why such points are never
+    stored, and every validator reads this day the same."""
+    h = 3_600_000
+    recorded = [(DAY0 + 21 * h + 37 * 60_000, 0.0), (DAY0 + 21 * h + 54 * 60_000, 20_000.0), (DAY0 + 25 * h, 20_000.0)]
+    origin = DAY0 + 20 * h + 37 * 60_000  # the all-time window's first point
+    avg = daily_average_equity(recorded, DAY0, DAY0 + D, origin, 4)
+    assert avg.value == pytest.approx(20_000.0 * (2 * h + 6 * 60_000 + 17 * 60_000 / 2) / D)
+    assert avg.note == "account history begins during the day"
+    made_up = (DAY0 - 9 * h, 0.0)  # what a read the day before, while the account held nothing, made up
+    assert daily_average_equity([made_up, *recorded], DAY0, DAY0 + D, origin, 4).value is None
