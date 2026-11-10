@@ -469,6 +469,54 @@ def portfolio_origin(windows: list[Any], name: str) -> int | None:
     return int(pts[0][0]) if pts else None
 
 
+def portfolio_made_up(windows: list[Any], name: str) -> bool:
+    """Whether one portfolio window's history is made up: every point but the live one shows a zero account value
+    and a zero profit. The exchange keeps no history for an account that has held nothing and makes one up for each
+    request (evenly spaced zero points that end at the moment of the request); until it records an account just
+    funded, the window still looks so, with only the live point showing the money. Such points are timed by the
+    request and differ from one validator to the next, so none of them is ever stored."""
+    w = _window(windows, name)
+    if not w:
+        return False
+    try:
+        series = [[(int(t), float(v)) for t, v in w.get(key) or []] for key in ("accountValueHistory", "pnlHistory")]
+    except (TypeError, ValueError):
+        return False
+    return all(len(pts) >= 2 and all(v == 0.0 for _, v in pts[:-1]) for pts in series)
+
+
+def portfolio_live_holds(windows: list[Any], name: str) -> bool:
+    """Whether one portfolio window's live point (its last) shows money: a non-zero account value or profit."""
+    w = _window(windows, name)
+    if not w:
+        return False
+    try:
+        live = [float(pts[-1][1]) for pts in (w.get("accountValueHistory") or [], w.get("pnlHistory") or []) if pts]
+    except (TypeError, ValueError, IndexError):
+        return False
+    return any(v != 0.0 for v in live)
+
+
+def portfolio_empty_until(windows: list[Any], name: str, edge_days: float = 6.0) -> int | None:
+    """When one portfolio window shows the account held nothing from its far edge until its first recorded point:
+    that point's time. The point at the far edge is made up for the window's start but carries the account's value
+    there, and the exchange records nothing while an account holds nothing, so a zero far edge followed by recorded
+    points means nothing was held before the first of them (an account funded after an empty spell, however old its
+    history). None when the window has no far edge (a young account's first point is a real one), shows something
+    held at it, or records nothing."""
+    w = _window(windows, name)
+    if not w or portfolio_made_up(windows, name):
+        return None
+    try:
+        values = [(int(t), float(v)) for t, v in w.get("accountValueHistory") or []]
+    except (TypeError, ValueError):
+        return None
+    recorded = portfolio_points(windows, name, edge_days)
+    if len(values) < 3 or not recorded or recorded[0][0] == values[0][0] or values[0][1] != 0.0:
+        return None
+    return recorded[0][0]
+
+
 def portfolio_held_nothing(windows: list[Any], name: str, start_ms: int, end_ms: int) -> bool:
     """Whether one portfolio window reaches from before `start_ms` to after `end_ms` and every point of it, the live
     one included, shows a zero account value and a zero profit: the perps account held nothing over the whole window.

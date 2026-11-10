@@ -1225,13 +1225,16 @@ async def test_a_day_the_record_does_not_cover_has_no_return(tmp_path: Path) -> 
     await hl.close()
 
 
-async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hours_after", [1, 5])
+async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_path: Path, hours_after: int) -> None:
     """The exchange keeps no history for an account that never held anything: it makes up evenly spaced zero points
     that end at the request, so they pass the day's end only many hours later. Such an account's day is known at the
-    first attempt: its average is zero (below the floor), it has no change, and nothing is recorded as an error."""
+    first attempt: its average is zero (below the floor), it has no change, and nothing is recorded as an error. The
+    made-up points are timed by the request, so a validator reading an hour after the day and one reading five hours
+    after it would store different ones: neither stores any."""
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
     LIVE[addr_a] = 0.0
-    asked = DAY_MS + 86_400_000 + 3_600_000  # an hour after the day ended
+    asked = DAY_MS + 86_400_000 + hours_after * 3_600_000
 
     def made_up(days: int) -> dict[str, list[list[Any]]]:
         points = [[asked - days * 86_400_000 + i * days * 8_640_000, "0.0"] for i in range(11)]
@@ -1245,14 +1248,100 @@ async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_p
         return _info_handler(request)
 
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(nothing_held))
-    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)  # before the deadline
+    now = asked / 1000  # before the deadline
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=now)
     ra, rb = (next(r for r in result.records if r.hotkey == hk) for hk in (HK_A, HK_B))
     assert not ra.eligible and ra.avg_equity_usd == 0.0 and ra.ineligible_reason == "average equity below the minimum"
+    for window in ("perpWeek", "perpWeek:pnl"):
+        assert store.equity_points(addr_a, window, 0, 2**62) == []
+    assert store.equity_points(rb.address, "perpWeek", 0, 2**62)  # a real history is stored as before
     assert rb.eligible and rb.pay_alpha > 0
-    daily = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
-    assert daily == [{"avg_equity_usd": 0.0, "note": "the perps account held nothing all week"}]
+    daily = store.execute_sql(
+        f"select avg_equity_usd, points, origin_ms, note from equity_daily where address = '{addr_a}'"
+    )
+    assert daily == [
+        {"avg_equity_usd": 0.0, "points": 0, "origin_ms": None, "note": "the perps account held nothing all week"}
+    ]
     assert store.execute_sql(f"select stage from errors where address = '{addr_a}' and level = 'error'") == []
     assert store.equity_value(addr_a, DAY) == 0.0
+    await hl.close()
+
+
+def _funded_windows(asked: int, funded: int, value: float, origin: int) -> list[Any]:
+    """The exchange's windows for an account that held nothing until `funded`: a zero far edge, a zero point just
+    before the deposit, recorded points every two hours, the live point last; the all-time window begins at `origin`."""
+    recorded = [[funded - 17 * 60_000, "0.0"]] + [[t, str(value)] for t in range(funded, asked, 7_200_000)]
+
+    def window(first: int) -> dict[str, list[list[Any]]]:
+        values = [[first, "0.0"], *recorded, [asked, str(value)]]
+        return {"accountValueHistory": values, "pnlHistory": [[t, "0.0"] for t, _ in values]}
+
+    return [["perpMonth", window(asked - 30 * 86_400_000)], ["perpWeek", window(asked - 7 * 86_400_000)],
+            ["perpAllTime", window(origin)]]  # fmt: skip
+
+
+@pytest.mark.parametrize("hours_after", [3, 9])
+@pytest.mark.parametrize("old_account", [False, True])
+async def test_the_day_an_empty_account_is_funded_starts_from_nothing(
+    tmp_path: Path, old_account: bool, hours_after: int
+) -> None:
+    """Funded at 13:54 after an empty week, a brand-new account or an old one alike: the record begins that day, so
+    the day counts nothing before it (a known average), starts from a zero value (a known day, its deposit money
+    moved in), and nothing is recorded as an error, on every validator alike."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    end = DAY_MS + 86_400_000
+    asked, funded = end + hours_after * 3_600_000, DAY_MS + 13 * 3_600_000 + 54 * 60_000  # reads 3 h and 9 h after
+    origin = DAY_MS - 200 * 86_400_000 if old_account else funded - 77 * 60_000
+    LIVE[addr_a] = 20_000.0
+
+    def funded_day(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "portfolio" and body["user"].lower() == addr_a:
+            return httpx.Response(200, json=_funded_windows(asked, funded, 20_000.0, origin))
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(funded_day))
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=asked / 1000)
+    (daily,) = store.execute_sql(f"select avg_equity_usd, note from equity_daily where address = '{addr_a}'")
+    held = 20_000.0 * ((end - funded) + 17 * 60_000 / 2) / 86_400_000
+    assert daily["avg_equity_usd"] == pytest.approx(held) and daily["note"] == "account history begins during the day"
+    (row,) = store.execute_sql(
+        f"select value, flows, return_known from equity where address = '{addr_a}' and day = '{DAY}'"
+    )
+    assert row["value"] == pytest.approx(20_000.0) and row["flows"] == pytest.approx(20_000.0) and row["return_known"]
+    errors = store.execute_sql(f"select stage from errors where address = '{addr_a}' and level = 'error'")
+    assert errors == []
+    await hl.close()
+
+
+async def test_an_account_funded_but_not_yet_recorded_is_waited_for(tmp_path: Path) -> None:
+    """A made-up week whose live point shows money: the account was just funded and the exchange has not recorded it
+    yet. Nothing of the read is stored, and the day waits for the record."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    asked = DAY_MS + 86_400_000 + 3_600_000
+    points = [[asked - 7 * 86_400_000 + i * 60_480_000, "0.0"] for i in range(10)] + [[asked, "20000.0"]]
+
+    def not_recorded(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "portfolio" and body["user"].lower() == addr_a:
+            week = {"accountValueHistory": points, "pnlHistory": [[t, "0.0"] for t, _ in points]}
+            return httpx.Response(200, json=[["perpMonth", week], ["perpWeek", week], ["perpAllTime", week]])
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(not_recorded))
+    with pytest.raises(RuntimeError, match="does not show its money yet"):
+        await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=asked / 1000)
+    for window in ("perpWeek", "perpWeek:pnl"):
+        assert store.equity_points(addr_a, window, 0, 2**62) == []
+    points[-1][1] = (
+        "0.0"  # nothing on the live point either, but the week no longer covers the day: nothing to wait for
+    )
+    days_late = DAY_MS + 8 * 86_400_000
+    for i, p in enumerate(points):
+        p[0] = days_late - 7 * 86_400_000 + i * 60_480_000 if i < len(points) - 1 else days_late
+    late_cfg = ValidatorConfig(**{**cfg.__dict__, "retry_grace_hours": 3.0})  # a first attempt: not past the deadline
+    await collect_and_score(late_cfg, DAY, store, hl, chain, DEFAULT, now_ts=days_late / 1000)
+    assert store.equity_points(addr_a, "perpWeek", 0, 2**62) == []
     await hl.close()
 
 

@@ -251,3 +251,38 @@ def test_identical_inputs_give_identical_results() -> None:
     one = run(4, fills, miners, {})
     two = run(4, shuffled, miners, {})
     assert one.records == two.records and one.states == two.states
+
+
+def test_an_account_funded_late_in_the_day_reads_the_same_whether_or_not_it_was_seen_empty() -> None:
+    """Funded at 21:54 after a week of nothing: the exchange's record begins that day (a zero point, then the
+    deposit), so the day counts zero before it. A made-up zero point kept from a read while the account was empty
+    would put a point before the day and ask for the full day's points instead: that is why such points are never
+    stored, and every validator reads this day the same."""
+    h = 3_600_000
+    recorded = [(DAY0 + 21 * h + 37 * 60_000, 0.0), (DAY0 + 21 * h + 54 * 60_000, 20_000.0), (DAY0 + 25 * h, 20_000.0)]
+    origin = DAY0 + 21 * h + 37 * 60_000  # the record begins with the zero point just before the deposit
+    avg = daily_average_equity(recorded, DAY0, DAY0 + D, origin, 4)
+    assert avg.value == pytest.approx(20_000.0 * (2 * h + 6 * 60_000 + 17 * 60_000 / 2) / D)
+    assert avg.note == "account history begins during the day"
+    made_up = (DAY0 - 9 * h, 0.0)  # what a read the day before, while the account held nothing, made up
+    assert daily_average_equity([made_up, *recorded], DAY0, DAY0 + D, origin, 4).value is None
+
+
+def test_a_day_before_the_record_begins_starts_from_nothing() -> None:
+    """An account whose recorded history begins during the day starts it from nothing: a zero value and a zero
+    profit, so the funding day is known (its deposit is money moved in, not a return) and the next day has a start.
+    One whose history begins after the day held nothing all of it. Without an origin, a missing edge stays unknown."""
+    from kokoah_subnet.mechanism.eligibility import day_change
+
+    h = 3_600_000
+    origin = DAY0 + 13 * h + 37 * 60_000
+    values = [(origin, 0.0), (origin + 17 * 60_000, 20_000.0), (DAY0 + D + h, 20_000.0)]
+    profits = [(origin, 0.0), (origin + 17 * 60_000, 0.0), (DAY0 + D + h, 150.0)]
+    change = day_change(values, profits, DAY0, DAY0 + D, origin)
+    assert change.known and change.value_start == 0.0 and change.value_end == pytest.approx(20_000.0)
+    assert change.profit == pytest.approx(
+        150.0 * (D - (origin + 17 * 60_000 - DAY0)) / (D + h - (origin + 17 * 60_000 - DAY0))
+    )
+    assert not day_change(values, profits, DAY0, DAY0 + D).known  # no origin: no start
+    later = day_change(values, profits, DAY0 - D, DAY0, origin)  # the day before: nothing held
+    assert later.known and (later.value_start, later.value_end, later.profit) == (0.0, 0.0, 0.0)
