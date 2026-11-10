@@ -414,7 +414,11 @@ before the hotkey's current registration block never counts again.
 - The builder file is fetched again after 06:00 UTC and its hash compared with the one scored; a change is
   recorded and flagged, the scored file stands.
 - **Late or missing files.** The exchange writes a day's file about an hour after the day ends, and none when the
-  part of the day it covers had no fills. The validator scores the days after its latest scored day in order, waits
+  part of the day it covers had no fills. The validator scores the days after its latest scored day in order. When a
+  day's file is not there, it first reads every bound address's own history from the day's start until now: if each
+  is read in full (fewer than 10,000 fills, no millisecond left unread) and none shows a fill of the day that paid a
+  builder fee within the rate, no bound address traded through the builder, a file could hold only other traders'
+  fills (which pay nobody), and the day is scored at once from the histories (recorded as a note). Otherwise it waits
   for the file until 12 hours after the day ends (`file_deadline_hours`), and then scores the day from the bound
   addresses' histories alone (recorded as an error, so the health check shows it). A file published later is
   fetched by the re-check and its hash recorded; the scored day stands. `kokoah-subnet validator skip-day` remains

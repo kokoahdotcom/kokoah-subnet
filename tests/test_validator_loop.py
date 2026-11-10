@@ -402,7 +402,8 @@ def test_the_record_remembers_its_subnet(tmp_path: Path) -> None:
 
 
 async def test_step_retries_a_missing_file_hourly(tmp_path: Path) -> None:
-    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()  # a bound address traded through the builder: the file is waited for
     (tmp_path / "fills" / "0xbuilder" / "20261021.csv.lz4").unlink()
     cfg = ValidatorConfig(**{**cfg.__dict__, "builder_base_url": "http://127.0.0.1:9/none"})
     now = DAY_MS / 1000 + 86_400 + 600
@@ -942,13 +943,79 @@ async def test_a_missing_file_waits_until_the_deadline_then_the_histories_score_
     monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
     HISTORY[addr_a] = _history_of_file_fills()
     end_s = DAY_MS / 1000 + 86_400
-    with pytest.raises(NotPublished):
+    with pytest.raises(NotPublished, match="paid builder fees that day"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 3_600)
+    assert store.file(DAY) is None  # nothing recorded of the file while it is waited for
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=end_s + 13 * 3_600)
     ra = next(r for r in result.records if r.hotkey == HK_A)
     assert ra.fees.fills == 24 and ra.fees.builder_fee == pytest.approx(300.0)
     assert store.file(DAY) == ("", 0)
+    rows = store.execute_sql("select level, message from errors where stage = 'builder file'")
+    assert [r["level"] for r in rows] == ["error"] and "paid builder fees that day" in rows[0]["message"]
     await hl.close()
+
+
+async def test_a_day_no_bound_address_traded_through_the_builder_is_scored_without_waiting_for_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exchange writes no file for a day without builder fills, and a file of other traders' fills pays nobody:
+    when no bound address's own history shows a builder fee that day, the day is scored at the first attempt, and
+    the missing file is a note, not an error, so the health check stays green."""
+    from kokoah_subnet.validator import collect as collect_module
+    from kokoah_subnet.validator.builder_feed import NotPublished
+    from kokoah_subnet.validator.health import check
+
+    async def not_published(cfg: Any, day: str) -> Any:
+        raise NotPublished(day)
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    monkeypatch.setattr(collect_module, "fetch_builder_file", not_published)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=EARLY)  # an hour after the day
+    assert {r.hotkey for r in result.records} == {HK_A, HK_B}
+    assert all(r.fees.fills == 0 for r in result.records)
+    assert store.file(DAY) == ("", 0)
+    rows = store.execute_sql("select level, message from errors where stage = 'builder file'")
+    assert [r["level"] for r in rows] == ["note"] and "no bound address traded" in rows[0]["message"]
+    report = check(store)
+    assert not any("errors recorded" in p for p in report["problems"])
+    await hl.close()
+
+
+async def test_a_day_is_known_quiet_only_from_histories_read_in_full() -> None:
+    """Only the day's fills that paid a builder fee within the rate count as activity; an unreadable history, a
+    millisecond left unread or a history the exchange may have cut leaves the day waiting for its file."""
+    from kokoah_subnet.mechanism.fills import Fill
+    from kokoah_subnet.validator.collect import bound_builder_activity
+    from kokoah_subnet.validator.hyperliquid import FILLS_KEPT
+
+    end = DAY_MS + 86_400_000
+    rate = DEFAULT.builder_fee_rate
+
+    def fill(t: int, builder_fee: float) -> Fill:
+        return Fill(t, "0xa", "BTC", "B", 100_000.0, 0.1, True, builder_fee)
+
+    class History:
+        def __init__(self, fills: list[Fill], gaps: list[int] | None = None, fails: bool = False) -> None:
+            self.fills, self.gaps, self.fails = fills, gaps or [], fails
+
+        async def fills_by_time(self, user: str, start_ms: int, end_ms: int, gaps: list[int]) -> list[Fill]:
+            assert start_ms == DAY_MS and end_ms == end + 3_600_000
+            if self.fails:
+                raise RuntimeError("down")
+            gaps.extend(self.gaps)
+            return self.fills
+
+    async def activity(history: History) -> str | None:
+        return await bound_builder_activity(history, ["0xa"], DAY_MS, end, end + 3_600_000, rate)  # type: ignore[arg-type]
+
+    assert await activity(History([])) is None
+    assert await activity(History([fill(DAY_MS + 1, 0.0)])) is None  # no builder on the order
+    assert await activity(History([fill(end + 1, 2.5)])) is None  # after the day: tomorrow's file
+    assert await activity(History([fill(DAY_MS + 1, 50.0)])) is None  # a fee above the rate: another builder's
+    assert await activity(History([fill(DAY_MS + 1, 2.5)])) == "0xa paid builder fees that day"
+    assert "may not hold the whole day" in str(await activity(History([], gaps=[DAY_MS + 5])))
+    assert "may not hold the whole day" in str(await activity(History([fill(end + 1, 0.0)] * FILLS_KEPT)))
+    assert "unavailable" in str(await activity(History([], fails=True)))
 
 
 async def test_credited_fees_beyond_what_the_builder_earned_raise_the_alarm(tmp_path: Path) -> None:

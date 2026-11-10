@@ -45,6 +45,7 @@ from kokoah_subnet.mechanism.fills import (
     assign_counterparties,
     builder_orders,
     confirm_builder,
+    history_candidate,
     merge_sources,
 )
 
@@ -282,6 +283,26 @@ async def builder_rewards(hl: HyperliquidInfo, builder: str) -> dict[str, float]
     return {k: float(r.get(k) or 0.0) for k in ("builderRewards", "claimedRewards", "unclaimedRewards")}
 
 
+async def bound_builder_activity(
+    hl: HyperliquidInfo, addresses: list[str], start_ms: int, end_ms: int, now_ms: int, rate: float
+) -> str | None:
+    """Why the day may hold builder fills of a bound address, or None when it surely holds none: every bound address's
+    own history from the day's start until now was read in full (fewer fills than the exchange keeps, no millisecond
+    left unread) and shows no fill of the day that paid a builder fee within the rate. The file of such a day, if the
+    exchange writes one at all, holds only other traders' fills, and those pay nobody."""
+    for address in addresses:
+        gaps: list[int] = []
+        try:
+            fills = await hl.fills_by_time(address, start_ms, now_ms, gaps)
+        except Exception as exc:  # noqa: BLE001 - unknown is not quiet: the day waits for the file
+            return f"the fill history of {address} is unavailable ({str(exc)[:120]})"
+        if gaps or len(fills) >= FILLS_KEPT:
+            return f"the fill history of {address} may not hold the whole day"
+        if any(f.time_ms < end_ms and history_candidate(f, rate) for f in fills):
+            return f"{address} paid builder fees that day"
+    return None
+
+
 async def collect_and_score(
     cfg: ValidatorConfig,
     day: str,
@@ -301,25 +322,16 @@ async def collect_and_score(
     past_deadline = clock >= retry_deadline(store, day, clock, end_ms, params, cfg.retry_grace_hours, away_s)
     try:
         data, downloaded = await fetch_builder_file(cfg, day)
+        file_missing = False
     except NotPublished:
         # the exchange writes a day's file about an hour after the day ends, and writes none when its part of the
-        # day had no fills; past the deadline the day is scored from the bound addresses' own histories
-        if clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
-            raise
+        # day had no fills: once the bindings are known, a day on which no bound address traded through the builder
+        # is scored at once, any other waits for the file until the deadline and is then scored from the bound
+        # addresses' own histories
         data, downloaded = b"", False
+        file_missing = True
     fills = parse_builder_csv(decompress(data)) if data else []
     digest = sha256(data) if data else ""
-    if not data:
-        log.info("no builder file for %s past the deadline: scoring from the addresses' histories", day)
-        store.put_error(day, None, None, "builder file", "not published by the deadline; scored from histories")
-    store.put_file(
-        day,
-        digest,
-        len(fills),
-        bytes=len(data),
-        users=len({f.user for f in fills}),
-        url=file_url(cfg.builder, day, cfg.builder_base_url) if downloaded else None,
-    )
 
     snap = await snapshot(client, cfg.netuid)
     now = datetime.now(tz=UTC)
@@ -449,6 +461,30 @@ async def collect_and_score(
                 "reason": reason,
             }
         )
+
+    if file_missing:
+        bound_addresses = sorted({a.address for hk, a in resolution.accepted.items() if hk in uid_of})
+        busy = await bound_builder_activity(
+            hl, bound_addresses, start_ms, end_ms, int(clock * 1000), params.builder_fee_rate
+        )
+        if busy is not None and clock * 1000 < end_ms + params.file_deadline_hours * 3_600_000:
+            raise NotPublished(f"no builder fills file for {day} yet, and {busy}")
+        if busy is None:
+            log.info("no builder file for %s and no bound address traded through the builder: scoring now", day)
+            quiet = "not published, and no bound address traded through the builder that day; scored from histories"
+            store.put_note(day, None, None, "builder file", quiet)
+        else:
+            log.info("no builder file for %s past the deadline: scoring from the addresses' histories", day)
+            late = f"not published by the deadline ({busy}); scored from histories"
+            store.put_error(day, None, None, "builder file", late)
+    store.put_file(
+        day,
+        digest,
+        len(fills),
+        bytes=len(data),
+        users=len({f.user for f in fills}),
+        url=file_url(cfg.builder, day, cfg.builder_base_url) if downloaded else None,
+    )
 
     coldkey_of = {n.hotkey: n.coldkey for n in snap.neurons}
     collateral_min = {n.hotkey: n.collateral_min_alpha for n in snap.neurons}
