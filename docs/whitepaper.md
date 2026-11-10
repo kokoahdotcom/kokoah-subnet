@@ -472,8 +472,8 @@ splits between A and B in the ratio 0.8 to 0.88: 281.1 and 309.3 alpha. A is pai
 
 ### Appendix C. A validator's day
 
-1. Fetch the previous UTC day's per-builder fill file (waiting up to twelve hours after the day for it); verify its
-   hash against Kokoah's on-chain commitment.
+1. Fetch the previous UTC day's per-builder fill file (waiting up to twelve hours after the day for it, unless no
+   linked account traded through Kokoah that day); verify its hash against Kokoah's on-chain commitment.
 2. Read every commitment on the subnet; resolve which account each hotkey is linked to, and which links are agents.
 3. Challenge every agent's sealed machine and verify its token, its code fingerprint and the account's trading keys.
 4. For each linked account: fetch its own fills, merge them with the daily file, confirm each history-only fill's
