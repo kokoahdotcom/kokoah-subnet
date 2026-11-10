@@ -32,7 +32,13 @@ from kokoah_subnet.mechanism import (
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
-from kokoah_subnet.mechanism.eligibility import EquityAverage, daily_average_equity, day_change, fresh_identity
+from kokoah_subnet.mechanism.eligibility import (
+    DayChange,
+    EquityAverage,
+    daily_average_equity,
+    day_change,
+    fresh_identity,
+)
 from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
 from kokoah_subnet.mechanism.fills import (
     BUILDER_CSV_HEADER,
@@ -60,6 +66,7 @@ from .hyperliquid import (
     mean_close,
     minutes_lost,
     off_market_transfer,
+    portfolio_held_nothing,
     portfolio_origin,
     portfolio_pnl_points,
     portfolio_points,
@@ -665,7 +672,14 @@ async def collect_and_score(
             origin = store.last_origin(address)
         stored = store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
         history_known = recorded or any(t >= end_ms for t, _ in stored)
-        if history_known:
+        # an account that held nothing all week has a made-up history (zero points that end at the request): its
+        # average is zero and its day has no change, known at once instead of waiting for made-up points to pass the
+        # day's end
+        held_nothing = recorded and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
+        if held_nothing:
+            inside = sum(start_ms <= t < end_ms for t, _ in stored)
+            avg = EquityAverage(0.0, inside, "the perps account held nothing all week")
+        elif history_known:
             avg = daily_average_equity(stored, start_ms, end_ms, origin, params.equity_min_points)
         else:
             avg = EquityAverage(None, 0, "recorded history unavailable")
@@ -786,12 +800,19 @@ async def collect_and_score(
         fills_by_address[address] = marked
         rates: tuple[float, float] | None = None
         # the day's return from the exchange's own record, the same for every validator whenever it scores; the end
-        # of the day is recorded within hours, so until the file deadline a missing end point is waited for
-        change = day_change(
-            store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-            store.equity_points(address, params.equity_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-            start_ms,
-            end_ms,
+        # of the day is recorded within hours, so until the file deadline a missing end point is waited for (an
+        # account that held nothing all week: nothing at either end and no profit)
+        change = (
+            DayChange(0.0, 0.0, 0.0)
+            if held_nothing
+            else day_change(
+                store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+                store.equity_points(
+                    address, params.equity_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000
+                ),
+                start_ms,
+                end_ms,
+            )
         )
         if change.value_start is not None and change.value_end is None:
             if not past_deadline:

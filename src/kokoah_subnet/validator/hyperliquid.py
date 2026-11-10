@@ -467,3 +467,20 @@ def portfolio_origin(windows: list[Any], name: str) -> int | None:
         return None
     pts = w.get("accountValueHistory", [])
     return int(pts[0][0]) if pts else None
+
+
+def portfolio_held_nothing(windows: list[Any], name: str, start_ms: int, end_ms: int) -> bool:
+    """Whether one portfolio window reaches from before `start_ms` to after `end_ms` and every point of it, the live
+    one included, shows a zero account value and a zero profit: the perps account held nothing over the whole window.
+    The exchange keeps no history for such an account and makes one up for each request (evenly spaced zero points
+    that end at the moment of the request), so its points reach past a day's end only many hours later."""
+    w = _window(windows, name)
+    if not w:
+        return False
+    try:
+        series = [[(int(t), float(v)) for t, v in w.get(key) or []] for key in ("accountValueHistory", "pnlHistory")]
+    except (TypeError, ValueError):
+        return False
+    return all(
+        bool(pts) and pts[0][0] <= start_ms and pts[-1][0] >= end_ms and all(v == 0.0 for _, v in pts) for pts in series
+    )
