@@ -1043,7 +1043,8 @@ async def collect_and_score(
     bound = set(addresses)
     # a linked read that failed after the deadline: the fills that needed it go uncounted (recorded as such). Without
     # the sub-accounts or transfer partners, no counterparty outside the bound addresses can be told apart from the
-    # address's own cluster; without a linked account's trades, a history fill whose counterparty is still unnamed
+    # address's own cluster or a transfer partner; without a linked account's trades, a history fill whose counterparty
+    # is still unnamed
     # may have traded with that account
     for i, m in enumerate(miners):
         unread = unchecked.get(m.address)

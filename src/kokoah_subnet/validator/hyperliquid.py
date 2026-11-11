@@ -33,9 +33,18 @@ WEIGHTS: dict[str, int] = {
     "subAccounts": 2,
     "candleSnapshot": 20,
     "portfolio": 20,
+    # explorer requests (an address's own transactions, one transaction)
+    "userDetails": 40,
+    "txDetails": 40,
 }
 # and on top, the exchange charges one more weight per this many items a response returns
-ITEMS_PER_WEIGHT: dict[str, int] = {"userFillsByTime": 20, "userFills": 20, "candleSnapshot": 60}
+ITEMS_PER_WEIGHT: dict[str, int] = {
+    "userFillsByTime": 20,
+    "userFills": 20,
+    "userFunding": 20,
+    "userNonFundingLedgerUpdates": 20,
+    "candleSnapshot": 60,
+}
 
 
 class RateLimiter:

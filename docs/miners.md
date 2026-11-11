@@ -121,7 +121,8 @@ reward measures.
 - fills without Kokoah's builder code (trades placed on other front ends);
 - spot trades (recorded, never scored);
 - trades against yourself or against accounts linked to you (hotkeys on the same coldkey, sub-accounts), or against
-  an account you moved money with (a transfer links only the two accounts that made it, never a third through them);
+  an account you, or another hotkey on your coldkey, moved money with (a transfer links only the two sides that made
+  it, never a third through them);
 - trades against other miners' linked accounts: the subnet does not pay for volume between its own miners;
 - the part of a fill's price more than 0.5% away from the market price: such a fill is valued at the market price,
   and any profit it moves into the account is removed from your returns.

@@ -310,7 +310,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
         OWNER: _Commitment("not a binding", 1),
     }
     store = Store(tmp_path / "v.sqlite")
-    hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)  # retries without waiting
+    hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0, budget_per_minute=10**9)  # no waiting: pacing is tested apart
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(_info_handler))
     return cfg, store, hl, _FakeChain(commitments), a.address.lower(), b.address.lower()
 
@@ -1917,6 +1917,28 @@ async def test_a_scoring_pass_that_raises_is_reported_and_the_next_one_starts() 
     assert scorer.poll() == {"scored": {"day": DAY, "missing": True}}
     await scorer.close()
     assert len(runs) == 2  # the third pass was started, and stopped on close before it ran
+
+
+async def test_closing_stops_a_running_scoring_pass() -> None:
+    import asyncio
+
+    from kokoah_subnet.validator.loop import BackgroundScoring
+
+    started, stopped = asyncio.Event(), asyncio.Event()
+
+    async def endless() -> dict[str, Any]:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+        return {}
+
+    scorer = BackgroundScoring(endless)
+    scorer.poll()
+    await started.wait()
+    await scorer.close()
+    assert stopped.is_set()
 
 
 def test_the_run_record_hides_the_database_password(tmp_path: Path) -> None:

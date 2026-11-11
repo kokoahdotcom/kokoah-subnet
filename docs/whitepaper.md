@@ -212,7 +212,7 @@ active days and a mean account value of $500 over the last 30 days) and no activ
 qualifies for it, the skill reward joins the volume reward.
 
 **What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own cluster
-(sub-accounts, addresses on the same coldkey) or against an address it moved money with (a transfer links only the two
+(sub-accounts, addresses on the same coldkey) or against an address its cluster moved money with (a transfer links only the two
 sides that made it, never a third through them); fills against another linked account, since the subnet does not pay
 for volume between its own miners (both sides of every trade carry the same trade id, so this is exact; such trades
 report no one, since anyone can take anyone's orders); fills priced more than 0.5% from the exchange's minute mark,

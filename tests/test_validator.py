@@ -540,7 +540,7 @@ def test_a_transfer_links_its_two_sides_and_never_a_third_through_them() -> None
     pairs = transfer_links(cluster_of, edges)
     assert linked(a, a_sub, cluster_of, pairs)  # one owner
     assert linked(attacker, rival, cluster_of, pairs) and linked(maker, attacker, cluster_of, pairs)  # direct
-    assert linked(a, maker, cluster_of, pairs)  # the owner's sub-account moved money with the maker
+    assert linked(a, maker, cluster_of, pairs)  # a transfer pairs whole clusters: any address of the owner's
     assert not linked(rival, maker, cluster_of, pairs)  # never through the attacker
 
     def fill(user: str, counterparty: str) -> Fill:
@@ -572,4 +572,6 @@ async def test_the_items_a_response_returns_are_charged_too() -> None:
     assert await spent({"type": "userFillsByTime"}) == 20 + 100
     assert await spent({"type": "candleSnapshot"}) == 20 + 24
     assert await spent({"type": "clearinghouseState"}) == 2  # no items charged
+    assert await spent({"type": "userNonFundingLedgerUpdates"}) == 20 + 2  # 50 records
+    assert await spent({"type": "userDetails"}) == 40  # an explorer request
     await hl.close()

@@ -290,6 +290,7 @@ class BackgroundScoring:
         if self._task is not None and self._task.done():
             task, self._task = self._task, None
             if task.cancelled():
+                log.warning("scoring pass cancelled")
                 done = {}
             elif (exc := task.exception()) is not None:
                 log.error("scoring pass failed: %s", exc)
@@ -342,10 +343,16 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
 
     async def scoring_pass() -> dict[str, Any]:
         # on a connection of its own, so the chain's part of each pass goes on beside it
+        target, report = scoring_target(cfg, store, day=day)
         if not scoring_due(cfg, store, day=day):
-            return {}
-        async with bt.Subtensor(cfg.network) as scoring_client:
-            return await score_step(cfg, store, hl, scoring_client, params, day=day)
+            return report  # a backlog's pending days, or why a given day is out of order
+        try:
+            async with bt.Subtensor(cfg.network) as scoring_client:
+                return await score_step(cfg, store, hl, scoring_client, params, day=day)
+        except Exception:
+            # the connection failed before the day was tried: it is tried again at the usual pace, not every pass
+            store.set_meta(f"attempt:{target}", str(time.time()))
+            raise
 
     scorer = BackgroundScoring(scoring_pass)
     try:
