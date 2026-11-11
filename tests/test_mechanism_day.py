@@ -189,7 +189,9 @@ def test_spot_fills_count_for_nothing() -> None:
     perp = taker_fills(A, 2, 10_000.0)
     inputs = DayInputs(day_index=0, price_usd=1.0, fills=spot + perp, states={}, miners=[MinerInputs("hk", A)])
     res = score_day(inputs, DEFAULT)
-    assert res.records[0].fees.fills == 2 and res.records[0].fees.builder_fee == pytest.approx(5.0)
+    assert res.records[0].fees.fills == 2 and res.records[0].fees.builder_fee == pytest.approx(
+        2 * 10_000.0 * DEFAULT.builder_fee_rate
+    )
 
 
 def test_a_penalty_that_follows_the_address_keeps_it_out_of_the_skill_pool() -> None:
