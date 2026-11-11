@@ -70,7 +70,7 @@ def test_orders_carry_the_builder_code_and_marker_and_are_signed_by_the_account(
     out = h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100500}]})
     sent = fake.posted[-1]
     action = sent["action"]
-    assert action["builder"] == {"b": BUILDER, "f": 25}
+    assert action["builder"] == {"b": BUILDER, "f": 45}
     wire = action["orders"][0]
     assert wire["a"] == 0 and wire["p"] == "100500" and wire["s"] == "0.01" and wire["t"] == {"limit": {"tif": "Gtc"}}
     assert wire["c"].startswith("0x6b6f0603" + CODE[:16]) and len(wire["c"]) == 34
@@ -204,7 +204,7 @@ def test_an_order_first_approves_the_builder_fee(setup: Any) -> None:
     h.call("order", {"orders": [{"coin": "BTC", "is_buy": True, "sz": 0.01, "limit_px": 100000}]})
     approval, order = fake.posted[-2]["action"], fake.posted[-1]["action"]
     assert approval["type"] == "approveBuilderFee" and approval["builder"] == BUILDER
-    assert approval["maxFeeRate"] == "0.025%" and order["type"] == "order"
+    assert approval["maxFeeRate"] == "0.045%" and order["type"] == "order"
 
 
 def test_spot_usdc_is_moved_to_perpetuals_within_the_account(setup: Any) -> None:
