@@ -1814,7 +1814,7 @@ async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: 
 
     passes: list[str] = []
 
-    async def one_pass(cfg: Any, store: Any, hl: Any, client: str, wallet: Any, params: Any, day: Any = None) -> Any:
+    async def one_pass(cfg: Any, store: Any, client: str, wallet: Any, target: str, now: Any = None) -> Any:
         passes.append(client)
         if len(passes) == 1:
             raise RuntimeError("websocket closed")
@@ -1822,7 +1822,8 @@ async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: 
 
     monkeypatch.setattr(bt, "Subtensor", Subtensor)
     monkeypatch.setattr(bt, "Wallet", lambda **_: WALLET)
-    monkeypatch.setattr(loop, "step", one_pass)
+    monkeypatch.setattr(loop, "chain_step", one_pass)
+    monkeypatch.setattr(loop, "scoring_due", lambda *a, **k: False)  # nothing to score: no connection of its own
     cfg = ValidatorConfig(network="fake", netuid=2, builder="0xbuilder", data_dir=tmp_path, poll_s=0)
     with pytest.raises(asyncio.CancelledError):
         await loop.run(cfg)
@@ -1830,6 +1831,92 @@ async def test_a_failed_pass_does_not_end_the_loop(tmp_path: Path, monkeypatch: 
     store = Store(tmp_path / "validator.sqlite")
     assert store.execute_sql("select message from errors where stage = 'loop'") == [{"message": "websocket closed"}]
     assert store.execute_sql("select count(*) as n from runs") == [{"n": 1}]
+
+
+async def test_weights_go_out_every_pass_while_a_long_scoring_pass_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A scoring pass that takes long (heavy hotkeys, a slow exchange) runs beside the loop on a connection of its
+    own: every pass of the loop still records the tempo and submits the weights, and the scoring pass's result is
+    reported once it is done."""
+    import asyncio
+    import logging
+
+    import bittensor as bt
+
+    from kokoah_subnet.validator import loop
+
+    opened: list[str] = []
+
+    class Subtensor:
+        def __init__(self, network: str) -> None:
+            opened.append(network)
+
+        async def __aenter__(self) -> str:
+            return f"client {len(opened)}"
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    release = asyncio.Event()
+    scored_with: list[str] = []
+
+    async def slow_score(
+        cfg: Any, store: Any, hl: Any, client: str, params: Any, now: Any = None, day: Any = None
+    ) -> Any:
+        scored_with.append(client)
+        await release.wait()
+        return {"scored": {"day": DAY, "paid": 1.0, "burn": 0.0}}
+
+    chain_passes: list[str] = []
+
+    async def chain(cfg: Any, store: Any, client: str, wallet: Any, target: str, now: Any = None) -> Any:
+        chain_passes.append(client)
+        if len(chain_passes) == 3:
+            release.set()  # the scoring pass finishes while the loop goes on
+        if len(chain_passes) == 6:
+            raise asyncio.CancelledError  # ends the test's loop
+        return {"weights": {"day": "earlier", "ok": True}}
+
+    due = iter([True] + [False] * 10)
+    monkeypatch.setattr(bt, "Subtensor", Subtensor)
+    monkeypatch.setattr(bt, "Wallet", lambda **_: WALLET)
+    monkeypatch.setattr(loop, "score_step", slow_score)
+    monkeypatch.setattr(loop, "chain_step", chain)
+    monkeypatch.setattr(loop, "scoring_due", lambda *a, **k: next(due))
+    cfg = ValidatorConfig(network="fake", netuid=2, builder="0xbuilder", data_dir=tmp_path, poll_s=0)
+    caplog.set_level(logging.INFO, logger="kokoah_subnet.validator")
+    with pytest.raises(asyncio.CancelledError):
+        await loop.run(cfg)
+    steps = [r.getMessage() for r in caplog.records if r.getMessage().startswith("step: ")]
+    reports = [json.loads(m.removeprefix("step: ")) for m in steps]
+    assert scored_with == ["client 2"] and chain_passes == ["client 1"] * 6  # scoring on a connection of its own
+    assert all(r["weights"] == {"day": "earlier", "ok": True} for r in reports)  # weights every pass
+    assert [r["scored"] for r in reports].count({"day": DAY, "paid": 1.0, "burn": 0.0}) == 1  # reported once done
+    assert reports[0]["scored"] is None and reports[1]["scored"] is None  # not while it ran
+
+
+async def test_a_scoring_pass_that_raises_is_reported_and_the_next_one_starts() -> None:
+    import asyncio
+
+    from kokoah_subnet.validator.loop import BackgroundScoring
+
+    runs: list[int] = []
+
+    async def scoring_pass() -> dict[str, Any]:
+        runs.append(1)
+        if len(runs) == 1:
+            raise RuntimeError("websocket closed")
+        return {"scored": {"day": DAY, "missing": True}}
+
+    scorer = BackgroundScoring(scoring_pass)
+    assert scorer.poll() == {}  # started
+    await asyncio.sleep(0)
+    assert scorer.poll() == {"scored": {"error": "websocket closed"}}  # reported, and the next one started
+    await asyncio.sleep(0)
+    assert scorer.poll() == {"scored": {"day": DAY, "missing": True}}
+    await scorer.close()
+    assert len(runs) == 2  # the third pass was started, and stopped on close before it ran
 
 
 def test_the_run_record_hides_the_database_password(tmp_path: Path) -> None:

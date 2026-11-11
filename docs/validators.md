@@ -164,8 +164,9 @@ All times are UTC.
    signature is checked; every unlink seen is kept).
 4. **Scoring.** Eligibility, fee credit, skill, the entry test, agent verification, and the two
    rewards, exactly as the specification states. The day's artifact (every miner's figures) is stored.
-5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
-   subnet's settings, including commit-reveal.
+5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day, also while a long
+   scoring pass runs: scoring runs beside the loop, on a connection of its own. The SDK follows the subnet's
+   settings, including commit-reveal.
 
 A failed read of a miner's recorded account values, a fill history, the explorer, a linked account, the minute
 candles, the unlinks or the time of a link's join block fails that day's scoring, and the validator retries within the

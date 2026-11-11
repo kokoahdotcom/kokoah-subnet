@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable, Coroutine
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -78,6 +79,66 @@ def pending_days(store: Store, start_day: str, last_day: str) -> list[str]:
     return out
 
 
+def scoring_target(
+    cfg: ValidatorConfig, store: Store, now: float | None = None, day: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """The day a pass looks at (the given day, else the oldest pending one, else yesterday) and what to report about
+    it before scoring: the pending days of a backlog, or why a given day is out of order."""
+    report: dict[str, Any] = {}
+    pending = pending_days(store, cfg.start_day, previous_utc_day(now))
+    if day is not None:
+        if store.day(day) is None and (not pending or day != pending[0]):
+            # a day out of order would score against later rows and replace the states the next day starts from
+            oldest = f"the oldest pending day is {pending[0]}" if pending else "no completed day is pending"
+            report["scored"] = {"day": day, "error": f"{day} is out of order: {oldest}"}
+        return day, report
+    if len(pending) > 1:
+        report["pending_days"] = pending
+    return (pending[0] if pending else previous_utc_day(now)), report
+
+
+def scoring_due(cfg: ValidatorConfig, store: Store, now: float | None = None, day: str | None = None) -> bool:
+    """Whether a pass would score now: the day is unscored, in order, not before the start day, and its last attempt
+    is at least `retry_missing_s` ago. Asked before any connection is opened for it."""
+    clock = now if now is not None else time.time()
+    target, report = scoring_target(cfg, store, now, day)
+    if store.day(target) is not None or "scored" in report or target < cfg.start_day:
+        return False
+    return clock - float(store.get_meta(f"attempt:{target}", "0") or 0) >= cfg.retry_missing_s
+
+
+async def score_step(
+    cfg: ValidatorConfig,
+    store: Store,
+    hl: HyperliquidInfo,
+    client: Any,
+    params: Params = DEFAULT,
+    now: float | None = None,
+    day: str | None = None,
+) -> dict[str, Any]:
+    """Score the oldest pending day if there is one (retrying missing files hourly). Returns the report's scoring
+    part: `scored` (what happened, or None), and `pending_days` while there is a backlog."""
+    clock = now if now is not None else time.time()
+    target, report = scoring_target(cfg, store, now, day)
+    report.setdefault("scored", None)
+    if scoring_due(cfg, store, now, day):
+        store.set_meta(f"attempt:{target}", str(clock))
+        try:
+            result = await collect_and_score(cfg, target, store, hl, client, params, now_ts=clock)
+            report["scored"] = {
+                "day": target,
+                "paid": result.allocation.paid_alpha,
+                "burn": result.allocation.burn_alpha,
+            }
+        except NotPublished as exc:
+            log.info("%s", exc)
+            report["scored"] = {"day": target, "missing": True}
+        except Exception as exc:  # noqa: BLE001 - keep the loop alive, report the failure
+            log.exception("scoring %s failed", target)
+            report["scored"] = {"day": target, "error": str(exc)[:200]}
+    return report
+
+
 async def step(
     cfg: ValidatorConfig,
     store: Store,
@@ -88,40 +149,25 @@ async def step(
     now: float | None = None,
     day: str | None = None,
 ) -> dict[str, Any]:
-    """One pass: score the oldest pending day if there is one (retrying missing files hourly), then submit the
-    latest weights when they are due (`submit_weights`). Returns what happened, for logs and tests."""
+    """One pass in order: score the oldest pending day if there is one (`score_step`), then the chain's part
+    (`chain_step`): the tempo's record, the file re-check and the weights. Returns what happened, for logs and
+    tests. The running validator does the two side by side instead (`run`), so a long scoring pass never holds up
+    the weights."""
+    target, _ = scoring_target(cfg, store, now, day)
     report: dict[str, Any] = {"scored": None, "weights": None}
+    report.update(await score_step(cfg, store, hl, client, params, now, day))
+    report.update(await chain_step(cfg, store, client, wallet, target, now))
+    return report
+
+
+async def chain_step(
+    cfg: ValidatorConfig, store: Store, client: Any, wallet: Any, target: str, now: float | None = None
+) -> dict[str, Any]:
+    """The chain's part of a pass: record the metagraph once a tempo, re-check `target`'s builder file later in the
+    day, and submit the latest weights when they are due (`submit_weights`). Returns the report's `weights` (and
+    `epoch`, `file_recheck` when they happened)."""
+    report: dict[str, Any] = {"weights": None}
     clock = now if now is not None else time.time()
-    pending = pending_days(store, cfg.start_day, previous_utc_day(now))
-    in_order = True
-    if day is not None:
-        target = day
-        if store.day(day) is None and (not pending or day != pending[0]):
-            # a day out of order would score against later rows and replace the states the next day starts from
-            in_order = False
-            oldest = f"the oldest pending day is {pending[0]}" if pending else "no completed day is pending"
-            report["scored"] = {"day": day, "error": f"{day} is out of order: {oldest}"}
-    else:
-        target = pending[0] if pending else previous_utc_day(now)
-        if len(pending) > 1:
-            report["pending_days"] = pending
-    if store.day(target) is None and in_order and target >= cfg.start_day:
-        last_try = float(store.get_meta(f"attempt:{target}", "0") or 0)
-        if clock - last_try >= cfg.retry_missing_s:
-            store.set_meta(f"attempt:{target}", str(clock))
-            try:
-                result = await collect_and_score(cfg, target, store, hl, client, params, now_ts=clock)
-                report["scored"] = {
-                    "day": target,
-                    "paid": result.allocation.paid_alpha,
-                    "burn": result.allocation.burn_alpha,
-                }
-            except NotPublished as exc:
-                log.info("%s", exc)
-                report["scored"] = {"day": target, "missing": True}
-            except Exception as exc:  # noqa: BLE001 - keep the loop alive, report the failure
-                log.exception("scoring %s failed", target)
-                report["scored"] = {"day": target, "error": str(exc)[:200]}
     snap = await snapshot(client, cfg.netuid)
     # every tempo: record the metagraph as the chain paid it (emission per UID), and who is who
     step_now = snap.block // max(1, snap.tempo)
@@ -230,6 +276,40 @@ async def submit_weights(
     return {"day": latest[0], "uids": uids, "ok": ok, "message": message}
 
 
+class BackgroundScoring:
+    """Scoring passes run one at a time beside the validator's loop: each `poll` starts a pass when none is running
+    and hands back a finished one's report, so the loop records the tempo and submits weights every pass however long
+    a scoring pass takes. A pass that raises reports the error; the next poll starts the next pass."""
+
+    def __init__(self, scoring_pass: Callable[[], Coroutine[Any, Any, dict[str, Any]]]) -> None:
+        self._pass = scoring_pass
+        self._task: asyncio.Task[dict[str, Any]] | None = None
+
+    def poll(self) -> dict[str, Any]:
+        done: dict[str, Any] = {}
+        if self._task is not None and self._task.done():
+            task, self._task = self._task, None
+            if task.cancelled():
+                done = {}
+            elif (exc := task.exception()) is not None:
+                log.error("scoring pass failed: %s", exc)
+                done = {"scored": {"error": str(exc)[:200]}}
+            else:
+                done = task.result()
+        if self._task is None:
+            self._task = asyncio.create_task(self._pass())
+        return done
+
+    async def close(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - shutting down
+                pass
+        self._task = None
+
+
 def run_config(cfg: ValidatorConfig) -> dict[str, str]:
     """The settings kept in the run record (`runs.config`), with the database password hidden."""
     out = {k: str(v) for k, v in cfg.__dict__.items() if k != "extra"}
@@ -259,6 +339,15 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
         else bt.Wallet(name=cfg.wallet_name, hotkey=cfg.wallet_hotkey)
     )
     started = False
+
+    async def scoring_pass() -> dict[str, Any]:
+        # on a connection of its own, so the chain's part of each pass goes on beside it
+        if not scoring_due(cfg, store, day=day):
+            return {}
+        async with bt.Subtensor(cfg.network) as scoring_client:
+            return await score_step(cfg, store, hl, scoring_client, params, day=day)
+
+    scorer = BackgroundScoring(scoring_pass)
     try:
         while True:
             try:
@@ -275,11 +364,16 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
                             config=run_config(cfg),
                         )
                         started = True
-                    while True:
+                    if once:
                         report = await step(cfg, store, hl, client, wallet, params, day=day)
                         log.info("step: %s", json.dumps(report, default=str))
-                        if once:
-                            return
+                        return
+                    while True:
+                        report = {"scored": None, "weights": None, **scorer.poll()}
+                        report.update(
+                            await chain_step(cfg, store, client, wallet, scoring_target(cfg, store, day=day)[0])
+                        )
+                        log.info("step: %s", json.dumps(report, default=str))
                         await asyncio.sleep(cfg.poll_s)
             except Exception as exc:
                 # a chain error (a dropped connection, a failed read) ends the pass, not the validator: it is
@@ -290,5 +384,6 @@ async def run(cfg: ValidatorConfig, params: Params = DEFAULT, once: bool = False
                 store.put_error(None, None, None, "loop", str(exc))
                 await asyncio.sleep(cfg.poll_s)
     finally:
+        await scorer.close()
         await hl.close()
         store.close()
