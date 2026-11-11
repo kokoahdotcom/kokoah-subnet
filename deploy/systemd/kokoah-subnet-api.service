@@ -16,7 +16,9 @@ Restart=always
 RestartSec=10
 MemoryMax=1G
 TasksMax=128
-ReadWritePaths=/var/lib/kokoah-subnet
+# the interface only reads: the validator's data folder (its cached builder files, a SQLite record) stays read-only
+# to it, like the rest of the system
+ReadOnlyPaths=/var/lib/kokoah-subnet
 # the interface never needs the validator's hotkey
 InaccessiblePaths=-/var/lib/kokoah-subnet/wallets -/etc/kokoah-subnet/db.env
 StandardOutput=append:/var/log/kokoah-subnet/api.log
