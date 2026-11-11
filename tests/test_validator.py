@@ -520,3 +520,31 @@ def test_portfolio_made_up_and_empty_until() -> None:
     young = recorded[1:]  # no far edge: a young account's first point is a real one
     assert portfolio_empty_until(week([*young, (asked, "20000")]), "perpWeek") is None
     assert not portfolio_made_up([], "perpWeek") and portfolio_empty_until([], "perpWeek") is None
+
+
+def test_a_transfer_links_its_two_sides_and_never_a_third_through_them() -> None:
+    """Owner links (coldkey, sub-account) make clusters; a transfer pairs the two clusters it joins, and an address
+    that sends to two others links neither of them to the other."""
+    from kokoah_subnet.mechanism.exclusions import drop_cluster_matches, linked
+    from kokoah_subnet.mechanism.fills import Fill
+    from kokoah_subnet.validator.clusters import OWNER_LINKS, clusters, transfer_links
+
+    a, a_sub, attacker, rival, maker = "0xa", "0xa1", "0xb", "0xc", "0xd"
+    edges = [
+        (a, a_sub, "subaccount"),
+        (attacker, rival, "transfer"),
+        (attacker, maker, "transfer"),
+        (a_sub, maker, "transfer"),
+    ]
+    cluster_of = clusters([a, attacker, rival], [(x, y) for x, y, kind in edges if kind in OWNER_LINKS])
+    pairs = transfer_links(cluster_of, edges)
+    assert linked(a, a_sub, cluster_of, pairs)  # one owner
+    assert linked(attacker, rival, cluster_of, pairs) and linked(maker, attacker, cluster_of, pairs)  # direct
+    assert linked(a, maker, cluster_of, pairs)  # the owner's sub-account moved money with the maker
+    assert not linked(rival, maker, cluster_of, pairs)  # never through the attacker
+
+    def fill(user: str, counterparty: str) -> Fill:
+        return Fill(1, user, "BTC", "B", 100_000.0, 0.1, True, 2.5, counterparty)
+
+    kept = drop_cluster_matches([fill(rival, maker), fill(rival, attacker), fill(a, maker)], cluster_of, pairs)
+    assert [(f.user, f.counterparty) for f in kept] == [(rival, maker)]

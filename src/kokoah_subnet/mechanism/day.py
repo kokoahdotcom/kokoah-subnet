@@ -69,7 +69,8 @@ class DayInputs:
     fills: Sequence[Fill]  # the day's builder-code fills, total fees matched where possible
     miners: Sequence[MinerInputs]
     states: Mapping[str, MinerState]  # by hotkey; missing hotkeys start fresh
-    cluster_of: Mapping[str, str] = field(default_factory=dict)
+    cluster_of: Mapping[str, str] = field(default_factory=dict)  # address -> its owner's cluster
+    transfer_pairs: frozenset[tuple[str, str]] = frozenset()  # cluster pairs a transfer between them links
     positions: Mapping[str, Mapping[str, Sequence[float]]] = field(default_factory=dict)  # mirror rule inputs
     # address -> its owner's group (hotkeys on one coldkey, a master and its sub-accounts): the position mirror rule
     # compares only addresses in one group
@@ -174,7 +175,7 @@ class _Work:
 def score_day(inputs: DayInputs, params: Params) -> DayResult:
     # exclusions on the day's fills
     perps = [f for f in inputs.fills if is_perp(f.coin)]  # perpetuals only; spot fills count for nothing
-    fills = clip_to_mark(drop_cluster_matches(perps, inputs.cluster_of), params)
+    fills = clip_to_mark(drop_cluster_matches(perps, inputs.cluster_of, inputs.transfer_pairs), params)
     bound = {m.address for m in inputs.miners}
     bound_fills = {a: f for a, f in by_user(fills).items() if a in bound}
     against_bound = bound_counterparty_notional(bound_fills)  # measured before the fills are dropped

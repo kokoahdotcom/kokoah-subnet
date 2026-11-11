@@ -1,6 +1,8 @@
-"""Address clusters (specification section 3): addresses that belong together are scored as one and never trade
-against each other for credit. Edges come from the chain (hotkeys on one coldkey), from Hyperliquid (a master's
-sub-accounts) and from the ledger (transfers between addresses). Union-find turns the edges into cluster ids."""
+"""Address clusters (specification section 3): addresses one owner holds are scored as one and never trade against
+each other for credit. Clusters come only from links the owner alone can create: the chain (hotkeys on one coldkey)
+and Hyperliquid (a master's sub-accounts); union-find turns them into cluster ids. A transfer between two addresses
+(anyone can send one) links only the two clusters that made it, for their trades with each other, and never joins a
+third through them."""
 
 from __future__ import annotations
 
@@ -57,3 +59,16 @@ def penalty_reach(reported: str, edges: Iterable[tuple[str, str, str]]) -> set[s
     of = clusters([reported], owned)
     root = of[reported.lower()]
     return {a for a, c in of.items() if c == root}
+
+
+def transfer_links(cluster_of: Mapping[str, str], edges: Iterable[tuple[str, str, str]]) -> frozenset[tuple[str, str]]:
+    """The pairs of clusters (ids in order) that a transfer between an address of each links. A pair, never a chain:
+    anyone can send a transfer, so an address that sends to two others links itself to each of them, never the two to
+    each other."""
+    pairs: set[tuple[str, str]] = set()
+    for a, b, kind in edges:
+        if kind == "transfer":
+            ca, cb = cluster_of.get(a.lower(), a.lower()), cluster_of.get(b.lower(), b.lower())
+            if ca != cb:
+                pairs.add((min(ca, cb), max(ca, cb)))
+    return frozenset(pairs)

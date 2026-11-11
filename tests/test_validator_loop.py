@@ -1723,6 +1723,22 @@ async def test_one_linked_account_read_failure_does_not_skip_the_others(tmp_path
     await hl.close()
 
 
+async def test_transfers_from_a_rival_cannot_join_a_miner_to_its_counterparty(tmp_path: Path) -> None:
+    """Miner B sends a dollar to miner A and a dollar to the account A trades against. A transfer links only the two
+    sides that made it: B is linked to each, never A to its counterparty through B, so A's trade still counts."""
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    HISTORY[addr_a] = _history_of_file_fills()
+    maker = "0x" + "e2" * 20
+    LEDGER[addr_b] = _sends(addr_b, {addr_a: 1.0, maker: 1.0})
+    HISTORY[maker] = [dict(HISTORY[addr_a][-1], side="B", cloid=None)]  # the other side of A's last trade
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    traded = store.execute_sql(f"select counterparty, excluded from fills where tid = 1003 and address = '{addr_a}'")
+    assert traded == [{"counterparty": maker, "excluded": None}]
+    ra = next(r for r in result.records if r.hotkey == HK_A)
+    assert ra.fees.fills == 24  # every fill of A counts
+    await hl.close()
+
+
 async def test_a_fill_that_needed_a_failed_linked_read_goes_uncounted(tmp_path: Path) -> None:
     """The only linked account on the other side of A's afternoon trade cannot be read: after the deadline, A's
     history fills with no named counterparty go uncounted; the fills the file names stay as they were."""
