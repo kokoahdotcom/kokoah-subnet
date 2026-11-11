@@ -388,6 +388,7 @@ def test_the_release_image_names_the_key_service_and_the_miner_cannot_override_i
     root = Path(__file__).resolve().parents[1]
     image = ImageSettings.load(root / "deploy" / "agent" / "image.json")
     assert image.service == "https://api.kokoah.com/miners" and image.development is False
+    assert image.builder_fee_tenths_bps == 45  # the agents sign and approve Kokoah's 0.045% builder fee
     assert not development_mode(image, {"KOKOAH_AGENT_DEV": "1"})
     dockerfile = (root / "deploy" / "agent" / "Dockerfile").read_text()
     labels = dict(re.findall(r'^LABEL "tee\.launch_policy\.([a-z_]+)"="([^"]*)"$', dockerfile, flags=re.M))
@@ -399,6 +400,7 @@ def test_the_release_image_names_the_key_service_and_the_miner_cannot_override_i
     assert labels["log_redirect"] == "debugonly"
     dev = ImageSettings.load(root / "deploy" / "agent" / "image.dev.json")
     assert dev.development and development_mode(dev, {"KOKOAH_AGENT_DEV": "1"}) and not development_mode(dev, {})
+    assert dev.builder_fee_tenths_bps == 45
 
 
 def test_the_throttle_limits_each_caller_and_everyone_and_refills() -> None:
