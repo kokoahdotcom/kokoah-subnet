@@ -47,7 +47,13 @@ def harness(mainnet: bool, posted: list[dict[str, Any]], open_orders: list[dict[
         return httpx.Response(200, json={"status": "ok", "response": {"type": "default"}})
 
     cfg = HarnessConfig(
-        netuid=385, hotkey="5Hk", master=MASTER.address, code_sha256="eb" * 32, builder=BUILDER, mainnet=mainnet
+        netuid=385,
+        hotkey="5Hk",
+        master=MASTER.address,
+        code_sha256="eb" * 32,
+        builder=BUILDER,
+        mainnet=mainnet,
+        builder_fee_tenths_bps=25,  # the SDK's vectors were made at 0.025%: the signing is what they check
     )
     h = Harness(
         cfg,

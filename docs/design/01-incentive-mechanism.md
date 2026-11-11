@@ -10,7 +10,7 @@ verifies every record from public data, and the agents that hold up for months a
 brings to traders; builder fees and strategy revenue go to the buyback.
 
 Miners are traders and agents. A miner links one Hyperliquid address to a subnet hotkey and trades perpetuals through Kokoah,
-by hand or with an agent, so every scored trade carries Kokoah's builder code and pays Kokoah a small fee (0.025% of
+by hand or with an agent, so every scored trade carries Kokoah's builder code and pays Kokoah a small fee (0.045% of
 the trade). Validators read the public Hyperliquid data of the linked addresses and share the day's miner emission
 among them. Kokoah uses the fees to buy back and burn the subnet's token.
 

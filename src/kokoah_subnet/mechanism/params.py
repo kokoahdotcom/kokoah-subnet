@@ -14,7 +14,9 @@ SPEC_VERSION = "6.5"
 class Params:
     """Every number the mechanism uses. Money is USD, rates are fractions, windows are days."""
 
-    builder_fee_rate: float = 0.00025  # 0.025% of notional per fill
+    # Kokoah's builder fee, 0.045% of notional per fill: the most a fill seen only in an address's own history may
+    # have paid and still be a Kokoah fill (a lower fee counts too). Credit is always the fee each fill actually paid
+    builder_fee_rate: float = 0.00045
     maker_credit: float = 1.0  # maker fills earn their builder fee in full (the fee is charged on both)
     smoothing: float = 0.3  # today's weight in the daily smoothing (70/30)
     # the two pools: the whole miner emission is paid out, nothing is capped or burned

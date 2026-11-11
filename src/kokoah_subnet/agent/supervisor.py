@@ -89,7 +89,7 @@ class ImageSettings:
         raw = json.loads(path.read_text())
         return ImageSettings(
             builder=str(raw["builder"]).lower(),
-            builder_fee_tenths_bps=int(raw.get("builder_fee_tenths_bps", 25)),
+            builder_fee_tenths_bps=int(raw.get("builder_fee_tenths_bps", 45)),
             development=bool(raw.get("development", False)),
             service=str(raw.get("service", "")),
         )

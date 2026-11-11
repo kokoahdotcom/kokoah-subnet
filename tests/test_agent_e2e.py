@@ -173,4 +173,4 @@ def test_a_sandboxed_agent_trades_only_through_the_harness(world: dict[str, Any]
     assert out.returncode == 0, out.stderr
     assert out.stdout.split("\n")[:3] == ["True", "no network", "refused"]
     action = world["exchange"].posted[-1]["action"]
-    assert action["builder"] == {"b": BUILDER, "f": 25} and action["orders"][0]["c"].startswith("0x6b6f0603")
+    assert action["builder"] == {"b": BUILDER, "f": 45} and action["orders"][0]["c"].startswith("0x6b6f0603")

@@ -139,3 +139,16 @@ def test_an_order_id_another_order_also_used_proves_nothing() -> None:
     assert builder_orders([kokoah], BUILDER)[0] == {x}
     assert builder_orders([kokoah, other], BUILDER)[0] == set()
     assert builder_orders([plain, kokoah], BUILDER)[0] == set()
+
+
+def test_history_fills_up_to_the_builder_fee_count() -> None:
+    """A fill seen only in the history is a candidate for confirmation when it paid a builder fee of up to 0.045%
+    (0.025% too); more than that, or no builder fee at all, is not a Kokoah fill. Credit is the fee each fill paid."""
+    from kokoah_subnet.mechanism.fills import Fill, history_candidate
+
+    def fill(fee: float) -> Fill:
+        return Fill(1, "0xa", "BTC", "B", 100_000.0, 0.1, True, fee)  # $10,000 of notional
+
+    assert DEFAULT.builder_fee_rate == 0.00045
+    assert history_candidate(fill(2.5), RATE) and history_candidate(fill(4.5), RATE)  # 0.025% and 0.045%
+    assert not history_candidate(fill(4.6), RATE) and not history_candidate(fill(0.0), RATE)

@@ -101,7 +101,7 @@ class HarnessConfig:
     master: str  # the miner's own address: the only withdrawal destination, and the signer of /withdraw and /stop
     code_sha256: str  # the fingerprint of the agent code this machine runs
     builder: str  # Kokoah's builder address
-    builder_fee_tenths_bps: int = 25  # 0.025%
+    builder_fee_tenths_bps: int = 45  # 0.045%
     mainnet: bool = True
     price_band: float = 0.05  # how far an order may execute from the market (see `order`)
 
