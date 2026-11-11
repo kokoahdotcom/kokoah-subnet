@@ -10,17 +10,20 @@ from .fills import Fill
 from .params import Params
 
 
-def drop_cluster_matches(fills: Iterable[Fill], cluster_of: Mapping[str, str]) -> list[Fill]:
-    """Remove fills whose counterparty is in the same cluster as the user (an unknown address is its own cluster)."""
-    out: list[Fill] = []
-    for f in fills:
-        if f.counterparty:
-            a = cluster_of.get(f.user, f.user)
-            b = cluster_of.get(f.counterparty, f.counterparty)
-            if a == b:
-                continue
-        out.append(f)
-    return out
+def linked(
+    a: str, b: str, cluster_of: Mapping[str, str], transfer_pairs: frozenset[tuple[str, str]] = frozenset()
+) -> bool:
+    """Whether two addresses belong together for credit: the same cluster (one owner), or two clusters a transfer
+    between them links (an unknown address is its own cluster)."""
+    ca, cb = cluster_of.get(a, a), cluster_of.get(b, b)
+    return ca == cb or (min(ca, cb), max(ca, cb)) in transfer_pairs
+
+
+def drop_cluster_matches(
+    fills: Iterable[Fill], cluster_of: Mapping[str, str], transfer_pairs: frozenset[tuple[str, str]] = frozenset()
+) -> list[Fill]:
+    """Remove fills whose counterparty belongs with the user (`linked`)."""
+    return [f for f in fills if not (f.counterparty and linked(f.user, f.counterparty, cluster_of, transfer_pairs))]
 
 
 def clip_to_mark(fills: Iterable[Fill], params: Params) -> list[Fill]:

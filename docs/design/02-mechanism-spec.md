@@ -104,7 +104,9 @@ other traders pay fees too, so earnings exceed the credited fees in normal opera
 Removed before anything is computed:
 
 1. fills whose counterparty is the same address or another address of the same cluster (bound addresses whose
-   hotkeys share a coldkey, sub-accounts of the master, addresses transferring between each other);
+   hotkeys share a coldkey, sub-accounts of the master: links only the owner can create), or of a cluster linked to
+   the trader's by a transfer between the two (anyone can send a transfer, so it links only the two sides that made
+   it, for their trades with each other, and never joins a third through them);
 2. fills priced more than 0.5% from the mark (the close of the exchange's minute candle for the coin): valued at the
    mark (their notional counts at the mark price; their builder fee, the credit, is the fee they paid); and for skill, the money an off-market fill moves into the account (buying below the mark or
    selling above it) is removed from the day's return like a deposit, over all of the address's perpetual fills,

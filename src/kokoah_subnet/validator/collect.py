@@ -39,7 +39,7 @@ from kokoah_subnet.mechanism.eligibility import (
     day_change,
     fresh_identity,
 )
-from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional
+from kokoah_subnet.mechanism.exclusions import bound_counterparty_notional, linked
 from kokoah_subnet.mechanism.fills import (
     BUILDER_CSV_HEADER,
     assign_counterparties,
@@ -51,7 +51,7 @@ from kokoah_subnet.mechanism.fills import (
 from .agents import check_agents, fetch_unlinks
 from .builder_feed import BASE_URL, NotPublished, decompress, download, file_url, sha256
 from .chain import day_sample_blocks, mean_price_tao, price_samples, snapshot, stake_samples
-from .clusters import OWNER_LINKS, clusters, coldkey_edges, penalty_reach
+from .clusters import OWNER_LINKS, clusters, coldkey_edges, penalty_reach, transfer_links
 from .hyperliquid import (
     FILLS_KEPT,
     MAINNET_INFO,
@@ -1043,7 +1043,8 @@ async def collect_and_score(
     bound = set(addresses)
     # a linked read that failed after the deadline: the fills that needed it go uncounted (recorded as such). Without
     # the sub-accounts or transfer partners, no counterparty outside the bound addresses can be told apart from the
-    # address's own cluster; without a linked account's trades, a history fill whose counterparty is still unnamed
+    # address's own cluster or a transfer partner; without a linked account's trades, a history fill whose counterparty
+    # is still unnamed
     # may have traded with that account
     for i, m in enumerate(miners):
         unread = unchecked.get(m.address)
@@ -1083,9 +1084,11 @@ async def collect_and_score(
         store.put_error(day, None, None, "builder rewards", str(exc))
     for lst in edge_lists.values():
         edges.extend(lst)
-    cluster_of = clusters(addresses, [(a, b) for a, b, _ in edges])
+    # clusters from the links only an owner can create; a transfer links just the two clusters that made it
+    cluster_of = clusters(addresses, [(a, b) for a, b, kind in edges if kind in OWNER_LINKS])
+    transfer_pairs = transfer_links(cluster_of, edges)
     store.put_clusters(day, cluster_of, edges)
-    owner_group_of = clusters(addresses, [(a, b) for a, b, kind in edges if kind in OWNER_LINKS])
+    owner_group_of = cluster_of
     all_fills = [f for lst in fills_by_address.values() for f in lst]
     states = store.states_before(day)
     for _, old_hk, new_hk in store.swaps_through(day):
@@ -1098,6 +1101,7 @@ async def collect_and_score(
         miners=miners,
         states=states,
         cluster_of=cluster_of,
+        transfer_pairs=transfer_pairs,
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         owner_group_of=owner_group_of,
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
@@ -1125,7 +1129,7 @@ async def collect_and_score(
             excluded = "spot"
         elif fill_hk is None:
             excluded = "unbound"
-        elif f.counterparty and cluster_of.get(f.user, f.user) == cluster_of.get(f.counterparty, f.counterparty):
+        elif f.counterparty and linked(f.user, f.counterparty, cluster_of, transfer_pairs):
             excluded = "cluster"
         elif f.counterparty in bound and f.counterparty != f.user:
             excluded = "bound_counterparty"

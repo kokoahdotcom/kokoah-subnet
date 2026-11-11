@@ -211,17 +211,17 @@ agent; each account is weighed on its own record. The skill reward also needs th
 active days and a mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody
 qualifies for it, the skill reward joins the volume reward.
 
-**What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own
-cluster (sub-accounts, addresses on the same coldkey, addresses funded by or transferring with each other); fills
-against another linked account, since the subnet does not pay for volume between its own miners (both sides of every
-trade carry the same trade id, so this is exact; such trades report no one, since anyone can take anyone's orders);
-fills priced more than 0.5% from the exchange's minute mark, which are valued at the mark; and fills whose order did
-not carry the Kokoah builder code, which the validator confirms from the account's own signed orders. A coin in which
-an account made more than a quarter of the day's volume was priced by its own trades, so that day's profit is not
-counted for skill, while a loss is. Persistent hedging between accounts of one owner (one coldkey, or a master and its sub-accounts)
-is caught by position: net positions at each day's end correlated below −0.8 on at least 10 days in the last 30.
-Mirrored positions above 25% of an account's are removed from its credit; above 50%, both accounts are reported and
-leave the skill reward for 30 days.
+**What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own cluster
+(sub-accounts, addresses on the same coldkey) or against an address its cluster moved money with (a transfer links only the two
+sides that made it, never a third through them); fills against another linked account, since the subnet does not pay
+for volume between its own miners (both sides of every trade carry the same trade id, so this is exact; such trades
+report no one, since anyone can take anyone's orders); fills priced more than 0.5% from the exchange's minute mark,
+which are valued at the mark; and fills whose order did not carry the Kokoah builder code, which the validator
+confirms from the account's own signed orders. A coin in which an account made more than a quarter of the day's volume
+was priced by its own trades, so that day's profit is not counted for skill, while a loss is. Persistent hedging
+between accounts of one owner (one coldkey, or a master and its sub-accounts) is caught by position: net positions at
+each day's end correlated below −0.8 on at least 10 days in the last 30. Mirrored positions above 25% of an account's
+are removed from its credit; above 50%, both accounts are reported and leave the skill reward for 30 days.
 
 **Parameters.** Builder fee 0.025%; smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 30 to 90
 days since joining; record weight 0.8 at 30 days to 1 at 90; luck floor 0.25; participation full at $1M over 30 days;

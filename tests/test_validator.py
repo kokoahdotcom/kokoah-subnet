@@ -520,3 +520,58 @@ def test_portfolio_made_up_and_empty_until() -> None:
     young = recorded[1:]  # no far edge: a young account's first point is a real one
     assert portfolio_empty_until(week([*young, (asked, "20000")]), "perpWeek") is None
     assert not portfolio_made_up([], "perpWeek") and portfolio_empty_until([], "perpWeek") is None
+
+
+def test_a_transfer_links_its_two_sides_and_never_a_third_through_them() -> None:
+    """Owner links (coldkey, sub-account) make clusters; a transfer pairs the two clusters it joins, and an address
+    that sends to two others links neither of them to the other."""
+    from kokoah_subnet.mechanism.exclusions import drop_cluster_matches, linked
+    from kokoah_subnet.mechanism.fills import Fill
+    from kokoah_subnet.validator.clusters import OWNER_LINKS, clusters, transfer_links
+
+    a, a_sub, attacker, rival, maker = "0xa", "0xa1", "0xb", "0xc", "0xd"
+    edges = [
+        (a, a_sub, "subaccount"),
+        (attacker, rival, "transfer"),
+        (attacker, maker, "transfer"),
+        (a_sub, maker, "transfer"),
+    ]
+    cluster_of = clusters([a, attacker, rival], [(x, y) for x, y, kind in edges if kind in OWNER_LINKS])
+    pairs = transfer_links(cluster_of, edges)
+    assert linked(a, a_sub, cluster_of, pairs)  # one owner
+    assert linked(attacker, rival, cluster_of, pairs) and linked(maker, attacker, cluster_of, pairs)  # direct
+    assert linked(a, maker, cluster_of, pairs)  # a transfer pairs whole clusters: any address of the owner's
+    assert not linked(rival, maker, cluster_of, pairs)  # never through the attacker
+
+    def fill(user: str, counterparty: str) -> Fill:
+        return Fill(1, user, "BTC", "B", 100_000.0, 0.1, True, 2.5, counterparty)
+
+    kept = drop_cluster_matches([fill(rival, maker), fill(rival, attacker), fill(a, maker)], cluster_of, pairs)
+    assert [(f.user, f.counterparty) for f in kept] == [(rival, maker)]
+
+
+async def test_the_items_a_response_returns_are_charged_too() -> None:
+    """The exchange charges one more weight per 20 fills and per 60 candles returned: they count against the budget,
+    so the next request waits for them."""
+    import httpx
+
+    from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        kind = json.loads(request.content)["type"]
+        return httpx.Response(200, json=[{}] * {"userFillsByTime": 2000, "candleSnapshot": 1440}.get(kind, 50))
+
+    hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    async def spent(body: dict[str, Any]) -> int:
+        before = sum(w for _, w in hl._limiter._spent)
+        await hl.post(body)
+        return sum(w for _, w in hl._limiter._spent) - before
+
+    assert await spent({"type": "userFillsByTime"}) == 20 + 100
+    assert await spent({"type": "candleSnapshot"}) == 20 + 24
+    assert await spent({"type": "clearinghouseState"}) == 2  # no items charged
+    assert await spent({"type": "userNonFundingLedgerUpdates"}) == 20 + 2  # 50 records
+    assert await spent({"type": "userDetails"}) == 40  # an explorer request
+    await hl.close()

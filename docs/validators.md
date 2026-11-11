@@ -92,7 +92,7 @@ read it. Without a database URL the validator uses a SQLite file in its data dir
 | `--wallet`, `--wallet-hotkey`, `--wallet-path` | your wallet | The validator's hotkey. |
 | `--start-day` | `YYYY-MM-DD` | The first day this validator scores (section 10); default: the one its record remembers, else yesterday. |
 | `--hl-info-url` | default Hyperliquid's public API | Point it at your own Hyperliquid node or endpoint to avoid public rate limits. |
-| `--hl-budget` | default `1000` | Request weight a minute the validator uses on Hyperliquid (it allows 1,200 per IP address). Lower it when other validators or services share the address, so that each stays inside the limit. |
+| `--hl-budget` | default `1000` | Request weight a minute the validator uses on Hyperliquid (it allows 1,200 per IP address), counted as the exchange counts it, including the extra weight for the fills and candles a response returns. Lower it when other validators or services share the address, so that each stays inside the limit. |
 | `--tao-usd-fallback` | a price | TAO/USD used only if the exchange lists no TAO perpetual. |
 | `--poll-seconds` | default `60` | How often the loop wakes up. |
 | `--watch` | | Score and record every day, never submit weights: to follow the subnet before or without a permit. |
@@ -164,8 +164,9 @@ All times are UTC.
    signature is checked; every unlink seen is kept).
 4. **Scoring.** Eligibility, fee credit, skill, the entry test, agent verification, and the two
    rewards, exactly as the specification states. The day's artifact (every miner's figures) is stored.
-5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day. The SDK follows the
-   subnet's settings, including commit-reveal.
+5. **Weights.** Submitted every tempo (360 blocks, about 72 minutes) from the latest scored day, also while a long
+   scoring pass runs: scoring runs beside the loop, on a connection of its own. The SDK follows the subnet's
+   settings, including commit-reveal.
 
 A failed read of a miner's recorded account values, a fill history, the explorer, a linked account, the minute
 candles, the unlinks or the time of a link's join block fails that day's scoring, and the validator retries within the

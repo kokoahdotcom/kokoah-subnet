@@ -1,7 +1,7 @@
 Unit files for a validator host (systemd). The validator, its interface and its health check run as a dedicated
 user, `kokoah-subnet`, with systemd's sandboxing: no new privileges, a read-only system, no access to other users'
 homes, a private `/tmp`, no devices or kernel settings, and a memory cap. They can write only to
-`/var/lib/kokoah-subnet`. The wallet folder in it is read-only to the validator and hidden from the interface and
+`/var/lib/kokoah-subnet`, and the interface not even there: it only reads. The wallet folder in it is read-only to the validator and hidden from the interface and
 the health check, which never need the hotkey.
 Everything runs from the pinned install in `/opt`, never from a working copy of the repository.
 
