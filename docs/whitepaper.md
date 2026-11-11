@@ -179,7 +179,7 @@ it; the trade that completes both earns credit, the two before it do not. On a d
 earn no credit and the earlier credit fades as it would on a quiet day. There is no permanent exclusion: the first
 day back at $10,000 earns again.
 
-**Fee credit.** A miner's credit for the day is the builder fee paid on its fills, 0.025% of notional on every order,
+**Fee credit.** A miner's credit for the day is the builder fee paid on its fills, 0.045% of notional on every order,
 maker and taker alike. The credit is smoothed: 30% of today's fees count today, 21% tomorrow, 15% the day after, and
 so on. The weights sum to one, so every dollar of fees is counted exactly once.
 
@@ -223,7 +223,7 @@ between accounts of one owner (one coldkey, or a master and its sub-accounts) is
 each day's end correlated below −0.8 on at least 10 days in the last 30. Mirrored positions above 25% of an account's
 are removed from its credit; above 50%, both accounts are reported and leave the skill reward for 30 days.
 
-**Parameters.** Builder fee 0.025%; smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 30 to 90
+**Parameters.** Builder fee 0.045% (credit is the fee each fill paid); smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 30 to 90
 days since joining; record weight 0.8 at 30 days to 1 at 90; luck floor 0.25; participation full at $1M over 30 days;
 agent bonus 10% of the skill weight; gates 10 round trips, 7 days, $500; eligibility $10,000 average account value a
 day and three qualifying trades worth $1,000; mirror thresholds 25% and 50%; migration once per 60 days; emission
@@ -410,7 +410,7 @@ buybacks executed.
 ### Appendix A. The formulas
 
 Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` whose order carried the builder code,
-`n_f` its notional in USD, `b_f` the builder fee it paid (0.025% of notional, maker or taker). `A_d` is the day's miner
+`n_f` its notional in USD, `b_f` the builder fee it paid (0.045% of notional, maker or taker). `A_d` is the day's miner
 emission (41% of 7,200 alpha, 2,952 alpha).
 
 Eligibility, each day: `Ē_i,d = (1/24 h) × ∫ E_i(t) dt` over the day, from the exchange's recorded account values

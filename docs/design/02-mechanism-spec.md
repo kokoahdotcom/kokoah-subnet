@@ -47,7 +47,7 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
 |---|---|---|
 | `i`, `d` | a miner (one bound Hyperliquid address with its sub-accounts, and its hotkey); a scoring day (00:00 UTC) | |
 | `f` | a fill of miner `i` carrying the Kokoah builder code; `n_f` notional (USD), `t_f` 1 if taker (`crossed`), `b_f = n_f × fee` the builder fee (`builderFee`), `fee_f` the fill's total fee field (Hyperliquid's fee plus `b_f`; negative Hyperliquid part means a rebate) | |
-| `fee` | builder fee rate per fill | 0.00025 (0.025%) |
+| `fee` | builder fee rate per fill (credit is the fee each fill paid) | 0.00045 (0.045%) |
 | `c_m` | maker fee credit (taker is 1.0); kept as a parameter, set to 1 since the builder fee is charged on maker fills too | 1.0 |
 | `α` | daily smoothing weight of today's value, for credit, fees and skill | 0.3 |
 | `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
@@ -323,7 +323,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 
 | Parameter | Value |
 |---|---|
-| builder fee | 0.025% per fill |
+| builder fee | 0.045% per fill; credit is the fee each fill paid |
 | maker credit | 1.0 (the builder fee is charged on maker fills) |
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |

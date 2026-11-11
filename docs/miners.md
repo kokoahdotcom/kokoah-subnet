@@ -111,7 +111,7 @@ accepted never pay.
 ## 5. Trade
 
 Trade **perpetuals** on Hyperliquid through Kokoah. Kokoah attaches its builder code to every order, and Hyperliquid
-charges the builder fee of **0.025% of the notional** on every fill, maker or taker. That fee is what the volume
+charges the builder fee of **0.045% of the notional** on every fill, maker or taker. That fee is what the volume
 reward measures.
 
 **What counts:** every perpetual fill of your linked address that carries Kokoah's builder code.
