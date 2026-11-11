@@ -548,3 +548,28 @@ def test_a_transfer_links_its_two_sides_and_never_a_third_through_them() -> None
 
     kept = drop_cluster_matches([fill(rival, maker), fill(rival, attacker), fill(a, maker)], cluster_of, pairs)
     assert [(f.user, f.counterparty) for f in kept] == [(rival, maker)]
+
+
+async def test_the_items_a_response_returns_are_charged_too() -> None:
+    """The exchange charges one more weight per 20 fills and per 60 candles returned: they count against the budget,
+    so the next request waits for them."""
+    import httpx
+
+    from kokoah_subnet.validator.hyperliquid import HyperliquidInfo
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        kind = json.loads(request.content)["type"]
+        return httpx.Response(200, json=[{}] * {"userFillsByTime": 2000, "candleSnapshot": 1440}.get(kind, 50))
+
+    hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    async def spent(body: dict[str, Any]) -> int:
+        before = sum(w for _, w in hl._limiter._spent)
+        await hl.post(body)
+        return sum(w for _, w in hl._limiter._spent) - before
+
+    assert await spent({"type": "userFillsByTime"}) == 20 + 100
+    assert await spent({"type": "candleSnapshot"}) == 20 + 24
+    assert await spent({"type": "clearinghouseState"}) == 2  # no items charged
+    await hl.close()

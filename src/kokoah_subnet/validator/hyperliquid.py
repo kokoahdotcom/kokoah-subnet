@@ -34,6 +34,8 @@ WEIGHTS: dict[str, int] = {
     "candleSnapshot": 20,
     "portfolio": 20,
 }
+# and on top, the exchange charges one more weight per this many items a response returns
+ITEMS_PER_WEIGHT: dict[str, int] = {"userFillsByTime": 20, "userFills": 20, "candleSnapshot": 60}
 
 
 class RateLimiter:
@@ -55,6 +57,12 @@ class RateLimiter:
                     return
                 wait = 60 - (now - self._spent[0][0]) + 0.05 if self._spent else 1.0
             await asyncio.sleep(max(0.05, wait))
+
+    async def charge(self, weight: int) -> None:
+        """Count weight the exchange charged after the fact (for the items a response returned), without waiting:
+        the requests after it wait for it instead."""
+        async with self._lock:
+            self._spent.append((time.monotonic(), min(max(0, weight), self._budget)))
 
 
 class HyperliquidInfo:
@@ -101,7 +109,11 @@ class HyperliquidInfo:
                     r.raise_for_status()
                     if self._gap:
                         await asyncio.sleep(self._gap)
-                    return r.json()
+                    data = r.json()
+                    per = ITEMS_PER_WEIGHT.get(str(body.get("type")))
+                    if per and isinstance(data, list) and len(data) >= per:
+                        await self._limiter.charge(len(data) // per)
+                    return data
                 except (httpx.HTTPError, ValueError) as exc:
                     last = exc
             if attempt + 1 < attempts:
