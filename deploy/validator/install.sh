@@ -14,15 +14,24 @@ cosign=ghcr.io/sigstore/cosign/cosign:v2.6.5@sha256:ad281047f85c5e1fc6ffbc30c2b5
 dir=${KOKOAH_DOCKER_DIR:-/opt/kokoah-subnet/docker}
 systemd=${KOKOAH_SYSTEMD_DIR:-/etc/systemd/system}
 
+older=()
+for arg in "$@"; do
+    case "$arg" in
+        --allow-older) older=(--allow-older) ;;
+        *) echo "usage: install.sh [--allow-older]" >&2; exit 2 ;;
+    esac
+done
+
 [ -f "$dir/.env" ] || { echo "write $dir/.env first (docs/validators.md section 6)" >&2; exit 1; }
 
-# One validator writes the record: refuse while a systemd validator, interface or check runs, is starting, or is
-# enabled (it would start again at the next boot).
+# One validator writes the record: refuse while a systemd validator, interface or check runs or is starting, or is
+# enabled (it would start again at the next boot). A unit left failed and disabled starts no more.
 busy=$({
     systemctl list-units --all --no-legend --plain 'kokoah-subnet-validator@*' kokoah-subnet-api.service \
-        kokoah-subnet-check.service kokoah-subnet-check.timer 2>/dev/null | awk '$3 != "inactive" {print $1}'
+        kokoah-subnet-check.service kokoah-subnet-check.timer 2>/dev/null \
+        | awk '$3 != "inactive" && $3 != "failed" {print $1}' || true
     find "$systemd" -path '*.wants/*' \( -name 'kokoah-subnet-validator@*.service' -o -name kokoah-subnet-api.service \
-        -o -name kokoah-subnet-check.timer \) -printf '%f\n' 2>/dev/null
+        -o -name kokoah-subnet-check.timer \) -printf '%f\n' 2>/dev/null || true
 } | sort -u | tr '\n' ' ')
 if [ -n "${busy// }" ]; then
     echo "stop and disable the systemd services first, so that one validator writes the record:" >&2
@@ -46,9 +55,12 @@ digest=$(docker run --rm "$cosign" verify "$image:latest" \
 [ -n "$digest" ] || { echo "$image:latest carries no signature of the release workflow: not installed" >&2; exit 1; }
 echo "verified $image@$digest" >&2
 
-docker stop kokoah-subnet-updater >/dev/null 2>&1 || true  # an updater of an earlier install: one installs at a time
+# an updater of an earlier install waits meanwhile (one installs at a time), and runs again whatever happens
+if docker stop kokoah-subnet-updater >/dev/null 2>&1; then
+    trap 'rm -rf "$DOCKER_CONFIG"; docker start kokoah-subnet-updater >/dev/null 2>&1 || true' EXIT
+fi
 docker pull --quiet "$image@$digest" >/dev/null
 docker run --rm --user 0:0 --read-only --tmpfs /tmp -e HOME=/tmp -e DOCKER_CONFIG=/tmp/docker \
     -v /var/run/docker.sock:/var/run/docker.sock -v "$dir:$dir" -v /etc/kokoah-subnet:/etc/kokoah-subnet:ro \
-    "$image@$digest" validator update setup --digest "$digest" --project-dir "$dir" "$@"
+    "$image@$digest" validator update setup --digest "$digest" --project-dir "$dir" "${older[@]}"
 echo "installed: sudo docker compose --project-directory $dir ps" >&2
