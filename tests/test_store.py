@@ -15,8 +15,8 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     s.put_equity("0xA", "2026-10-02", 1100.0, 50.0)
     s.put_equity("0xA", "2026-10-04", 1200.0, 0.0)  # 10-03 missing: no return across the gap
     s.put_equity("0xA", "2026-10-05", 1140.0, 0.0)
-    # no recorded points: each day at once, over the day before's value (10-02: 50 moved in, 50 made)
-    assert s.returns("0xa", 60) == pytest.approx([0.05, -0.05])
+    # no recorded points: each day at once, over the capital at work (10-02: 50 moved in, 50 made, over 1,050)
+    assert s.returns("0xa", 60) == pytest.approx([50 / 1050, -0.05])
     assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
 
@@ -54,11 +54,18 @@ def test_a_deposit_day_s_return_is_over_the_capital_at_work(tmp_path: Path) -> N
     }
 
 
-def test_a_day_without_recorded_points_never_loses_more_than_everything(tmp_path: Path) -> None:
+def test_a_past_day_without_recorded_points_is_read_whole_over_the_capital_at_work(tmp_path: Path) -> None:
+    """A day stored before this validator kept the exchange's points (or backfilled when it began): the whole day,
+    over yesterday's value plus what was moved in, next to a day read over its points."""
     s = Store(tmp_path / "v.sqlite")
-    s.put_equity("0xA", "2026-11-12", 3.98, 0.0)
-    s.put_equity("0xA", "2026-11-13", 11_860.98, 11_900.0)
-    assert s.dated_returns("0xA", 5) == {"2026-11-13": -1.0}
+    _record(s, "0xA", "2026-11-14", [(0, 11_860.98, 0.0), (24, 11_979.59, 118.61)])
+    s.put_equity("0xA", "2026-11-12", 3.98, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 11_860.98, 11_900.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-14", 11_979.59, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {
+        "2026-11-13": pytest.approx(-43 / 11_903.98),
+        "2026-11-14": pytest.approx(118.61 / 11_860.98),
+    }
 
 
 def test_a_gain_made_on_a_few_dollars_before_a_deposit_counts_over_the_capital_at_work(tmp_path: Path) -> None:
@@ -105,15 +112,15 @@ def test_a_day_whose_profit_does_not_count_shows_only_its_loss(tmp_path: Path) -
 
 
 def test_a_day_recorded_before_off_market_times_were_kept_is_read_whole(tmp_path: Path) -> None:
-    """A row from an older release with money moved in off-market has no times for it: the whole day, as it was
-    scored then. One without any is read over the recorded points."""
+    """A row from an older release with money moved in off-market has no times for it: the whole day, never above
+    what it was scored at then. One without any is read over the recorded points."""
     s = Store(tmp_path / "v.sqlite")
     _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (12, 2_000.0, 30.0), (24, 2_000.0, 30.0)])
     _record(s, "0xB", "2026-11-13", [(0, 1_000.0, 0.0), (12, 2_000.0, 30.0), (24, 2_000.0, 30.0)])
     for address, held in (("0xA", 20.0), ("0xB", 0.0)):
         s.put_equity(address, "2026-11-12", 1_000.0, 0.0)
         s.put_equity(address, "2026-11-13", 2_000.0, 970.0, offmarket_pnl=held)
-    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx((2_000 - 1_000 - 970 - 20) / 1_000)}
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(10 / 1_990)}  # not the 10 / 1,000 of then
     assert s.dated_returns("0xB", 5) == {"2026-11-13": pytest.approx(min(30 / 1_970, 30 / (1_000 + 970 / 2)))}
 
 

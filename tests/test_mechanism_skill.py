@@ -18,13 +18,15 @@ from kokoah_subnet.mechanism.skill import ew_gain_to_pain, prob_sharpe
 
 
 def test_daily_return_removes_flows() -> None:
-    assert daily_return(1000.0, 1100.0, 50.0) == pytest.approx(0.05)
+    # the whole day at once: 50 moved in and 50 made, over the 1,050 at work; money moved out stays out of the base
+    assert daily_return(1000.0, 1100.0, 50.0) == pytest.approx(50 / 1050)
+    assert daily_return(1000.0, 950.0, -100.0) == pytest.approx(0.05)
     assert daily_return(0.0, 100.0, 0.0) == 0.0
 
 
 def test_a_day_never_loses_more_than_everything() -> None:
-    # the whole-day return of a few dollars that took a deposit and lost a little: −100% at most, never −1,080%
-    assert daily_return(3.98, 3.98 + 11_900.0 - 43.0, 11_900.0) == -1.0
+    # a few dollars that took a deposit and lost a little: about −0.36%, never −1,080%
+    assert daily_return(3.98, 3.98 + 11_900.0 - 43.0, 11_900.0) == pytest.approx(-43 / 11_903.98)
     assert daily_return(100.0, -50.0, 0.0) == -1.0
 
 
@@ -153,6 +155,30 @@ def test_money_moved_in_off_market_comes_off_the_step_it_came_in() -> None:
     t = _twr(values, profits, [(DAY0 + H, 1_000.0)])
     assert t is not None and t.twr == pytest.approx(0.0) and t.profit == pytest.approx(0.0)
     assert t.capital == pytest.approx(100 + 1_000 + 100_000 * 22 / 24)  # each from the start of its step
+
+
+def test_money_moved_in_inside_a_losing_step_never_shrinks_its_loss() -> None:
+    """$10,000 loses $1,500 by 01:55; $90,000 comes in at 01:58, before the 02:00 point, and leaves at 23:00: the loss
+    is over the $10,000 that took it (−15%), not over the $100,000 there at the step's end (−1.5%)."""
+    values = [(DAY0, 10_000.0), (DAY0 + 2 * H, 98_500.0), (DAY0 + 22 * H, 98_500.0), (DAY0 + 24 * H, 8_500.0)]
+    profits = [(DAY0, 0.0), (DAY0 + 2 * H, -1_500.0), (DAY0 + 22 * H, -1_500.0), (DAY0 + 24 * H, -1_500.0)]
+    t = _twr(values, profits)
+    assert t is not None and t.twr == pytest.approx(-0.15)
+    assert t.profit / t.capital == pytest.approx(-0.015)  # the capital at work would dilute it: the lower one counts
+
+
+def test_a_step_never_loses_more_than_everything() -> None:
+    """$100, then $10,000 in and $300 lost before the next point: the step is a total loss, not −300%. An account that
+    held nothing at the step's start lost a share of what came in."""
+    values = [(DAY0, 100.0), (DAY0 + 2 * H, 9_800.0), (DAY0 + 24 * H, 9_800.0)]
+    profits = [(DAY0, 0.0), (DAY0 + 2 * H, -300.0), (DAY0 + 24 * H, -300.0)]
+    t = _twr(values, profits)
+    assert t is not None and t.twr == -1.0
+    empty = _twr(
+        [(DAY0, 0.0), (DAY0 + 2 * H, 9_900.0), (DAY0 + 24 * H, 9_900.0)],
+        [(DAY0, 0.0), (DAY0 + 2 * H, -100.0), (DAY0 + 24 * H, -100.0)],
+    )
+    assert empty is not None and empty.twr == pytest.approx(-0.01)
 
 
 def test_money_moved_out_counts_until_the_end_of_its_step() -> None:

@@ -159,10 +159,13 @@ def day_twr(
     """The day over the exchange's recorded value and profit points, cut at every recorded point inside it. Each
     step's profit is the recorded profit's change less the money moved in through off-market fills during it
     (`moved_in`: time ms, amount; a fill before the first recorded point or after the last one counts in the step
-    next to it), which counts as money moved in instead. Its base is the value at the step's start plus what was moved
-    in during it (`max(V_i − V_{i−1} − Δp_i, 0)`), and the steps' returns are chained: money moved in therefore counts
-    only from the step it arrived in, never for the part of the day before it. A day without money moved has exactly
-    the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its capital is `E_{d−1}`. Values at the
+    next to it), which counts as money moved in instead. A step that made money has as its base the value at its
+    start plus what was moved in during it (`max(V_i − V_{i−1} − Δp_i, 0)`); one that lost has the value at its start
+    alone (money moved in during it counts from the next recorded point, so a loss is never spread over money that
+    came after it; an account that held nothing at the step's start lost what came in). A step never loses more than
+    everything, and the steps' returns are chained: money moved in never counts for the part of the day before it.
+    A day without money moved has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its
+    capital is `E_{d−1}`. Values at the
     day's edges are read on the straight line between recorded points, as `day_change` reads them (an edge before the
     account's history began holds nothing). None when `day_change` cannot say what the day did. A step whose base is
     not positive (nothing held) adds no return."""
@@ -189,9 +192,9 @@ def day_twr(
         v0, v1 = edge(vals, t0), edge(vals, t1)
         dp = edge(pnls, t1) - edge(pnls, t0) - moved
         flow = v1 - v0 - dp
-        base = v0 + max(flow, 0.0)
+        base = v0 + max(flow, 0.0) if dp >= 0 or v0 <= 0 else v0
         if base > 0:
-            growth *= 1 + dp / base
+            growth *= max(0.0, 1 + dp / base)
         profit += dp
         capital += flow * ((end_ms - t0) if flow > 0 else (end_ms - t1)) / span
     return DayReturn(growth - 1, profit, capital)

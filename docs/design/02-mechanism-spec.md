@@ -182,20 +182,24 @@ Daily returns of the bound address, deposits and withdrawals removed, capped at 
 between points, as in §3):
 
 ```
-Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i        B_i = E_{i−1} + max(F_i, 0)
-TWR_d = Π_i (1 + Δp_i / B_i) − 1
+Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i
+B_i  = E_{i−1} + max(F_i, 0) if Δp_i ≥ 0 (or E_{i−1} ≤ 0), else E_{i−1}
+TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1
 C_d   = E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0)
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
 `offmarket_i` is the money moved in through off-market fills (§3, item 2) during the step, by the fills' times;
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
-the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there when it
-was made, so money moved in after it never shrinks it; a gain is at most the day's profit over its time-weighted
-capital `C_d`, so one made on a few dollars before a deposit is not counted as made on all of it (with `C_d ≤ 0`, a
-day that made nothing has no gain). A day without money moved has exactly `(E_d − E_{d−1}) / E_{d−1}`. A day
-without recorded points around it, or with off-market fills whose times are not known, is read whole:
-`r_d = max(−1, (E_d − E_{d−1} − flows_d − offmarket_d) / E_{d−1})`. A day never loses more than everything (−100%).
+the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
+start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
+loss, and a step never loses more than everything. A gain is at most the day's profit over its time-weighted capital
+`C_d`, so one made on a few dollars before a deposit is not counted as made on all of it (with `C_d ≤ 0`, a day that
+made nothing has no gain). A day without money moved has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
+recorded points around it (stored before the validator kept them, or before it began) is read whole,
+`r_d = max(−1, (E_d − E_{d−1} − F_d) / (E_{d−1} + max(F_d, 0)))` with `F_d = flows_d + offmarket_d`; one whose
+off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
+never loses more than everything (−100%).
 A day has a return only when its account value and the previous day's are both known; the windows below count known returns, so a day without one (an account value that could not be read,
 or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 
