@@ -123,7 +123,8 @@ src/kokoah_subnet/
   validator/     the daily loop: data plane, chain reads, weights, record, public interface
   agent/         the sealed-machine harness, sandbox, attestation and agent service
   binding/       how a hotkey binds a Hyperliquid account
-deploy/          harness image (reproducible build), systemd units, reverse-proxy sample
+deploy/          validator image with automatic updates, harness image (reproducible build), systemd units,
+                 reverse-proxy sample
 dashboards/      validator monitoring
 scripts/         local chain, database, backups and CI checks
 docs/            whitepaper, specification and guides
