@@ -162,7 +162,7 @@ def day_twr(
     next to it), which counts as money moved in instead. A step that made money has as its base the value at its
     start plus what was moved in during it (`max(V_i − V_{i−1} − Δp_i, 0)`); one that lost has the value at its start
     alone (money moved in during it counts from the next recorded point, so a loss is never spread over money that
-    came after it; an account that held nothing at the step's start lost what came in). A step never loses more than
+    came after it, however much: one that held nothing at its start lost everything). A step never loses more than
     everything, and the steps' returns are chained: money moved in never counts for the part of the day before it.
     A day without money moved has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its
     capital is `E_{d−1}`. Values at the
@@ -192,8 +192,10 @@ def day_twr(
         v0, v1 = edge(vals, t0), edge(vals, t1)
         dp = edge(pnls, t1) - edge(pnls, t0) - moved
         flow = v1 - v0 - dp
-        base = v0 + max(flow, 0.0) if dp >= 0 or v0 <= 0 else v0
-        if base > 0:
+        base = v0 + max(flow, 0.0) if dp >= 0 else v0
+        if dp < 0 and base <= 0:
+            growth = 0.0  # lost money it did not hold at the step's start
+        elif base > 0:
             growth *= max(0.0, 1 + dp / base)
         profit += dp
         capital += flow * ((end_ms - t0) if flow > 0 else (end_ms - t1)) / span
