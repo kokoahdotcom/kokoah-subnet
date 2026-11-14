@@ -241,7 +241,9 @@ equity = Table(
     Column("day", String(10), primary_key=True),
     Column("value", Float, nullable=False),
     Column("flows", Float, nullable=False),
-    Column("offmarket_pnl", Float),  # money moved in through off-market fills that day (removed from the return)
+    Column("offmarket_pnl", Float),  # profit held back: money moved in through off-market fills that day (removed
+    # from the return), and on a day whose profit does not count (a thin market, a cut history), that profit too
+    Column("offmarket_moves", JSON),  # the off-market fills' [time ms, amount]; NULL: recorded before they were kept
     Column("return_known", Boolean),  # false: the exchange's record did not cover the day, so it has no return
     Column("fetched_at", DateTime(timezone=True)),
     Column("raw", JSON),  # the clearinghouse margin summary

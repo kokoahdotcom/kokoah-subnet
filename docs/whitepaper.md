@@ -428,8 +428,10 @@ pay_i,d   = V_d × Φ̂_i,d / Σ_j Φ̂_j,d  +  S_d × w_i,d / Σ_j w_j,d
 
 Skill, from the daily returns of the days after the join day (the UTC day, by the chain's block time, of the later
 of the block that accepted the link and the hotkey's registration block),
-`r_d = max(−1, (E_d − E_d−1 − F_d) / (E_d−1 + max(F_d, 0)))` with `F_d = flows_d + offmarket_d` (money moved in
-counts as capital from the start of the day), capped to `r̃_d = clip(r_d, −0.10, +0.10)`:
+`r_d = max(−1, min(TWR_d, P_d / C_d))`: the day's time-weighted return over the exchange's recorded points (each
+step's profit over the money there for it, money moved in counting from the step it came in, off-market fills as
+money moved in at their time), and at most the day's profit `P_d` over its time-weighted capital `C_d`; a day the
+points don't cover is read whole, `(E_d − E_d−1 − F_d) / E_d−1`. Capped to `r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
 confidence = clip((PSR_60 − 0.5) / 0.45, 0, 1)      PSR: probabilistic Sharpe ratio, skew- and kurtosis-adjusted,

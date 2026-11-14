@@ -71,7 +71,9 @@ alarm.
 
 ## The skill score, briefly
 
-It asks two things of the daily returns, with deposits removed and each day capped at ±10%: is the edge
+It asks two things of the daily returns, with deposits removed and each day capped at ±10%. A day's return is
+measured over the money that was in the account at each moment, so a deposit never shrinks a loss made before it
+and a gain made on a few dollars is never counted as made on a deposit that came after. Is the edge
 statistically real (probabilistic Sharpe ratio over 60 days), and is the recent month's profit much larger than its
 losses (gain-to-pain over 30 days)? Only a record that holds up passes the test: at least 30 days since joining,
 and a record that keeps holding up to 90 days weighs the most.

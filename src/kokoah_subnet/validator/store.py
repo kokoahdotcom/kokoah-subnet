@@ -7,6 +7,7 @@ else (fills, per-miner figures with their parts, chain samples, commitments, wei
 from __future__ import annotations
 
 import json
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,8 @@ from sqlalchemy import case, create_engine, delete, func, insert, select, text
 from sqlalchemy.engine import Connection, Engine
 
 from kokoah_subnet.binding import AcceptedBinding, Unlink
-from kokoah_subnet.mechanism import MinerState
+from kokoah_subnet.mechanism import DEFAULT, MinerState
+from kokoah_subnet.mechanism.eligibility import DayReturn, day_twr
 from kokoah_subnet.mechanism.skill import daily_return
 
 from . import schema as S
@@ -140,8 +142,11 @@ class Store:
         raw: Any = None,
         offmarket_pnl: float = 0.0,
         known: bool = True,
+        offmarket_moves: Iterable[tuple[int, float]] | None = None,
     ) -> None:
-        """One day's account value and money moved; `known` false records a day without a return."""
+        """One day's account value and money moved; `known` false records a day without a return. `offmarket_pnl` is
+        the profit held back from the return: the money moved in through off-market fills (`offmarket_moves`, each
+        fill's time and amount), and on a day whose profit does not count, that profit too."""
         a = address.lower()
         with self._engine.begin() as c:
             c.execute(delete(S.equity).where(S.equity.c.address == a, S.equity.c.day == day))
@@ -152,6 +157,9 @@ class Store:
                     value=float(value),
                     flows=float(flows),
                     offmarket_pnl=float(offmarket_pnl),
+                    offmarket_moves=(
+                        None if offmarket_moves is None else [[int(t), float(v)] for t, v in sorted(offmarket_moves)]
+                    ),
                     return_known=bool(known),
                     fetched_at=_now(),
                     raw=raw,
@@ -304,25 +312,99 @@ class Store:
         whose values are known; a day without one is skipped and the series reaches further back, over at most the
         last 2 x `days` + 1 stored days, so one missing day never shortens the window."""
         series = self._equity_rows(address, 2 * days + 1, through)
+        pairs = [
+            (d1, e0, e1, f1, o1, m1)
+            for (d0, e0, _, _, k0, _), (d1, e1, f1, o1, k1, m1) in zip(series, series[1:], strict=False)
+            if k0 and k1 and e0 > 0 and _next_day(d0) == d1 and (after is None or d1 > after)
+        ]
+        # a day recorded before the off-market fills' times were kept has them only when it had none
+        moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
+        timed = self._day_twrs(address, moves)
         out: dict[str, float] = {}
-        for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
-            if k0 and k1 and e0 > 0 and _next_day(d0) == d1 and (after is None or d1 > after):
-                out[d1] = daily_return(e0, e1, f1)
+        for d1, e0, e1, f1, o1, _ in pairs:
+            t = timed.get(d1)
+            if t is None:  # no recorded points for the day: the whole day at once, over yesterday's value
+                out[d1] = daily_return(e0, e1, f1 + o1)
+                continue
+            # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
+            # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
+            # capital at work, so one made on a few dollars before a deposit is not counted as made on all of it; on a
+            # day whose profit does not count (`offmarket_pnl` beyond the off-market fills), only a loss counts
+            made = t.profit - (o1 - sum(v for _, v in moves[d1]))
+            r = t.twr
+            if t.capital > 0:
+                r = min(r, made / t.capital)
+            elif made <= 0:
+                r = min(r, 0.0)
+            out[d1] = max(-1.0, r)
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
-    def _equity_rows(self, address: str, days: int, through: str | None = None) -> list[tuple[str, float, float, bool]]:
+    def _day_twrs(self, address: str, days: Mapping[str, Sequence[tuple[int, float]]]) -> dict[str, DayReturn]:
+        """Each day's return over the exchange's recorded value and profit points this validator keeps (`day_twr`),
+        with its off-market fills (`days`: day -> its fills' times and amounts) and the history's start as scored
+        that day (`equity_daily.origin_ms`); days the points don't cover are left out."""
+        if not days:
+            return {}
+        a = address.lower()
+        start = _day_ms(min(days)) - 2 * 86_400_000
+        end = _day_ms(max(days)) + 2 * 86_400_000
+        window = DEFAULT.equity_window
+        values = self.equity_points(a, window, start, end)
+        profits = self.equity_points(a, window + ":pnl", start, end)
+        if not values or not profits:
+            return {}
+        with self._engine.connect() as c:
+            origins = {
+                str(d): (int(o) if o is not None else None)
+                for d, o in c.execute(
+                    select(S.equity_daily.c.day, S.equity_daily.c.origin_ms).where(
+                        S.equity_daily.c.address == a, S.equity_daily.c.day.in_(list(days))
+                    )
+                ).all()
+            }
+        v_times, p_times = [t for t, _ in values], [t for t, _ in profits]
+
+        def near(points: list[tuple[int, float]], times: list[int], lo: int, hi: int) -> list[tuple[int, float]]:
+            # the points of [lo, hi] and one on each side: all a day's edges and steps read
+            return points[max(0, bisect_left(times, lo) - 1) : bisect_right(times, hi) + 1]
+
+        out: dict[str, DayReturn] = {}
+        for d, fills in days.items():
+            d0 = _day_ms(d)
+            d1 = d0 + 86_400_000
+            t = day_twr(near(values, v_times, d0, d1), near(profits, p_times, d0, d1), d0, d1, origins.get(d), fills)
+            if t is not None:
+                out[d] = t
+        return out
+
+    def _equity_rows(
+        self, address: str, days: int, through: str | None = None
+    ) -> list[tuple[str, float, float, float, bool, list[tuple[int, float]] | None]]:
+        """Up to `days` stored days: (day, value, flows, profit held back, whether the day has a return, the
+        off-market fills' times and amounts; None in a row recorded before they were kept)."""
         query = select(
             S.equity.c.day,
             S.equity.c.value,
             S.equity.c.flows,
             S.equity.c.offmarket_pnl,
             S.equity.c.return_known,
+            S.equity.c.offmarket_moves,
         ).where(S.equity.c.address == address.lower())
         if through is not None:
             query = query.where(S.equity.c.day <= through)
         with self._engine.connect() as c:
             rows = c.execute(query.order_by(S.equity.c.day.desc()).limit(days)).all()
-        return [(str(d), float(v), float(f) + float(o or 0.0), k is not False) for d, v, f, o, k in reversed(rows)]
+        return [
+            (
+                str(d),
+                float(v),
+                float(f),
+                float(o or 0.0),
+                k is not False,
+                None if m is None else [(int(t), float(x)) for t, x in m],
+            )
+            for d, v, f, o, k, m in reversed(rows)
+        ]
 
     def equity_value(self, address: str, day: str) -> float | None:
         """The stored account value of one day (None when the day has no row)."""
@@ -1143,6 +1225,11 @@ def _add_earned(c: Connection, day: str, paid: Iterable[tuple[str, float]]) -> N
                 .where(e.c.day == day, e.c.hotkey == hotkey)
                 .values(alpha=float(row[0]) + alpha, epochs=int(row[1]) + 1)
             )
+
+
+def _day_ms(day: str) -> int:
+    """The UTC day's start, in ms."""
+    return int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000)
 
 
 def _next_day(day: str) -> str:
