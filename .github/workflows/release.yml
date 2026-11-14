@@ -1,0 +1,94 @@
+name: release
+# Every change to main that reaches the validator image: the repo's checks, then the image, signed, then the
+# `latest` tag that validators' updaters follow. An updater installs only an image this workflow signed on main
+# (src/kokoah_subnet/validator/update.py), so the Docker Hub login below can publish but cannot reach validators.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "deploy/validator/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+# No token scope by default; each job asks only for what it needs.
+permissions: {}
+# one release at a time, in order
+concurrency:
+  group: release
+  cancel-in-progress: false
+env:
+  IMAGE: docker.io/kokoahdotcom/kokoah-subnet
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      # Actions pinned by commit; the token is not kept in .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.11.19"
+          python-version: "3.12"
+      - run: scripts/check.sh
+  publish:
+    needs: check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # the keyless signature: GitHub certifies that this workflow on main signed the image
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: spec
+        run: echo "version=$(sed -n 's/^SPEC_VERSION = "\([0-9.]*\)"$/\1/p' src/kokoah_subnet/mechanism/params.py)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # pushed under its commit and spec version only: `latest` moves once the signature is there
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/validator/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          build-args: COMMIT=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:spec-${{ steps.spec.outputs.version }}
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v2.6.5
+      - name: sign
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD: ${{ github.run_number }}
+          COMMIT: ${{ github.sha }}
+        run: cosign sign --yes -a "build=$BUILD" -a "commit=$COMMIT" "$IMAGE@$DIGEST"
+      - name: publish as latest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # a copy of the signed manifest itself, never a new index around it (that would have another digest)
+          docker buildx imagetools create --prefer-index=false --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+          test "$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' "$IMAGE:latest")" = "\"$DIGEST\""
+          {
+            echo "## Validator image"
+            echo
+            echo "\`$IMAGE@$DIGEST\` (build ${{ github.run_number }}, spec ${{ steps.spec.outputs.version }})"
+            echo
+            echo "Validators with the updater install it within five minutes."
+          } >> "$GITHUB_STEP_SUMMARY"
