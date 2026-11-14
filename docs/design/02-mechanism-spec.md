@@ -183,9 +183,9 @@ between points, as in §3):
 
 ```
 Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i
-B_i  = E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1}
-TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1             (a step with Δp_i < 0 and B_i ≤ 0 is a total loss)
-C_d   = E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0)
+B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  $10,000)
+TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1
+C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  $10,000)
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
@@ -193,12 +193,13 @@ r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(�
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
 the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
 start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
-loss (a step that held nothing at its start and lost is a total loss: after moving money into an empty account, wait
-for the next recorded point, about two hours, before trading), and a step never loses more than everything. A gain is at most the day's profit over its time-weighted capital
+loss, and a step never loses more than everything. Every base and the day's capital are at least the $10,000
+eligibility floor (§9a), so money kept out of the account at the recorded points never makes a small balance carry
+the day (an account under $10,000 has its returns measured over $10,000). A gain is at most the day's profit over its time-weighted capital
 `C_d`, so one made on a few dollars before a deposit is not counted as made on all of it (with `C_d ≤ 0`, a day that
 made nothing has no gain). A day without money moved has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
-`r_d = max(−1, (E_d − E_{d−1} − F_d) / (E_{d−1} + max(F_d, 0)))` with `F_d = flows_d + offmarket_d`; one whose
+`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), $10,000))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
 never loses more than everything (−100%).
 A day has a return only when its account value and the previous day's are both known; the windows below count known returns, so a day without one (an account value that could not be read,

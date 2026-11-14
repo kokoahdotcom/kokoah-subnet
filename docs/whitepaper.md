@@ -431,8 +431,9 @@ of the block that accepted the link and the hotkey's registration block),
 `r_d = max(−1, min(TWR_d, P_d / C_d))`: the day's time-weighted return over the exchange's recorded points (each
 step's profit over the money there for it: a gain's step counts money moved in during it, a loss's step only what
 was there at its start; off-market fills count as money moved in at their time), and at most the day's profit `P_d`
-over its time-weighted capital `C_d`; a past day the points don't cover is read whole,
-`(E_d − E_d−1 − F_d) / (E_d−1 + max(F_d, 0))`. Capped to `r̃_d = clip(r_d, −0.10, +0.10)`:
+over its time-weighted capital `C_d`, every base and `C_d` at least the $10,000 eligibility floor; a past day the
+points don't cover is read whole, `(E_d − E_d−1 − F_d) / max(E_d−1 + max(F_d, 0), $10,000)`. Capped to
+`r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
 confidence = clip((PSR_60 − 0.5) / 0.45, 0, 1)      PSR: probabilistic Sharpe ratio, skew- and kurtosis-adjusted,
