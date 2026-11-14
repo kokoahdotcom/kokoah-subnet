@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OLD = "sha256:" + "a" * 64
 NEW = "sha256:" + "b" * 64
 OLDER = "sha256:" + "c" * 64
+FIX = "sha256:" + "d" * 64
 REPO = "kokoahdotcom/kokoah-subnet"
 
 
@@ -42,7 +43,7 @@ def _id(digest: str | None) -> str:
 
 class Host:
     """Docker and cosign as the updater sees them: the published tag and its signatures, the local images and tags,
-    the validator's and the updater's containers, and the ways each step can go wrong."""
+    the validator's and the updater's containers, the record, and the ways each step can go wrong."""
 
     def __init__(self, project: Path, latest: str, signed: dict[str, int]) -> None:
         self.project = project
@@ -55,11 +56,15 @@ class Host:
         self.validator: str | None = None  # the release the validator's container runs
         self.updater: str | None = None  # and the updater's
         self.restarts = 0
-        self.not_ready: set[str] = set()  # releases whose validator never becomes healthy
-        self.crashing: set[str] = set()  # releases whose validator restarts after it started
+        self.unhealthy: set[str] = set()  # releases whose validator turns unhealthy
+        self.slow: set[str] = set()  # releases whose validator never gets ready
+        self.crashing: set[str] = set()  # releases whose validator keeps restarting
+        self.not_created: set[str] = set()  # releases whose validator container cannot be created
         self.bad_compose: set[str] = set()  # releases whose compose file does not work on this host
         self.floor: dict[str, int] = {}  # a release's ROLLBACK_FLOOR
         self.schema: dict[str, int] = {}  # a release's schema version
+        self.unreadable: set[str] = set()  # releases whose numbers cannot be read
+        self.record: int | None = 15  # the record's schema version (None: cannot be read)
         self.fail_others = 0  # how many times starting the other services fails
         self.fail_tag = 0  # how many times `docker tag` fails
         self.fail_inspect = 0  # how many validator state reads fail
@@ -86,6 +91,15 @@ class Host:
             return ref.rsplit("@", 1)[1]
         raise u.UpdateError(f"Error response from daemon: No such image: {ref}")
 
+    def _state(self) -> str:
+        if self.fail_inspect:
+            self.fail_inspect -= 1
+            raise u.UpdateError("Error response from daemon: i/o timeout")
+        if self.validator in self.crashing:
+            self.restarts += 1
+        health = "unhealthy" if self.validator in self.unhealthy else "starting" if self.validator in self.slow else ""
+        return f"true {self.restarts} {health or 'healthy'}\n"
+
     def run(self, args: list[str], timeout: float) -> str:
         self.calls.append(args)
         if args[0] == "docker" and self.docker_down:
@@ -103,18 +117,14 @@ class Host:
         if args[:3] == ["docker", "image", "inspect"]:
             digest = self._resolve(args[3])
             return json.dumps([f"{REPO}@{digest}"]) if "RepoDigests" in args[5] else _id(digest) + "\n"
-        if args[:3] == ["docker", "inspect", "--format"] and args[3] == "{{.Image}}":
-            running = {u.VALIDATOR: self.validator, u.UPDATER: self.updater}[args[4]]
+        if args[:4] == ["docker", "inspect", "--type", "container"]:
+            assert args[4] == "--format"
+            if args[5] == u.VALIDATOR_STATE:
+                return self._state()
+            running = {u.VALIDATOR: self.validator, u.UPDATER: self.updater}[args[6]]
             if running is None:
-                raise u.UpdateError(f"Error: No such object: {args[4]}")
+                raise u.UpdateError(f"Error response from daemon: No such container: {args[6]}")
             return _id(running) + "\n"
-        if args[:3] == ["docker", "inspect", "--format"]:
-            if self.fail_inspect:
-                self.fail_inspect -= 1
-                raise u.UpdateError("Error response from daemon: i/o timeout")
-            if self.validator in self.crashing:
-                self.restarts += 1
-            return f"true {self.restarts} healthy\n"
         if args[:2] == ["docker", "pull"]:
             self.pulled.add(args[3].rsplit("@", 1)[1])
             return ""
@@ -128,6 +138,8 @@ class Host:
             digest = self._resolve(args[7])
             if args[6] == "cat":
                 return f"# compose file of {digest}\n"
+            if digest in self.unreadable:
+                raise u.UpdateError("Error response from daemon: context deadline exceeded")
             return f"{self.floor.get(digest, 0) if 'ROLLBACK_FLOOR' in args[9] else self.schema.get(digest, 15)}\n"
         if args[:3] == ["docker", "image", "ls"]:
             rows = [{"Repository": REPO, "Digest": d, "ID": _id(d)} for d in sorted(self.pulled)] + self.others
@@ -136,21 +148,29 @@ class Host:
             self.pulled.discard(args[3].rsplit("@", 1)[1])
             return ""
         if args[:2] == ["docker", "compose"]:
-            file, rest = args[5], args[6:]
-            if rest[:2] == ["config", "--quiet"]:
-                if any(d in Path(file).read_text() for d in self.bad_compose):
-                    raise u.UpdateError("env file /etc/kokoah-subnet/new.env not found")
-            elif rest[:2] == ["config", "--services"]:
-                return self.services
-            elif "--wait" in rest:
-                self.validator = self.tags[u.CURRENT]
-                if self.validator in self.not_ready:
-                    raise u.UpdateError(f"container {u.VALIDATOR} is unhealthy")
-            elif "--remove-orphans" in rest and self.fail_others:
-                self.fail_others -= 1
-                raise u.UpdateError("Error response from daemon: conflict")
-            elif rest == ["up", "-d", "--no-deps", "updater"]:
-                self.updater = self.tags[u.CURRENT]
+            return self._compose(Path(args[5]), args[6:])
+        return ""
+
+    def _compose(self, file: Path, rest: list[str]) -> str:
+        if rest[:2] == ["config", "--quiet"]:
+            if any(d in file.read_text() for d in self.bad_compose):
+                raise u.UpdateError("env file /etc/kokoah-subnet/new.env not found")
+        elif rest[:2] == ["config", "--services"]:
+            return self.services
+        elif rest == ["up", "-d", "--no-deps", "validator"]:
+            if self.tags[u.CURRENT] in self.not_created:
+                raise u.UpdateError("Error response from daemon: invalid mount config")
+            if self.validator != self.tags[u.CURRENT]:
+                self.validator, self.restarts = self.tags[u.CURRENT], 0  # recreated
+        elif rest[:1] == ["run"] and "-c" in rest:
+            if self.record is None:
+                raise u.UpdateError("could not connect to server")
+            return f"{self.record}\n"
+        elif "--remove-orphans" in rest and self.fail_others:
+            self.fail_others -= 1
+            raise u.UpdateError("Error response from daemon: conflict")
+        elif rest == ["up", "-d", "--no-deps", "updater"]:
+            self.updater = self.tags[u.CURRENT]
         return ""
 
     def commands(self) -> list[str]:
@@ -175,6 +195,7 @@ class Clock:
 
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
+        self.now += seconds
 
     def __call__(self) -> float:
         return self.now
@@ -190,25 +211,36 @@ def _setup(tmp_path: Path, latest: str, signed: dict[str, int]) -> tuple[Host, u
     return host, updater, said, clock
 
 
+def _fresh(tmp_path: Path, host: Host, clock: Clock) -> u.Updater:
+    """Another updater process on the same host (after a restart): nothing kept in memory."""
+    return u.Updater(
+        tmp_path, run=host.run, head=host.head, say=lambda s: None, sleep=clock.sleep, clock=clock, wall=clock
+    )
+
+
 def _state(tmp_path: Path) -> dict[str, object]:
     data = json.loads((tmp_path / u.STATE_FILE).read_text())
     assert isinstance(data, dict)
     return data
 
 
-RECONCILE = [
-    f"docker image inspect {u.CURRENT} --format {{{{json .RepoDigests}}}}",
-    f"docker image inspect {u.CURRENT} --format {{{{.Id}}}}",
-    f"docker inspect --format {{{{.Image}}}} {u.VALIDATOR}",
-    f"docker inspect --format {{{{.Image}}}} {u.UPDATER}",
-]
+def _held(tmp_path: Path) -> dict[str, dict[str, object]]:
+    data = json.loads((tmp_path / u.REFUSED_FILE).read_text())
+    assert isinstance(data, dict)
+    return data
+
+
+START = "docker compose up -d --no-deps validator"
 
 
 def test_nothing_happens_while_the_host_runs_the_release_the_tag_names(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=OLD, signed={OLD: 4})
     host.installed(OLD, 4)
     assert updater.check() == "up to date"
-    assert host.commands() == RECONCILE
+    assert host.count("cosign") == 0 and host.count("docker pull") == 0 and host.count(START) == 0
+    first = host.count("docker compose up")  # a new updater makes sure the other services run, once
+    assert updater.check() == "up to date"
+    assert host.count("docker compose up") == first == 1
 
 
 def test_a_new_signed_release_is_checked_installed_and_kept_only_if_its_validator_runs(tmp_path: Path) -> None:
@@ -217,19 +249,27 @@ def test_a_new_signed_release_is_checked_installed_and_kept_only_if_its_validato
     host.pulled.add(OLDER)  # a release before that, still on disk
     host.others.append({"Repository": f"{REPO}-agent", "Digest": OLDER, "ID": "sha256:other"})
     assert updater.check() == f"installed build 5 (commit {f'{5:040d}'[:12]}, {NEW[:19]})"
-    ref = f"{u.IMAGE}@{NEW}"
+    ref, old = f"{u.IMAGE}@{NEW}", f"{u.IMAGE}@{OLD}"
     steps = host.commands()
-    assert steps[: len(RECONCILE)] == RECONCILE
-    assert steps[len(RECONCILE) :] == [
+    state = f"docker inspect --type container --format {u.VALIDATOR_STATE} {u.VALIDATOR}"
+    assert steps[
+        steps.index(
+            f"cosign verify {ref} --certificate-identity {u.WORKFLOW_IDENTITY} "
+            f"--certificate-oidc-issuer {u.OIDC_ISSUER}"
+        ) :
+    ] == [  # fmt: skip
         f"cosign verify {ref} --certificate-identity {u.WORKFLOW_IDENTITY} --certificate-oidc-issuer {u.OIDC_ISSUER}",
         f"docker pull --quiet {ref}",
         f"docker run --rm --network none --entrypoint cat {ref} {u.IMAGE_COMPOSE}",
         f"docker compose -f {u.NEW_COMPOSE} config --quiet",
-        f"docker image inspect {u.IMAGE}@{OLD} --format {{{{.Id}}}}",
-        f"docker tag {u.IMAGE}@{OLD} {u.PREVIOUS}",
+        f"docker run --rm --network none --entrypoint python {ref} -c {u.ROLLBACK_FLOOR_CODE}",
+        f"docker run --rm --network none --entrypoint python {old} -c {u.SCHEMA_CODE}",
+        f"docker image inspect {old} --format {{{{.Id}}}}",
+        f"docker tag {old} {u.PREVIOUS}",
         f"docker tag {ref} {u.CURRENT}",
-        f"docker compose up -d --no-deps --wait --wait-timeout {u.VALIDATOR_WAIT_S} validator",
-        *[f"docker inspect --format {u.VALIDATOR_STATE} {u.VALIDATOR}"] * 2,
+        START,
+        state,
+        state,
         "docker compose config --services",
         "docker compose up -d --no-deps --remove-orphans interface check",
         f"docker image inspect {u.CURRENT} --format {{{{.Id}}}}",
@@ -237,9 +277,9 @@ def test_a_new_signed_release_is_checked_installed_and_kept_only_if_its_validato
         "docker image ls --digests --no-trunc --format {{json .}}",
         f"docker image rm {REPO}@{OLDER}",  # this repository's only; the agent image stays
         f"docker rm -f {u.HOP}",
-        f"docker compose run -d --rm --no-deps --name {u.HOP} updater validator update hop --project-dir {tmp_path}",
+        f"docker compose run -d --no-deps --name {u.HOP} updater validator update hop --project-dir {tmp_path}",
     ]
-    assert clock.slept == [u.STEADY_S]
+    assert u.STEADY_S in clock.slept
     assert (tmp_path / "compose.yml").read_text() == f"# compose file of {NEW}\n"
     assert not (tmp_path / u.NEW_COMPOSE).exists()
     assert _state(tmp_path) == {"digest": NEW, "build": 5, "commit": f"{5:040d}"}
@@ -249,39 +289,103 @@ def test_a_new_signed_release_is_checked_installed_and_kept_only_if_its_validato
     assert host.updater == NEW and updater.check() == "up to date"
 
 
-def test_a_validator_that_never_gets_ready_is_rolled_back_and_its_release_refused(tmp_path: Path) -> None:
+def test_a_validator_that_turns_unhealthy_is_rolled_back_and_its_release_held_longer_each_time(tmp_path: Path) -> None:
     host, updater, said, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
-    host.not_ready.add(NEW)
-    reason = f"not ready: docker compose up: container {u.VALIDATOR} is unhealthy"
-    assert updater.check() == f"went back to build 4: build 5 {reason}"
+    host.unhealthy.add(NEW)
+    assert updater.check() == "went back to build 4: build 5 unhealthy before it was ready"
     assert host.tags[u.CURRENT] == OLD and host.validator == OLD
     assert (tmp_path / "compose.yml").read_text() == f"# compose file of {OLD}\n"  # from the old release's image
     assert _state(tmp_path)["digest"] == OLD
-    assert json.loads((tmp_path / u.REFUSED_FILE).read_text())[NEW]["why"] == reason
-    assert host.count("docker compose run") == 0  # the updater it is stays
+    assert _held(tmp_path)[NEW]["tries"] == 1
+    assert host.count("docker compose run -d") == 0  # the updater it is stays
     assert any("going back" in s for s in said)
-    # not tried again, not even checked again, for six hours; then once more
+    # held back six hours, without even a signature check; then tried again and held twice as long
     host.calls.clear()
-    assert updater.check().startswith(f"refused {NEW[:19]}: this host went back from it")
+    assert updater.check().startswith(f"held back {NEW[:19]}: this host went back from it")
     assert host.count("cosign") == 0
     clock.now += u.REFUSED_RETRY_S
-    host.not_ready.clear()
+    assert updater.check().startswith("went back to build 4")
+    assert _held(tmp_path)[NEW]["tries"] == 2
+    clock.now += u.REFUSED_RETRY_S
+    assert updater.check().startswith("held back")
+    clock.now += u.REFUSED_RETRY_S
+    host.unhealthy.clear()
     assert updater.check().startswith("installed build 5")
 
 
-def test_a_validator_that_restarts_after_it_started_is_rolled_back(tmp_path: Path) -> None:
+def test_a_validator_that_keeps_restarting_is_caught_at_once_not_after_hours(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.crashing.add(NEW)
+    host.slow.add(NEW)  # its health check never passes: Docker starts it again and again
+    start = clock.now
+    assert updater.check() == "went back to build 4: build 5 restarted before it was ready"
+    assert clock.now - start < 600
+    assert host.tags[u.CURRENT] == OLD and _state(tmp_path)["digest"] == OLD
+
+
+def test_a_validator_that_restarts_after_it_was_ready_is_rolled_back(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
     host.crashing.add(NEW)
     assert updater.check() == "went back to build 4: build 5 stopped or restarted after it started"
-    assert host.tags[u.CURRENT] == OLD and _state(tmp_path)["digest"] == OLD
+
+
+def test_a_validator_never_ready_is_given_the_whole_migration_time(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.slow.add(NEW)
+    start = clock.now
+    assert updater.check() == "went back to build 4: build 5 not ready in 2 hours"
+    assert clock.now - start >= u.VALIDATOR_WAIT_S
+
+
+def test_a_validator_that_cannot_even_be_created_is_rolled_back(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.not_created.add(NEW)
+    assert updater.check() == "went back to build 4: build 5 not started: docker compose up: invalid mount config"
+
+
+def test_a_release_past_the_rollback_floor_goes_back_only_while_the_record_is_below_it(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.not_created.add(NEW)
+    host.floor[NEW], host.schema[OLD] = 16, 15
+    host.record = 15  # it failed before it migrated anything
+    assert updater.check().startswith("went back to build 4")
+
+
+@pytest.mark.parametrize("record", [16, None])
+def test_a_release_past_the_rollback_floor_stays_once_the_record_went_through(
+    tmp_path: Path, record: int | None
+) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.unhealthy.add(NEW)
+    host.floor[NEW], host.schema[OLD] = 16, 15
+    host.record = record  # migrated, or cannot be read: the old code is not put on it
+    assert "stays although its validator does not run" in updater.check()
+    assert host.tags[u.CURRENT] == NEW and _state(tmp_path)["digest"] == NEW
+    updater.hop()
+    assert updater.check() == "up to date"  # no look puts the old one back
+
+
+def test_a_floor_that_cannot_be_read_changes_nothing(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.unreadable.add(NEW)
+    with pytest.raises(u.UpdateError, match="not checked here, nothing changed"):
+        updater.check()
+    assert host.tags == {u.CURRENT: OLD} and host.count(START) == 0
+    assert updater.check().startswith("held back")
 
 
 def test_a_rollback_that_stops_halfway_is_finished_by_the_next_look(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
-    host.not_ready.add(NEW)
+    host.unhealthy.add(NEW)
     original = host.run
 
     def tag_fails_on_the_way_back(args: list[str], timeout: float) -> str:
@@ -293,7 +397,6 @@ def test_a_rollback_that_stops_halfway_is_finished_by_the_next_look(tmp_path: Pa
     with pytest.raises(u.UpdateError, match="disk full"):
         updater.check()
     assert host.tags[u.CURRENT] == NEW and not (tmp_path / u.REFUSED_FILE).exists()
-    # the next look sees current away from the installed release and puts it back before anything else
     updater.run = original
     assert updater.check() == "put back build 4"
     assert host.tags[u.CURRENT] == OLD and host.validator == OLD
@@ -304,27 +407,74 @@ def test_a_validator_left_on_another_image_is_put_back(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=OLD, signed={OLD: 4})
     host.installed(OLD, 4)
     host.pulled.add(NEW)
-    host.validator = NEW  # stopped after the tag went back, before the container did
+    host.validator = NEW
     assert updater.check() == "put back build 4"
     assert host.validator == OLD
 
 
-def test_an_updater_that_did_not_restart_is_restarted(tmp_path: Path) -> None:
-    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={NEW: 5})
+def test_a_repair_that_does_not_hold_never_keeps_a_fixed_release_out(tmp_path: Path) -> None:
+    host, updater, said, _ = _setup(tmp_path, latest=FIX, signed={OLD: 4, NEW: 5, FIX: 6})
+    host.installed(OLD, 4)
+    host.pulled.add(NEW)
+    host.tags[u.CURRENT] = NEW  # the host drifted, and build 4 no longer runs here
+    host.unhealthy.add(OLD)
+    assert updater.check().startswith("installed build 6")
+    assert any("put back build 4, but its validator does not run" in s for s in said)
+
+
+def test_an_updater_that_does_not_restart_is_retried_hourly_and_holds_nothing_up(tmp_path: Path) -> None:
+    host, updater, said, clock = _setup(tmp_path, latest=NEW, signed={NEW: 5})
     host.installed(NEW, 5)
     host.pulled.add(OLD)
-    host.updater = OLD  # its helper container failed
-    assert updater.check() == "restarting the updater with build 5"
-    assert host.count("docker compose run -d --rm --no-deps --name") == 1
+    host.updater = OLD  # its helper container never replaced it
+    assert updater.check() == "up to date"
+    assert "restarting the updater with build 5" in said
+    assert updater.check() == "up to date"
+    assert host.count("docker compose run -d") == 1
+    clock.now += u.RETRY_S
+    updater.check()
+    assert host.count("docker compose run -d") == 2
+
+
+def test_other_services_that_do_not_start_never_cost_the_validator_a_restart(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.fail_others = 5
+    updater._others_pending = False
+    assert updater.check().startswith("installed build 5")
+    assert _state(tmp_path)["digest"] == NEW
+    for _ in range(5):
+        updater.check()
+    assert host.count(START) == 1  # the new validator runs on; only the others are tried again
+    assert host.fail_others == 0 and not updater._others_pending
 
 
 def test_docker_silent_during_the_steady_minutes_refuses_nothing(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
-    host.fail_inspect = 3
+    host.fail_inspect = 4  # the base read passes, then three fail in a row
+    original = host.run
+    seen = {"start": False}
+
+    def silent_after_the_start(args: list[str], timeout: float) -> str:
+        if (
+            seen["start"] is False
+            and args[:4] == ["docker", "inspect", "--type", "container"]
+            and u.VALIDATOR_STATE in args
+        ):
+            seen["start"] = True
+            host.fail_inspect = 0
+            out = original(args, timeout)
+            host.fail_inspect = 3
+            return out
+        return original(args, timeout)
+
+    host.fail_inspect = 0
+    updater.run = silent_after_the_start
     with pytest.raises(u.UpdateError, match="i/o timeout"):
         updater.check()
     assert not (tmp_path / u.REFUSED_FILE).exists()
+    updater.run = original
     assert updater.check() == "put back build 4"  # back to the recorded release ...
     assert updater.check().startswith("installed build 5")  # ... and the new one again
 
@@ -335,7 +485,7 @@ def test_docker_down_while_starting_is_an_error_not_a_verdict(tmp_path: Path) ->
     original = host.run
 
     def down_at_the_start(args: list[str], timeout: float) -> str:
-        if "--wait" in args:
+        if args[6:] == ["up", "-d", "--no-deps", "validator"]:
             host.docker_down = True
         return original(args, timeout)
 
@@ -348,25 +498,12 @@ def test_docker_down_while_starting_is_an_error_not_a_verdict(tmp_path: Path) ->
 def test_when_neither_release_runs_the_host_is_the_problem_and_nothing_is_refused(tmp_path: Path) -> None:
     host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
-    host.not_ready.update({NEW, OLD})  # the record's database is down, say
+    host.unhealthy.update({NEW, OLD})  # the record's database is down, say
     assert "neither release runs" in updater.check()
-    assert not (tmp_path / u.REFUSED_FILE).exists() and host.tags[u.CURRENT] == OLD
-    host.not_ready.clear()
+    assert _held(tmp_path)[NEW]["tries"] == 0 and host.tags[u.CURRENT] == OLD
+    host.unhealthy.clear()
     clock.now += u.RETRY_S
     assert updater.check().startswith("installed build 5")
-
-
-def test_no_rollback_onto_a_record_the_old_code_cannot_read(tmp_path: Path) -> None:
-    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
-    host.installed(OLD, 4)
-    host.not_ready.add(NEW)
-    host.floor[NEW], host.schema[OLD] = 16, 15  # the new release changed the record in a way the old cannot follow
-    assert "stays although its validator does not run" in updater.check()
-    assert host.tags[u.CURRENT] == NEW and _state(tmp_path)["digest"] == NEW
-    # no look puts the old one back; the updater follows the release that stays
-    assert updater.check() == "restarting the updater with build 5"
-    updater.hop()
-    assert updater.check() == "up to date" and host.tags[u.CURRENT] == NEW
 
 
 def test_a_compose_file_that_does_not_work_here_changes_nothing(tmp_path: Path) -> None:
@@ -377,10 +514,10 @@ def test_a_compose_file_that_does_not_work_here_changes_nothing(tmp_path: Path) 
         updater.check()
     assert host.tags == {u.CURRENT: OLD} and host.validator == OLD
     assert (tmp_path / "compose.yml").read_text() == f"# compose file of {OLD}\n"
-    assert host.count("docker tag") == 0 and host.count("docker compose up") == 0
-    # looked at again only after an hour (a fixed host or a new release)
+    assert host.count("docker tag") == 0 and host.count(START) == 0
+    # held back an hour, even from an updater that restarted meanwhile
     host.calls.clear()
-    assert updater.check().startswith("not installed: its compose file does not work here")
+    assert _fresh(tmp_path, host, clock).check().startswith(f"held back {NEW[:19]}: it could not be checked here")
     assert host.count("cosign") == 0
     clock.now += u.RETRY_S
     host.bad_compose.clear()
@@ -390,13 +527,33 @@ def test_a_compose_file_that_does_not_work_here_changes_nothing(tmp_path: Path) 
 def test_an_install_stopped_halfway_goes_back_then_installs_again_with_the_good_previous(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
-    host.fail_others = 1
-    with pytest.raises(u.UpdateError, match="conflict"):
+    host.fail_tag = 0
+    original = host.run
+
+    def stopped_after_the_switch(args: list[str], timeout: float) -> str:
+        if args[6:] == ["up", "-d", "--no-deps", "validator"] and host.tags[u.CURRENT] == NEW:
+            raise u.UpdateError("Cannot connect to the Docker daemon")
+        return original(args, timeout)
+
+    updater.run = stopped_after_the_switch
+    with pytest.raises(u.UpdateError):
         updater.check()
     assert host.tags[u.CURRENT] == NEW and _state(tmp_path)["digest"] == OLD  # not recorded as installed
+    updater.run = original
     assert updater.check() == "put back build 4"
     assert updater.check().startswith("installed build 5")
     assert host.tags == {u.CURRENT: NEW, u.PREVIOUS: OLD} and _state(tmp_path)["digest"] == NEW
+
+
+def test_unreadable_or_far_future_holds_hold_nothing(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    (tmp_path / u.REFUSED_FILE).write_text(json.dumps({NEW: {"why": "x", "until": None, "tries": "?"}}))
+    assert updater.check().startswith("installed build 5")
+    host.installed(OLD, 4)
+    far = clock.now + 10 * u.REFUSED_MAX_S  # the clock was set back since
+    (tmp_path / u.REFUSED_FILE).write_text(json.dumps({NEW: {"why": "x", "until": far, "tries": 1}}))
+    assert _fresh(tmp_path, host, clock).check().startswith("installed build 5")
 
 
 def test_an_unsigned_image_on_the_tag_is_never_pulled_and_not_checked_every_look(tmp_path: Path) -> None:
@@ -458,8 +615,13 @@ def test_without_the_interface_profile_only_the_check_follows_the_validator(tmp_
 def test_one_update_at_a_time(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=OLD, signed={OLD: 4})
     host.installed(OLD, 4)
-    with updater._locked(), pytest.raises(u.UpdateError, match="another update is running"):
-        u.Updater(tmp_path, run=host.run, head=host.head).check()
+    with updater._locked():
+        with pytest.raises(u.UpdateError, match="another update is running"):
+            u.Updater(tmp_path, run=host.run, head=host.head).check()
+        host.updater = None
+        with pytest.raises(u.UpdateError, match="another update is running"):
+            u.Updater(tmp_path, run=host.run, head=host.head).setup(OLD)
+        assert host.updater == OLD  # the setup still starts the updater
     assert updater.check() == "up to date"
 
 
@@ -470,30 +632,50 @@ def test_the_first_start_verifies_its_own_image_and_starts_the_updater(tmp_path:
     assert steps[0].startswith(f"cosign verify {u.IMAGE}@{NEW} ")
     assert not any(s.startswith("docker tag") and u.PREVIOUS in s for s in steps)  # nothing to keep as previous
     assert steps[-1] == "docker compose up -d --no-deps updater"
-    assert host.count("docker compose run") == 0
+    assert host.count("docker compose run -d") == 0
     assert host.tags == {u.CURRENT: NEW} and host.updater == NEW and _state(tmp_path)["build"] == 5
 
 
-def test_a_first_start_whose_validator_does_not_run_fails_and_still_starts_the_updater(tmp_path: Path) -> None:
-    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={NEW: 5})
-    host.not_ready.add(NEW)
+def test_a_first_start_whose_validator_does_not_run_fails_and_its_release_waits(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={NEW: 5})
+    host.unhealthy.add(NEW)
     with pytest.raises(u.UpdateError, match="no release to go back to"):
         updater.setup(NEW)
     assert not (tmp_path / u.STATE_FILE).exists() and host.updater == NEW
-    # the updater does not try the same release every look
+    # the updater it started does not try the same release at once
     host.calls.clear()
-    assert updater.check().startswith("not installed: its validator does not run")
-    assert host.count("docker compose up") == 0
+    assert _fresh(tmp_path, host, clock).check().startswith(f"held back {NEW[:19]}: its validator does not run")
+    assert host.count(START) == 0
 
 
 def test_install_again_that_rolls_back_is_an_error(tmp_path: Path) -> None:
     host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
     host.installed(OLD, 4)
     host.updater = None  # install.sh stopped it
-    host.not_ready.add(NEW)
+    host.unhealthy.add(NEW)
     with pytest.raises(u.UpdateError, match="went back to build 4"):
         updater.setup(NEW)
     assert host.updater == OLD  # started again, on the release that runs
+
+
+def test_install_again_of_a_release_that_stays_broken_is_an_error(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.unhealthy.add(NEW)
+    host.floor[NEW], host.schema[OLD], host.record = 16, 15, 16
+    with pytest.raises(u.UpdateError, match="stays although its validator does not run"):
+        updater.setup(NEW)
+
+
+def test_install_again_of_the_installed_release_only_puts_it_back(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=OLD, signed={OLD: 4})
+    host.installed(OLD, 4)
+    assert updater.setup(OLD) == "put back build 4"
+    assert host.count("docker tag") == 1 and not (tmp_path / u.REFUSED_FILE).exists()
+    host.unhealthy.add(OLD)
+    with pytest.raises(u.UpdateError, match="put back build 4, but its validator does not run"):
+        updater.setup(OLD)
+    assert not (tmp_path / u.REFUSED_FILE).exists()  # never refused: it is the installed release
 
 
 def test_running_install_again_never_goes_back_unless_asked(tmp_path: Path) -> None:
@@ -612,14 +794,19 @@ def test_ready_says_whether_the_record_is_migrated(tmp_path: Path, monkeypatch: 
     assert main(["validator", "ready", "--data-dir", str(tmp_path)]) == 0
 
 
-def test_the_rollback_floor_names_a_step_and_the_updater_reads_it_as_it_is_written() -> None:
+def test_the_numbers_the_updater_reads_from_a_release_are_printed_as_it_expects(tmp_path: Path) -> None:
     assert 0 <= migrations.ROLLBACK_FLOOR <= migrations.latest_version()
+    python = shutil.which("python") or "python3"
     for code, expected in (
         (u.ROLLBACK_FLOOR_CODE, migrations.ROLLBACK_FLOOR),
         (u.SCHEMA_CODE, migrations.latest_version()),
     ):
-        done = subprocess.run([shutil.which("python") or "python3", "-c", code], capture_output=True, text=True)
+        done = subprocess.run([python, "-c", code], capture_output=True, text=True)
         assert done.returncode == 0 and done.stdout.strip() == str(expected)
+    Store(tmp_path / "validator.sqlite").close()
+    env = {**os.environ, "KOKOAH_SUBNET_DB_URL": f"sqlite:///{tmp_path / 'validator.sqlite'}"}
+    done = subprocess.run([python, "-c", u.RECORD_SCHEMA_CODE], capture_output=True, text=True, env=env)
+    assert done.returncode == 0 and done.stdout.strip() == str(migrations.latest_version())
 
 
 def test_the_commands_an_older_updater_calls_in_a_newer_image_keep_working() -> None:
@@ -641,6 +828,9 @@ def test_the_compose_file_keeps_the_names_the_updater_and_older_hosts_rely_on() 
         assert re.search(rf"\n  {service}:\n    <<: \*service\n    container_name: {container}\n", compose)
     assert f"image: {u.CURRENT} " in compose and "pull_policy: never" in compose
     assert f'"--project-dir", "{u.PROJECT_DIR}"' in compose
+    # the health check waits as long as the updater does for a migration
+    period = re.search(r"start_period: (\d+)h\n", compose)
+    assert period and int(period.group(1)) * 3600 >= u.VALIDATOR_WAIT_S
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="needs docker compose")
@@ -669,6 +859,8 @@ def test_install_script_and_image_pin_what_the_updater_trusts() -> None:
     assert cosign and f"COPY --from={cosign.group(1)} " in dockerfile  # the same cosign verifies on both sides
     assert "cosign-release: " + cosign.group(1).split(":")[1].split("@")[0] in workflow
     assert f"COPY deploy/validator/compose.yml {u.IMAGE_COMPOSE}" in dockerfile
+    for name in ("release.yml", "ci.yml"):  # bash with pipefail in every step
+        assert "defaults:\n  run:\n    shell: bash\n" in (ROOT / ".github/workflows" / name).read_text()
 
 
 FAKE_SYSTEMCTL = """#!/usr/bin/env bash
@@ -680,6 +872,7 @@ FAKE_DOCKER = """#!/usr/bin/env bash
 printf 'docker %s\\n' "$*" >> "$FAKE_LOG"
 case "$1" in
   version) echo "${FAKE_API:-1.51}" ;;
+  inspect) echo "${FAKE_UPDATER_RUNNING:-true}" ;;
   run) case " $* " in
          *" verify "*) echo '[{"critical":{"image":{"docker-manifest-digest":"DIGEST"}}}]' ;;
          *" setup "*) exit "${FAKE_SETUP_EXIT:-0}" ;;
@@ -689,11 +882,20 @@ esac
 
 
 def _install(
-    tmp_path: Path, *args: str, units: str = "", wants: str = "", api: str = "1.51", setup_exit: int = 0
+    tmp_path: Path,
+    *args: str,
+    units: str = "",
+    wants: str = "",
+    api: str = "1.51",
+    setup_exit: int = 0,
+    updater_running: bool = True,
+    systemd_dir: bool = True,
 ) -> tuple[int, str, str]:
     bin_dir, project, systemd = tmp_path / "bin", tmp_path / "opt", tmp_path / "systemd"
-    for d in (bin_dir, project, systemd / "multi-user.target.wants"):
+    for d in (bin_dir, project):
         d.mkdir(parents=True, exist_ok=True)
+    if systemd_dir:
+        (systemd / "multi-user.target.wants").mkdir(parents=True, exist_ok=True)
     (project / ".env").write_text("KOKOAH_UID=998\n")
     if wants:
         (systemd / "multi-user.target.wants" / wants).write_text("")
@@ -709,6 +911,7 @@ def _install(
         "FAKE_UNITS": units,
         "FAKE_API": api,
         "FAKE_SETUP_EXIT": str(setup_exit),
+        "FAKE_UPDATER_RUNNING": "true" if updater_running else "false",
         "KOKOAH_DOCKER_DIR": str(project),
         "KOKOAH_SYSTEMD_DIR": str(systemd),
     }
@@ -734,23 +937,8 @@ def test_install_goes_ahead_past_units_that_are_stopped_or_failed_and_disabled(t
 
 
 def test_install_without_a_systemd_folder_goes_ahead(tmp_path: Path) -> None:
-    _install(tmp_path)
-    shutil.rmtree(tmp_path / "systemd")
-    env_dir = tmp_path / "systemd"
-    assert not env_dir.exists()
-    bin_dir = tmp_path / "bin"
-    done = subprocess.run(
-        ["bash", str(ROOT / "deploy/validator/install.sh")],
-        env={
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "FAKE_LOG": str(tmp_path / "calls.log"),
-            "KOKOAH_DOCKER_DIR": str(tmp_path / "opt"),
-            "KOKOAH_SYSTEMD_DIR": str(env_dir),
-        },
-        capture_output=True,
-        text=True,
-    )
-    assert done.returncode == 0, done.stderr
+    code, err, _ = _install(tmp_path, systemd_dir=False)
+    assert code == 0, err
 
 
 def test_install_takes_only_its_own_option(tmp_path: Path) -> None:
@@ -774,10 +962,16 @@ def test_install_stops_a_running_updater_and_hands_the_verified_digest_over(tmp_
                                  f"--project-dir {tmp_path / 'opt'} --allow-older")  # fmt: skip
 
 
-def test_install_starts_the_updater_again_when_the_setup_fails(tmp_path: Path) -> None:
+def test_install_starts_a_running_updater_again_when_the_setup_fails(tmp_path: Path) -> None:
     code, _, calls = _install(tmp_path, setup_exit=1)
     assert code == 1
     assert calls.splitlines()[-1] == "docker start kokoah-subnet-updater"
+
+
+def test_install_leaves_alone_an_updater_that_was_not_running(tmp_path: Path) -> None:
+    code, _, calls = _install(tmp_path, setup_exit=1, updater_running=False)
+    assert code == 1
+    assert "docker stop" not in calls and "docker start" not in calls
 
 
 def test_the_watch_says_each_outcome_once(tmp_path: Path) -> None:
