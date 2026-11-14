@@ -18,6 +18,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from kokoah_subnet.binding import AcceptedBinding, Unlink
 from kokoah_subnet.mechanism import MinerState
+from kokoah_subnet.mechanism.skill import daily_return
 
 from . import schema as S
 from .migrations import apply_migrations, current_version, latest_version
@@ -306,7 +307,7 @@ class Store:
         out: dict[str, float] = {}
         for (d0, e0, _, k0), (d1, e1, f1, k1) in zip(series, series[1:], strict=False):
             if k0 and k1 and e0 > 0 and _next_day(d0) == d1 and (after is None or d1 > after):
-                out[d1] = (e1 - e0 - f1) / e0
+                out[d1] = daily_return(e0, e1, f1)
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
     def _equity_rows(self, address: str, days: int, through: str | None = None) -> list[tuple[str, float, float, bool]]:

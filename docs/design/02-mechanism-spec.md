@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.5)
+# Kokoah subnet incentive mechanism: complete specification (v6.6)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -177,14 +177,17 @@ for information; it does not bound pay.
 
 ## 7. Skill factor `g'` (windows 60 and 30 days, smoothed)
 
-Daily returns of the bound address, deposits and withdrawals removed, capped at ±10%:
+Daily returns of the bound address, deposits and withdrawals removed, over the capital at work, capped at ±10%:
 
 ```
-r_d = (E_d − E_{d−1} − flows_d − offmarket_d) / E_{d−1}       r̃_d = max(−0.10, min(0.10, r_d))
+F_d = flows_d + offmarket_d
+r_d = max(−1, (E_d − E_{d−1} − F_d) / (E_{d−1} + max(F_d, 0)))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
 `flows_d` are deposits, withdrawals, account and vault transfers; `offmarket_d` is the money moved in through
-off-market fills that day (§3, item 2). A day has a return only when its account value and the previous day's are
+off-market fills that day (§3, item 2). Money moved in counts as capital from the start of the day, so a deposit into
+a nearly empty account makes the day's profit or loss a share of what was traded with; a day never loses more than
+everything (−100%). A day has a return only when its account value and the previous day's are
 both known; the windows below count known returns, so a day without one (an account value that could not be read,
 or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 

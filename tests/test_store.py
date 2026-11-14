@@ -15,9 +15,23 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     s.put_equity("0xA", "2026-10-02", 1100.0, 50.0)
     s.put_equity("0xA", "2026-10-04", 1200.0, 0.0)  # 10-03 missing: no return across the gap
     s.put_equity("0xA", "2026-10-05", 1140.0, 0.0)
-    assert s.returns("0xa", 60) == pytest.approx([0.05, -0.05])
+    # 10-02: 50 moved in, 50 made, over the 1,050 at work.
+    assert s.returns("0xa", 60) == pytest.approx([50 / 1050, -0.05])
     assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
+
+
+def test_a_deposit_day_s_return_is_over_the_capital_at_work(tmp_path: Path) -> None:
+    """An account holding a few dollars that takes a deposit and loses a little that day: the stored return, the
+    account record's growth and its worst drop stay sane (the old base, yesterday's few dollars, gave −1,080%)."""
+    s = Store(tmp_path / "v.sqlite")
+    s.put_equity("0xA", "2026-11-12", 3.98, 0.0)
+    s.put_equity("0xA", "2026-11-13", 3.98 + 11_900.0 - 43.0, 11_900.0)
+    s.put_equity("0xA", "2026-11-14", 11_860.98 * 1.01, 0.0)
+    assert s.dated_returns("0xA", 5) == {
+        "2026-11-13": pytest.approx(-43 / 11_903.98),
+        "2026-11-14": pytest.approx(0.01),
+    }
 
 
 def test_the_skill_record_counts_only_days_after_joining(tmp_path: Path) -> None:

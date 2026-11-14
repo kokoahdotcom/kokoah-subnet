@@ -18,8 +18,22 @@ from kokoah_subnet.mechanism.skill import ew_gain_to_pain, prob_sharpe
 
 
 def test_daily_return_removes_flows() -> None:
-    assert daily_return(1000.0, 1100.0, 50.0) == pytest.approx(0.05)
+    # 50 moved in and 50 made: the profit over the capital at work, yesterday's 1,000 and the 50 moved in.
+    assert daily_return(1000.0, 1100.0, 50.0) == pytest.approx(50 / 1050)
+    # Money moved out stays out of the base: what was traded with is yesterday's.
+    assert daily_return(1000.0, 850.0, -200.0) == pytest.approx(50 / 1000)
     assert daily_return(0.0, 100.0, 0.0) == 0.0
+
+
+def test_a_deposit_into_a_nearly_empty_account_gives_a_return_on_what_was_traded() -> None:
+    # $3.98 yesterday, about $11,900 moved in, about $43 lost: a fraction of a percent, not −1,080%.
+    r = daily_return(3.98, 3.98 + 11_900.0 - 43.0, 11_900.0)
+    assert r == pytest.approx(-43 / 11_903.98)
+    assert -0.004 < r < -0.003
+
+
+def test_a_day_never_loses_more_than_everything() -> None:
+    assert daily_return(100.0, -50.0, 0.0) == -1.0
 
 
 def test_prob_sharpe_basics() -> None:
