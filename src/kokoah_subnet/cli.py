@@ -275,6 +275,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vserve.add_argument("--host", default="127.0.0.1")
     vserve.add_argument("--port", type=int, default=48100)
+    vready = vsub.add_parser(
+        "ready", help="exit 0 once the record is at this release's schema version (the container's health check)"
+    )
+    vready.add_argument("--data-dir", type=Path, default=None, help="the record's SQLite file when no URL is set")
+    vready.add_argument(
+        "--db-url", default=None, help="the record; default $KOKOAH_SUBNET_DB_URL, else $KOKOAH_SUBNET_DB_READER_URL"
+    )
+    vupdate = vsub.add_parser("update", help="Docker setup: keep the validator on the newest signed release")
+    usub = vupdate.add_subparsers(dest="update_command", required=True)
+    for name, text in (
+        ("watch", "check for a new signed release every few minutes and install it (the updater service)"),
+        ("once", "check once and install a new signed release"),
+        ("setup", "first start: install the release this image is (deploy/validator/install.sh)"),
+        ("hop", "recreate the updater with the installed release (run by the updater's helper container)"),
+    ):
+        u = usub.add_parser(name, help=text)
+        u.add_argument("--project-dir", type=Path, default=Path("/opt/kokoah-subnet/docker"))
+        if name == "watch":
+            u.add_argument("--interval", type=float, default=300, help="seconds between looks at the published tag")
+        if name == "setup":
+            u.add_argument("--digest", required=True, help="the verified digest install.sh pulled")
     return parser
 
 
@@ -424,7 +445,41 @@ def _validator(args: argparse.Namespace) -> int:
         app = create_app(Store(url or (args.data_dir / "validator.sqlite"), create=False))
         uvicorn.run(app, host=args.host, port=args.port, log_level="info")
         return 0
+    if args.validator_command == "ready":
+        from kokoah_subnet.validator.store import Store
+
+        url = args.db_url or os.environ.get("KOKOAH_SUBNET_DB_URL") or _reader_url()
+        if not url and args.data_dir is None:
+            print("give --db-url or --data-dir")
+            return 2
+        try:
+            Store(url or (args.data_dir / "validator.sqlite"), create=False).close()
+        except RuntimeError as exc:
+            print(exc)
+            return 1
+        return 0
+    if args.validator_command == "update":
+        return _update(args)
     return 2
+
+
+def _update(args: argparse.Namespace) -> int:
+    from kokoah_subnet.validator.update import UpdateError, Updater
+
+    updater = Updater(args.project_dir)
+    try:
+        if args.update_command == "watch":
+            updater.watch(args.interval)
+        elif args.update_command == "once":
+            print(updater.check())
+        elif args.update_command == "setup":
+            updater.setup(args.digest)
+        elif args.update_command == "hop":
+            updater.hop()
+    except UpdateError as exc:
+        print(f"update: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _reader_url() -> str:
