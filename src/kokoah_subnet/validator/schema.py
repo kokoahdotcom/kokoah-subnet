@@ -388,6 +388,17 @@ epoch_neurons = Table(
     Column("collateral_min", Float),
 )
 
+# what the chain paid each hotkey per UTC day: every recorded epoch's emission, by the day of the epoch (added as
+# each epoch is recorded): the interface's `earned_alpha`
+earned_days = Table(
+    "earned_days",
+    metadata,
+    Column("day", String(10), primary_key=True),
+    Column("hotkey", String(64), primary_key=True),
+    Column("alpha", Float, nullable=False),
+    Column("epochs", Integer, nullable=False),
+)
+
 # the subnet's own emission counters at each epoch (the TAO side of the burn question, measured over time)
 subnet_epochs = Table(
     "subnet_epochs",

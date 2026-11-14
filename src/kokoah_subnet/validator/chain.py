@@ -70,6 +70,8 @@ class SubnetSnapshot:
     owner_hotkey: str
     neurons: list[Neuron]
     price_tao: float | None  # spot, τ per alpha
+    # the block of the subnet's last epoch (the chain's `LastEpochBlock`): the emission vector is that epoch's
+    last_step: int | None = None
 
     def uid_of(self) -> dict[str, int]:
         return {n.hotkey: n.uid for n in self.neurons}
@@ -116,7 +118,16 @@ async def snapshot(client: Any, netuid: int, block: int | None = None) -> Subnet
         )
         for n in mg.neurons
     ]
-    return SubnetSnapshot(netuid, int(mg.block), int(mg.tempo), mg.owner_hotkey, neurons, mg.price)
+    last_step = getattr(mg, "last_step", None)
+    return SubnetSnapshot(
+        netuid,
+        int(mg.block),
+        int(mg.tempo),
+        mg.owner_hotkey,
+        neurons,
+        mg.price,
+        int(last_step) if isinstance(last_step, int) and last_step > 0 else None,
+    )
 
 
 BLOCK_SECONDS = 12

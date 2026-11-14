@@ -82,8 +82,9 @@ tbody tr:last-child td { border-bottom: 0; }
 emission is split in two: 80% shared by the builder fees each trader paid, and 20% shared by skill weight among traders
 who pass the skill pool's entry test (a proven record of at least 30 days since joining, weighing more as it
 grows to 90 days); verified agents get 10% more skill weight.
-Profit is the exchange's closed PnL on builder-code fills and never affects pay. Every number comes from the
-validator's published daily artifact (<code>/days/latest</code>).</p>
+Profit is the exchange's closed PnL on builder-code fills and never affects pay. The day's numbers come from the
+validator's published daily artifact (<code>/days/latest</code>); planned is the alpha a scored day allocates, earned
+is what the chain actually paid each hotkey, read from the metagraph every epoch.</p>
 </div>
 <script>
 (function () {
@@ -117,7 +118,8 @@ validator's published daily artifact (<code>/days/latest</code>).</p>
       ["Earned on chain (all days)", fmt.alpha(s.earned_alpha), s.earned_usd == null ? "" : fmt.usd(s.earned_usd)],
       ["Burned (day)", fmt.alpha(d.burn_alpha), fmt.alpha(s.burn_alpha) + " all days"],
       ["Alpha price", d.price_usd == null ? "—" : "$" + d.price_usd.toFixed(3), d.price_tao == null ? "" : d.price_tao.toFixed(4) + " τ · TAO $" + (d.tao_usd || 0).toFixed(2)],
-      ["Paid / fees (all days)", s.builder_fee_usd > 0 ? fmt.num(s.paid_usd / s.builder_fee_usd, 2) + "×" : "—", "bounded by 2× by design"],
+      ["Planned / fees (all days)", s.builder_fee_usd > 0 ? fmt.num(s.paid_usd / s.builder_fee_usd, 2) + "×" : "—", "bounded by 2× by design"],
+      ["Earned / fees (all days)", s.builder_fee_usd > 0 && s.earned_usd != null ? fmt.num(s.earned_usd / s.builder_fee_usd, 2) + "×" : "—", "what the chain paid"],
     ];
     $("strip").innerHTML = items.map(([k, v, sub]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || ""}</div></div>`).join("");
   }

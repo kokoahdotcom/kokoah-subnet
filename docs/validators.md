@@ -194,10 +194,11 @@ stake) fall back. Every failure is recorded.
 | `/leaderboard` | Ranks and pay, with each account's record (90-day return, worst drop, losing days, verified agent days): the latest scored day's planned allocation (`planned_alpha`, also `pay_alpha`) and what the chain paid the hotkey that UTC day (`earned_alpha`), and both over all days (`total_planned_alpha`, also `total_pay_alpha`; `total_earned_alpha`) |
 | `/accounts/<0x address>` | One account's whole record: every stored day with its return, the growth curve and the scored figures, each day's planned and earned alpha, and both in total |
 
-Earned is what the chain actually paid, from the metagraph this validator records once a tempo: each epoch's emission
-of the hotkey, summed by the UTC day it was recorded. A scored day's planned allocation is paid over the following
-tempos, and only in proportion to the stake of the validators that set those weights, so the two differ; epochs this
-validator did not record (while it was down) are missing from earned.
+Earned is what the chain actually paid, from the metagraph this validator records once per epoch of the chain (when
+the chain's last epoch block changes): each epoch's emission of the hotkey, summed by the UTC day of that block (at
+12 s a block) in `earned_days`. A scored day's planned allocation is paid over the following tempos, and only in
+proportion to the stake of the validators that set those weights, so the two differ; epochs this validator did not
+record (while it was down) are missing from earned.
 
 To publish it, put it behind a reverse proxy with TLS; `deploy/nginx/kokoah-subnet.conf` is a template with a
 request limit. Publishing lets miners and other validators compare figures with yours.
