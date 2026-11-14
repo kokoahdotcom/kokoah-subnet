@@ -28,8 +28,8 @@ validator/schema.py`; the tables, by what they answer:
 Conventions: `day` is the scored UTC day (YYYY-MM-DD; in `earned_days`, the UTC day the chain paid); money is USD; alpha is in alpha, not rao; addresses are
 lowercase; `raw` columns keep the source record as JSON; error messages and agent checks, which can quote what an
 outside source sent, have each NUL character (which Postgres text can't hold) replaced with U+FFFD. Registration and
-binding times are estimated from block heights at 12 seconds a block; epoch and submission times are wall-clock at the
-validator.
+binding times, and the times of epochs recorded with the chain's epoch block, are estimated from block heights at 12
+seconds a block; submission times are wall-clock at the validator.
 
 Connect: `scripts/db.sh psql` opens a shell; the URLs are in `~/.local/share/kokoah/subnet-db.env`:
 `KOKOAH_SUBNET_DB_URL`, which the validator reads when `--db-url` is not given;

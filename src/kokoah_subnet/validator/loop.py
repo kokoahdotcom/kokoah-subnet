@@ -175,7 +175,7 @@ async def chain_step(
     if snap.last_step is not None:
         step_now = snap.last_step
         last_read = store.last_epoch_block()
-        due = last_read is None or last_read < step_now
+        due = last_read is None or last_read < step_now or last_read > snap.block  # ahead of the chain: a reset one
         ran_at = datetime.fromtimestamp(clock - (snap.block - snap.last_step) * BLOCK_SECONDS, UTC)
     else:
         step_now = snap.block // max(1, snap.tempo)
