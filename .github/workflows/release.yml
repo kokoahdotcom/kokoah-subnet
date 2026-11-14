@@ -82,10 +82,17 @@ jobs:
               --certificate-identity "https://github.com/kokoahdotcom/kokoah-subnet/.github/workflows/release.yml@refs/heads/main"
           }
           verify "$IMAGE@$DIGEST" >/dev/null
-          # never back: a run older than the published build (a re-run, or one that finished late) leaves latest
-          published=$(verify "$IMAGE:latest" 2>/dev/null \
-            | python3 -c 'import json, sys; print(max(int(i["optional"]["build"]) for i in json.load(sys.stdin)))' \
-            || echo 0)
+          # never back: a run older than the published build (a re-run, or one that finished late) leaves latest.
+          # Only a latest that does not exist yet counts as build 0; one that does must verify, or the step fails.
+          if found=$(docker buildx imagetools inspect "$IMAGE:latest" 2>&1); then
+            published=$(verify "$IMAGE:latest" \
+              | python3 -c 'import json, sys; print(max(int(i["optional"]["build"]) for i in json.load(sys.stdin)))')
+          elif grep -qi "not found" <<<"$found"; then
+            published=0
+          else
+            echo "$found" >&2
+            exit 1
+          fi
           if [ "$published" -ge "$BUILD" ]; then
             echo "latest is build $published already: left as it is" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
