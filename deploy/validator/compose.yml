@@ -1,0 +1,90 @@
+# The validator with automatic updates (docs/validators.md section 6). install.sh puts this file in
+# /opt/kokoah-subnet/docker and every new signed release brings its own copy, so this host's settings go in the .env
+# file next to it, never in this file:
+#   KOKOAH_UID, KOKOAH_GID       the kokoah-subnet user's numbers (`id kokoah-subnet`): the owner of its files
+#   KOKOAH_VALIDATOR_ENV         the validator's settings file in /etc/kokoah-subnet (default validator-main.env)
+#   COMPOSE_PROFILES=interface   also serve the public interface on 127.0.0.1 (section 8), port KOKOAH_API_PORT
+# The files are those of the systemd setup: settings in /etc/kokoah-subnet, data and the hotkey in
+# /var/lib/kokoah-subnet; the record is the PostgreSQL of scripts/db.sh on 127.0.0.1.
+name: kokoah-subnet
+
+x-service: &service
+  image: kokoah-subnet:current  # the release the updater verified and installed; never pulled by name
+  pull_policy: never
+  network_mode: host  # the record and the interface listen on 127.0.0.1 only
+  restart: unless-stopped
+  init: true
+  user: "${KOKOAH_UID:?set KOKOAH_UID in .env}:${KOKOAH_GID:?set KOKOAH_GID in .env}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: [/tmp]
+  environment:
+    HOME: /tmp
+  logging:
+    driver: json-file
+    options: {max-size: 50m, max-file: "5"}
+
+services:
+  validator:
+    <<: *service
+    container_name: kokoah-subnet-validator
+    # KOKOAH_SUBNET_ARGS as in the systemd unit, split on spaces
+    entrypoint: ["sh", "-c", "set -f; exec kokoah-subnet validator run $$KOKOAH_SUBNET_ARGS"]
+    env_file:
+      - /etc/kokoah-subnet/db.env
+      - /etc/kokoah-subnet/${KOKOAH_VALIDATOR_ENV:-validator-main.env}
+    environment:
+      HOME: /var/lib/kokoah-subnet
+    volumes:
+      - /var/lib/kokoah-subnet:/var/lib/kokoah-subnet
+      - /var/lib/kokoah-subnet/wallets:/var/lib/kokoah-subnet/wallets:ro  # the hotkey: read, never changed
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 60s
+    healthcheck:
+      # healthy once the record is at this release's schema version: the updater starts the interface after that
+      test: ["CMD", "kokoah-subnet", "validator", "ready"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30m
+      start_interval: 10s
+
+  interface:
+    <<: *service
+    container_name: kokoah-subnet-api
+    profiles: [interface]
+    command: ["validator", "serve", "--data-dir", "/tmp", "--host", "127.0.0.1", "--port", "${KOKOAH_API_PORT:-48100}"]
+    env_file: [/etc/kokoah-subnet/db-reader.env]  # the read-only role; no hotkey, no writing login
+    mem_limit: 1g
+    pids_limit: 128
+
+  check:
+    <<: *service
+    container_name: kokoah-subnet-check
+    # the health check over the record every hour; alerts go to KOKOAH_SUBNET_ALERT_WEBHOOK when alert.env sets it
+    entrypoint: ["sh", "-c", "while :; do kokoah-subnet validator check --only-problems; sleep 3600; done"]
+    env_file:
+      - /etc/kokoah-subnet/db-reader.env
+      - path: /etc/kokoah-subnet/alert.env
+        required: false
+    mem_limit: 512m
+    pids_limit: 64
+
+  updater:
+    <<: *service
+    container_name: kokoah-subnet-updater
+    # Docker's socket is root's. Whoever holds it controls the host, which is why the updater installs only
+    # releases signed by the release workflow on main.
+    user: "0:0"
+    command: ["validator", "update", "watch", "--project-dir", "/opt/kokoah-subnet/docker"]
+    environment:
+      HOME: /tmp
+      DOCKER_CONFIG: /tmp/docker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/kokoah-subnet/docker:/opt/kokoah-subnet/docker  # this file, .env and the installed release
+      - /etc/kokoah-subnet:/etc/kokoah-subnet:ro  # the settings files compose reads
+    mem_limit: 512m
+    pids_limit: 128

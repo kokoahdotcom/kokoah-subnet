@@ -1,0 +1,10 @@
+# Only what the image is built from: the package, its lock, and this folder's compose file.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!deploy/validator/compose.yml
+**/__pycache__
+**/*.pyc
