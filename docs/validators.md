@@ -35,8 +35,8 @@ examples below use it.
   Hyperliquid's public API, its explorer and data files and the subnet's service, a websocket to a Bittensor
   endpoint, and plain HTTP to each agent machine at the host and port its binding publishes (the agent check). No
   inbound port has to be open unless you publish the interface (section 8).
-- **Python 3.12 and [uv](https://docs.astral.sh/uv/)**; **Docker** for the PostgreSQL record and the optional
-  dashboards.
+- **Docker** for the PostgreSQL record, the setup with automatic updates (section 6) and the optional dashboards;
+  **Python 3.12 and [uv](https://docs.astral.sh/uv/)** for the tools and the systemd setup.
 - **A reliable clock** (NTP): days are UTC days.
 
 ## 2. Install
@@ -109,16 +109,15 @@ uv run kokoah-subnet validator run --network finney --netuid 39 \
     --start-day <YYYY-MM-DD> --once
 ```
 
-**As a service.** On a server, run the validator, its interface and its health check as a dedicated user with
-systemd's sandboxing (the unit files in `deploy/systemd/`, described in its README):
+**As a service.** On a server, the validator, its interface and its health check run as a dedicated user, either
+in Docker with **automatic updates** (recommended: every validator then runs the newest release within minutes of it
+being published) or with systemd, updated by hand. Both use the same files: settings in `/etc/kokoah-subnet`, data
+and the hotkey in `/var/lib/kokoah-subnet`, and the record of section 4.
+
+First, the user, the hotkey and the settings (both ways):
 
 ```bash
 sudo useradd --system --home-dir /var/lib/kokoah-subnet --create-home --shell /usr/sbin/nologin kokoah-subnet
-# in the repository; Python goes under /opt too, so the service user can run it
-sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
-    uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
-sudo install -d -m 755 /opt/kokoah-subnet/scripts && sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/
-sudo chmod -R a+rX /opt/kokoah-subnet
 
 # data and the hotkey only (never the coldkey): the wallet's hotkey file and its coldkeypub.txt
 sudo install -d -o kokoah-subnet -g kokoah-subnet -m 700 /var/lib/kokoah-subnet/data \
@@ -136,14 +135,48 @@ grep '^KOKOAH_SUBNET_DB_READER_URL=' ~/.local/share/kokoah/subnet-db.env \
 echo 'KOKOAH_SUBNET_ARGS=--network finney --netuid 39 --builder 0x43ccc0618e4358494f87a4b8699230203dc4ab67 --agent-service https://api.kokoah.com/miners --data-dir /var/lib/kokoah-subnet/data --wallet validator --wallet-hotkey default --wallet-path /var/lib/kokoah-subnet/wallets --start-day <YYYY-MM-DD>' \
     | sudo install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/validator-main.env
 
-sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
-        deploy/systemd/kokoah-subnet-check.* deploy/systemd/kokoah-subnet-backup.* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer kokoah-subnet-backup.timer
+# the daily backup of the record (section 9), the same both ways
+sudo install -d -m 755 /opt/kokoah-subnet/scripts && sudo install -m 755 scripts/db.sh scripts/backup.sh /opt/kokoah-subnet/scripts/
+sudo cp deploy/systemd/kokoah-subnet-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now kokoah-subnet-backup.timer
 ```
 
-Logs go to `/var/log/kokoah-subnet/validator-main.log`. Restarts are safe at any time: scoring resumes with the
-oldest unscored day, and a re-scored day starts from the state as it was before that day.
+**With automatic updates (Docker).** The image `kokoahdotcom/kokoah-subnet` holds the validator, its interface, its
+health check and an updater (`deploy/validator/`). The host's settings go in `/opt/kokoah-subnet/docker/.env`; then
+`install.sh` checks the published image's signature and starts everything:
+
+```bash
+sudo install -d -m 755 /opt/kokoah-subnet/docker
+printf 'KOKOAH_UID=%s\nKOKOAH_GID=%s\nKOKOAH_VALIDATOR_ENV=validator-main.env\n' \
+    "$(id -u kokoah-subnet)" "$(id -g kokoah-subnet)" | sudo install -m 644 /dev/stdin /opt/kokoah-subnet/docker/.env
+echo 'COMPOSE_PROFILES=interface' | sudo tee -a /opt/kokoah-subnet/docker/.env    # optional: the interface (section 8)
+sudo deploy/validator/install.sh
+```
+
+The containers are `kokoah-subnet-validator`, `kokoah-subnet-check`, `kokoah-subnet-api` (with the interface) and
+`kokoah-subnet-updater`; `docker logs -f kokoah-subnet-validator` follows the validator. Each runs as the
+`kokoah-subnet` user (the updater as root, for Docker's socket) on a read-only system with no extra privileges and
+a memory cap, and sees only the files it needs: the hotkey reaches the validator alone, read-only. Section 11 says
+how the updates work.
+
+**With systemd, updated by hand.** The unit files in `deploy/systemd/` (described in its README) run the release
+installed in `/opt` with systemd's sandboxing; section 11 has the update steps.
+
+```bash
+# in the repository; Python goes under /opt too, so the service user can run it
+sudo UV_PYTHON_INSTALL_DIR=/opt/kokoah-subnet/python UV_PROJECT_ENVIRONMENT=/opt/kokoah-subnet/venv \
+    uv sync --frozen --no-dev --no-editable --reinstall-package kokoah-subnet --python 3.12 --python-preference only-managed
+sudo chmod -R a+rX /opt/kokoah-subnet
+
+sudo cp deploy/systemd/kokoah-subnet-validator@.service deploy/systemd/kokoah-subnet-api.service \
+        deploy/systemd/kokoah-subnet-check.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer
+```
+
+Logs go to `/var/log/kokoah-subnet/validator-main.log`. Run one of the two, never both: one validator writes the
+record. Restarts are safe at any time: scoring resumes with the oldest unscored day, and a re-scored day starts from
+the state as it was before that day.
 
 ## 7. What a validator does each day
 
@@ -182,7 +215,8 @@ stake) fall back. Every failure is recorded.
 
 ## 8. The public interface
 
-`kokoah-subnet validator serve` (the `kokoah-subnet-api` unit) serves the record read-only on `127.0.0.1:48100`:
+`kokoah-subnet validator serve` (the `kokoah-subnet-api` container with `COMPOSE_PROFILES=interface`, or unit)
+serves the record read-only on `127.0.0.1:48100` (`KOKOAH_API_PORT` in Docker's `.env` changes the port):
 
 | Path | Content |
 |---|---|
@@ -209,10 +243,11 @@ request limit. Publishing lets miners and other validators compare figures with 
 - **Health check.** `uv run kokoah-subnet validator check` prints the latest scored day, the last weights, the last
   epoch, errors in the last 24 hours (routine notes are counted apart and are no problem) and the builder-earnings
   check, and exits 1 on a problem. The
-  `kokoah-subnet-check.timer` runs it hourly and posts to a webhook only when something is wrong: put
+  `kokoah-subnet-check` container (or `kokoah-subnet-check.timer`) runs it hourly and posts to a webhook only when
+  something is wrong: put
   `KOKOAH_SUBNET_ALERT_WEBHOOK=<Discord or Slack webhook URL>` in `/etc/kokoah-subnet/alert.env`. A run that finds a
   problem also leaves the unit failed, so `systemctl --failed` and any monitor of systemd units show it; a webhook
-  that refuses the report is noted in `/var/log/kokoah-subnet/check.log`.
+  that refuses the report is noted in `/var/log/kokoah-subnet/check.log` (in Docker, `docker logs kokoah-subnet-check`).
 - **The earnings check.** The builder fees credited to miners must never exceed what Hyperliquid reports the builder
   has earned; the health check alarms if they do.
 - **Dashboards.** `scripts/dashboard.sh start` runs Grafana on `127.0.0.1:48120` with the record as its data source
@@ -233,6 +268,29 @@ day by day; each account's earlier daily values are backfilled from the exchange
 
 ## 11. Upgrades
 
+**Automatic (Docker).** Every change to main that reaches the validator is checked, built and signed by the
+repository's release workflow (`.github/workflows/release.yml`) and published as `kokoahdotcom/kokoah-subnet:latest`,
+also tagged with its commit and its mechanism version (`spec-<version>`). The updater looks at that tag every five
+minutes (a request Docker Hub does not count as a pull). For a new image it:
+
+1. checks the signature: made by exactly that workflow on `main`, as GitHub certifies through Sigstore (cosign), and
+   for this image. A leaked Docker Hub login can publish an image, but no updater installs it. An image whose build
+   number (the workflow run, inside the signature) is below the installed one's is refused too, so an older release
+   cannot be put back;
+2. downloads it by its digest, tags it `kokoah-subnet:current` (the one before stays as `kokoah-subnet:previous`) and
+   installs the release's own `compose.yml`;
+3. restarts the validator and waits until the record is at the release's schema version (the validator migrates
+   it), then restarts the health check and the interface, then itself.
+
+The updater's log says what it installed or refused: `docker logs kokoah-subnet-updater`. To hold updates, stop it
+(`docker stop kokoah-subnet-updater`; it stays stopped until `docker start kokoah-subnet-updater`). To go back one
+release while it is stopped: `docker tag kokoah-subnet:previous kokoah-subnet:current`, then
+`docker compose --project-directory /opt/kokoah-subnet/docker up -d validator interface check` (or without
+`interface` when the profile is off). A release that needs a step on the host as well (such as a new database role)
+says so in its announcement.
+
+**By hand (systemd).**
+
 ```bash
 git pull
 scripts/db.sh start      # already running: only makes sure the read-only role and its URL exist
@@ -251,8 +309,14 @@ sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 `--reinstall-package` makes the sync install the pulled code even when the package's version number is unchanged.
 The scripts and unit files are copied again, so changes to them take effect too.
 
+**Moving from systemd to Docker.** Stop and disable the systemd services
+(`sudo systemctl disable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer`), then
+follow the Docker part of section 6 from `/opt/kokoah-subnet/docker`: the settings, the data and the record stay as
+they are, and `install.sh` refuses to start while the systemd validator runs.
+
 - **Parameter changes** are versioned in the code, announced at least seven days before they take effect, and
-  published in every daily artifact as the mechanism's version. Nothing changes until you update.
+  published in every daily artifact as the mechanism's version. Such a change reaches main on the day it takes
+  effect, so every updater installs it that day; with systemd, nothing changes until you update.
 - **New agent harness images** become valid only when their digest is added to the approved list in the code
   (`src/kokoah_subnet/agent/images.py`), so they arrive with an update. Each approved image is a reproducible build:
   `deploy/agent/build.sh <commit>` rebuilds it and prints the same digest.
@@ -260,10 +324,13 @@ The scripts and unit files are copied again, so changes to them take effect too.
 ## 12. Security
 
 - The server holds **only the hotkey**; keep the coldkey offline.
-- The services run as their own user in systemd's sandbox, with a memory cap (`deploy/systemd/`).
+- The services run as their own user, in Docker on a read-only system without privileges (`deploy/validator/`)
+  or in systemd's sandbox (`deploy/systemd/`), with a memory cap.
+- The updater holds Docker's socket, which is root's; it installs only images signed by the release workflow on main
+  (section 11).
 - The validator **never holds Hyperliquid keys** and never writes to the exchange.
 - The record and the interface are local by default; publish the interface only through a reverse proxy.
-- Keep the server patched and the repository on a tagged release or a commit you have reviewed.
+- Keep the server patched. With systemd, keep the repository on a commit you have reviewed.
 
 ## 13. Troubleshooting
 
@@ -275,4 +342,5 @@ The scripts and unit files are copied again, so changes to them take effect too.
 | "no TAO perpetual" | Pass `--tao-usd-fallback <price>`. |
 | No verified agents | `--agent-service https://api.kokoah.com/miners` must be set and reachable. |
 | Different figures from another validator | Compare the `/days/<day>` artifacts, and check that both run the same release. |
+| The updater says `no signature of the release workflow` or `refused` | The published tag names an image the release workflow did not sign, or an older one; nothing was installed and the validator keeps running. Tell the subnet team. |
 | The exchange's history itself was unavailable for a whole day | The operator announces it; close the day with `uv run kokoah-subnet validator skip-day --day YYYY-MM-DD --burn-hotkey <ss58>`, passing the hotkey the announcement names (the owner hotkey when no burn hotkey is published). Days are scored and closed in order only: the day must be the one after the latest scored day. |

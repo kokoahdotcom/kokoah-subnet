@@ -1,5 +1,7 @@
-Unit files for a validator host (systemd). The validator, its interface and its health check run as a dedicated
-user, `kokoah-subnet`, with systemd's sandboxing: no new privileges, a read-only system, no access to other users'
+Unit files for a validator host (systemd). The validator, its interface and its health check can run in Docker with
+automatic updates instead (`deploy/validator/`, docs/validators.md section 6); the backup unit serves both setups.
+
+Here the validator, its interface and its health check run as a dedicated user, `kokoah-subnet`, with systemd's sandboxing: no new privileges, a read-only system, no access to other users'
 homes, a private `/tmp`, no devices or kernel settings, and a memory cap. They can write only to
 `/var/lib/kokoah-subnet`, and the interface not even there: it only reads. The wallet folder in it is read-only to the validator and hidden from the interface and
 the health check, which never need the hotkey.
