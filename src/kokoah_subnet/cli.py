@@ -296,6 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
             u.add_argument("--interval", type=float, default=300, help="seconds between looks at the published tag")
         if name == "setup":
             u.add_argument("--digest", required=True, help="the verified digest install.sh pulled")
+            u.add_argument("--allow-older", action="store_true", help="install it even if older than the installed")
     return parser
 
 
@@ -473,7 +474,7 @@ def _update(args: argparse.Namespace) -> int:
         elif args.update_command == "once":
             print(updater.check())
         elif args.update_command == "setup":
-            updater.setup(args.digest)
+            print(updater.setup(args.digest, args.allow_older))
         elif args.update_command == "hop":
             updater.hop()
     except UpdateError as exc:
