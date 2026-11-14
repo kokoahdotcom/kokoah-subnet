@@ -745,7 +745,7 @@ async def collect_and_score(
             history = daily_equity_from_portfolio(windows)
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
             for h_day, value, flows in earlier:
-                store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"})
+                store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"}, offmarket_moves=())
             log.info("backfilled %d days of account value for %s", len(earlier), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
@@ -807,6 +807,7 @@ async def collect_and_score(
                 tid_owners.setdefault(f.tid, set()).add(address)
         # marks: the 0.5% clip for credit, and money moved in through off-market fills (removed from the return)
         offmarket = 0.0
+        moves: dict[int, float] = {}  # when it came: the day's return takes it off the step it fell in
         marked: list[Fill] = []
         coins = {f.coin for f in own if is_perp(f.coin)} | {f.coin for f in public if is_perp(f.coin)}
         marks_by_coin = {coin: await marks_for(coin) for coin in coins}
@@ -821,8 +822,9 @@ async def collect_and_score(
             if not is_perp(f.coin) or f.coin in unmarked:
                 continue
             mark = (marks_by_coin.get(f.coin) or {}).get(f.time_ms // 60_000 * 60_000)
-            if mark:
-                offmarket += off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)
+            if mark and (moved := off_market_transfer(f.px, mark, f.sz, f.side, params.mark_clip)):
+                offmarket += moved
+                moves[f.time_ms] = moves.get(f.time_ms, 0.0) + moved
         # a coin in which this address made more than `thin_market_share` of the day's volume was priced by its own
         # trades (and whoever it traded with): its marks tell nothing about what the account made there. The day
         # stays known (a day left out would hide a loss): its loss counts, its profit does not
@@ -925,10 +927,18 @@ async def collect_and_score(
                     raw=state.get("marginSummary"),
                     offmarket_pnl=held_back,
                     known=return_known,
+                    offmarket_moves=moves.items(),
                 )
             else:
                 store.put_equity(
-                    address, day, live, 0.0, raw=state.get("marginSummary"), offmarket_pnl=offmarket, known=False
+                    address,
+                    day,
+                    live,
+                    0.0,
+                    raw=state.get("marginSummary"),
+                    offmarket_pnl=offmarket,
+                    known=False,
+                    offmarket_moves=moves.items(),
                 )
                 store.put_error(day, hk, address, "daily return", change.note)
             store.put_ledger_updates(

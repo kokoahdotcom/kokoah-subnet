@@ -137,6 +137,73 @@ def day_change(
     return DayChange(v0, v1, p1 - p0)
 
 
+@dataclass(frozen=True)
+class DayReturn:
+    """A day from the exchange's own record, cut at its recorded points: its time-weighted return, its profit and the
+    capital at work."""
+
+    twr: float  # the steps' returns chained: Π(1 + Δp_i / base_i) − 1
+    profit: float  # the recorded profit over the day, less the money moved in through off-market fills
+    capital: float  # the start value plus each step's money moved in (from the step's start) or out (from its end),
+    # weighted by the part of the day after it (Modified Dietz)
+
+
+def day_twr(
+    values: Iterable[tuple[int, float]],
+    profits: Iterable[tuple[int, float]],
+    start_ms: int,
+    end_ms: int,
+    origin_ms: int | None = None,
+    moved_in: Iterable[tuple[int, float]] = (),
+    floor: float = 0.0,
+) -> DayReturn | None:
+    """The day over the exchange's recorded value and profit points, cut at every recorded point inside it. Each
+    step's profit is the recorded profit's change less the money moved in through off-market fills during it
+    (`moved_in`: time ms, amount; a fill before the first recorded point or after the last one counts in the step
+    next to it), which counts as money moved in instead. A step that made money has as its base the value at its
+    start plus what was moved in during it (`max(V_i − V_{i−1} − Δp_i, 0)`); one that lost has the value at its start
+    alone (money moved in during it counts from the next recorded point, so a loss is never spread over money that
+    came after it, however much: one that held nothing at its start lost everything). A step never loses more than
+    everything, and the steps' returns are chained: money moved in never counts for the part of the day before it.
+    Every base and the day's capital are at least `floor` (the validator's: the eligibility floor, so money kept out
+    of the account at the recorded points never makes a small balance carry the day). A day without money moved, its
+    value at least `floor`, has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its
+    capital is `E_{d−1}`. Values at the day's edges are read on the straight line between recorded points, as
+    `day_change` reads them (an edge before the account's history began holds nothing). None when `day_change` cannot
+    say what the day did. A step that made money on a base that is not positive (nothing held) adds no return."""
+    vals, pnls = list(values), list(profits)
+    change = day_change(vals, pnls, start_ms, end_ms, origin_ms)
+    if not change.known:
+        return None
+
+    def edge(points: list[tuple[int, float]], t: int) -> float:
+        v = value_at(points, t)
+        return 0.0 if v is None else v  # before the history began (day_change accepted it only then)
+
+    inner = sorted({int(t) for t, _ in vals + pnls if start_ms < int(t) < end_ms})
+    times = [start_ms, *inner, end_ms]
+    moves = sorted((min(max(int(t), start_ms), end_ms), float(a)) for t, a in moved_in)
+    span = end_ms - start_ms
+    growth, profit, capital = 1.0, 0.0, edge(vals, start_ms)
+    k = 0
+    for i, (t0, t1) in enumerate(zip(times, times[1:], strict=False)):
+        moved = 0.0
+        while k < len(moves) and (moves[k][0] <= t1 or i == len(times) - 2):
+            moved += moves[k][1]
+            k += 1
+        v0, v1 = edge(vals, t0), edge(vals, t1)
+        dp = edge(pnls, t1) - edge(pnls, t0) - moved
+        flow = v1 - v0 - dp
+        base = max(v0 + max(flow, 0.0) if dp >= 0 else v0, floor)
+        if dp < 0 and base <= 0:
+            growth = 0.0  # lost money it did not hold at the step's start
+        elif base > 0:
+            growth *= max(0.0, 1 + dp / base)
+        profit += dp
+        capital += flow * ((end_ms - t0) if flow > 0 else (end_ms - t1)) / span
+    return DayReturn(growth - 1, profit, max(capital, floor))
+
+
 def daily_average_equity(
     points: Iterable[tuple[int, float]],
     start_ms: int,

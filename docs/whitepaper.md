@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.2, November 2026. Mechanism specification v6.5.
+Whitepaper, version 3.2, November 2026. Mechanism specification v6.6.
 
 ### Summary
 
@@ -170,7 +170,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.5; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.6; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -428,7 +428,11 @@ pay_i,d   = V_d × Φ̂_i,d / Σ_j Φ̂_j,d  +  S_d × w_i,d / Σ_j w_j,d
 
 Skill, from the daily returns of the days after the join day (the UTC day, by the chain's block time, of the later
 of the block that accepted the link and the hotkey's registration block),
-`r_d = (E_d − E_d−1 − flows_d − offmarket_d) / E_d−1`, capped to
+`r_d = max(−1, min(TWR_d, P_d / C_d))`: the day's time-weighted return over the exchange's recorded points (each
+step's profit over the money there for it: a gain's step counts money moved in during it, a loss's step only what
+was there at its start; off-market fills count as money moved in at their time), and at most the day's profit `P_d`
+over its time-weighted capital `C_d`, every base and `C_d` at least the $10,000 eligibility floor; a past day the
+points don't cover is read whole, `(E_d − E_d−1 − F_d) / max(E_d−1 + max(F_d, 0), $10,000)`. Capped to
 `r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
