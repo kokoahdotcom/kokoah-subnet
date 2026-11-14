@@ -11,14 +11,25 @@ from kokoah_subnet.validator.store import Store
 
 def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     s = Store(tmp_path / "v.sqlite")
-    s.put_equity("0xA", "2026-10-01", 1000.0, 0.0)
-    s.put_equity("0xA", "2026-10-02", 1100.0, 50.0)
-    s.put_equity("0xA", "2026-10-04", 1200.0, 0.0)  # 10-03 missing: no return across the gap
-    s.put_equity("0xA", "2026-10-05", 1140.0, 0.0)
-    # no recorded points: each day at once, over the capital at work (10-02: 50 moved in, 50 made, over 1,050)
-    assert s.returns("0xa", 60) == pytest.approx([50 / 1050, -0.05])
-    assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
-    assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
+    s.put_equity("0xA", "2026-10-01", 100_000.0, 0.0)
+    s.put_equity("0xA", "2026-10-02", 110_000.0, 5_000.0)
+    s.put_equity("0xA", "2026-10-04", 120_000.0, 0.0)  # 10-03 missing: no return across the gap
+    s.put_equity("0xA", "2026-10-05", 114_000.0, 0.0)
+    # no recorded points: each day at once, over the capital at work (10-02: 5,000 moved in, 5,000 made)
+    assert s.returns("0xa", 60) == pytest.approx([5_000 / 105_000, -0.05])
+    assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((100_000 + 110_000 + 120_000 + 114_000) / 4)
+    assert s.equity_series("0xA", 2) == [("2026-10-04", 120_000.0, 0.0), ("2026-10-05", 114_000.0, 0.0)]
+
+
+def test_a_small_account_s_return_is_over_at_least_the_eligibility_floor(tmp_path: Path) -> None:
+    """$1,000 that makes $100: +1% over the $10,000 floor, not +10%, so a balance kept small at the recorded points
+    never carries the day."""
+    s = Store(tmp_path / "v.sqlite")
+    _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (24, 1_100.0, 100.0)])
+    s.put_equity("0xA", "2026-11-12", 1_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 1_100.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-14", 1_000.0, 0.0, offmarket_moves=())  # no points: the whole day, the same floor
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(0.01), "2026-11-14": pytest.approx(-0.01)}
 
 
 H = 3_600_000
@@ -69,13 +80,13 @@ def test_a_past_day_without_recorded_points_is_read_whole_over_the_capital_at_wo
 
 
 def test_a_gain_made_on_a_few_dollars_before_a_deposit_counts_over_the_capital_at_work(tmp_path: Path) -> None:
-    """$100 makes $10 by 02:00, then $10,000 comes in by 04:00: the day's gain is $10 over the capital at work that
-    day, not the +10% the few dollars made (which a deposit after the fact would otherwise carry)."""
+    """$100 makes $10 by 02:00, then $10,000 comes in by 04:00: the day's gain is $10 over at least the $10,000
+    floor, not the +10% the few dollars made (which a deposit after the fact would otherwise carry)."""
     s = Store(tmp_path / "v.sqlite")
     _record(s, "0xA", "2026-11-13", [(0, 100.0, 0.0), (2, 110.0, 10.0), (4, 10_110.0, 10.0), (24, 10_110.0, 10.0)])
     s.put_equity("0xA", "2026-11-12", 100.0, 0.0, offmarket_moves=())
     s.put_equity("0xA", "2026-11-13", 10_110.0, 10_000.0, offmarket_moves=())
-    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(10 / (100 + 10_000 * 22 / 24))}
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(10 / 10_000)}
 
 
 def test_money_moved_in_off_market_is_taken_off_where_it_came(tmp_path: Path) -> None:
@@ -103,32 +114,32 @@ def test_a_day_whose_profit_does_not_count_shows_only_its_loss(tmp_path: Path) -
     """A thin market's or a cut history's day: its profit is held back (`offmarket_pnl` beyond the off-market fills),
     so a gain shows as nothing; a loss still counts."""
     s = Store(tmp_path / "v.sqlite")
-    _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (24, 1_050.0, 50.0)])
-    _record(s, "0xA", "2026-11-14", [(24, 1_000.0, 0.0)])
-    s.put_equity("0xA", "2026-11-12", 1_000.0, 0.0, offmarket_moves=())
-    s.put_equity("0xA", "2026-11-13", 1_050.0, 0.0, offmarket_pnl=50.0, offmarket_moves=())
-    s.put_equity("0xA", "2026-11-14", 1_000.0, 0.0, offmarket_moves=())
-    assert s.dated_returns("0xA", 5) == {"2026-11-13": 0.0, "2026-11-14": pytest.approx(-50 / 1_050)}
+    _record(s, "0xA", "2026-11-13", [(0, 100_000.0, 0.0), (24, 105_000.0, 5_000.0)])
+    _record(s, "0xA", "2026-11-14", [(24, 100_000.0, 0.0)])
+    s.put_equity("0xA", "2026-11-12", 100_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 105_000.0, 0.0, offmarket_pnl=5_000.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-14", 100_000.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": 0.0, "2026-11-14": pytest.approx(-5_000 / 105_000)}
 
 
 def test_a_day_recorded_before_off_market_times_were_kept_is_read_whole(tmp_path: Path) -> None:
     """A row from an older release with money moved in off-market has no times for it: the whole day, never above
     what it was scored at then. One without any is read over the recorded points."""
     s = Store(tmp_path / "v.sqlite")
-    _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (12, 2_000.0, 30.0), (24, 2_000.0, 30.0)])
-    _record(s, "0xB", "2026-11-13", [(0, 1_000.0, 0.0), (12, 2_000.0, 30.0), (24, 2_000.0, 30.0)])
-    for address, held in (("0xA", 20.0), ("0xB", 0.0)):
-        s.put_equity(address, "2026-11-12", 1_000.0, 0.0)
-        s.put_equity(address, "2026-11-13", 2_000.0, 970.0, offmarket_pnl=held)
-    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(10 / 1_990)}  # not the 10 / 1,000 of then
-    assert s.dated_returns("0xB", 5) == {"2026-11-13": pytest.approx(min(30 / 1_970, 30 / (1_000 + 970 / 2)))}
+    _record(s, "0xA", "2026-11-13", [(0, 100_000.0, 0.0), (12, 200_000.0, 3_000.0), (24, 200_000.0, 3_000.0)])
+    _record(s, "0xB", "2026-11-13", [(0, 100_000.0, 0.0), (12, 200_000.0, 3_000.0), (24, 200_000.0, 3_000.0)])
+    for address, held in (("0xA", 2_000.0), ("0xB", 0.0)):
+        s.put_equity(address, "2026-11-12", 100_000.0, 0.0)
+        s.put_equity(address, "2026-11-13", 200_000.0, 97_000.0, offmarket_pnl=held)
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(1_000 / 199_000)}  # not 1,000 / 100,000 of then
+    assert s.dated_returns("0xB", 5) == {"2026-11-13": pytest.approx(3_000 / 197_000)}
 
 
 def test_the_skill_record_counts_only_days_after_joining(tmp_path: Path) -> None:
     """The backfilled history before the binding stays stored (the record page shows it) but the skill test reads
     only the returns of the days after the address joined: a lucky past cannot be brought in."""
     s = Store(tmp_path / "v.sqlite")
-    for i, value in enumerate((1000.0, 1100.0, 1210.0, 1331.0, 1197.9)):
+    for i, value in enumerate((100_000.0, 110_000.0, 121_000.0, 133_100.0, 119_790.0)):
         s.put_equity("0xA", f"2026-10-{i + 1:02d}", value, 0.0)
     assert s.returns("0xA", 90) == pytest.approx([0.1, 0.1, 0.1, -0.1])
     assert s.returns("0xA", 90, after="2026-10-03") == pytest.approx([0.1, -0.1])
@@ -288,12 +299,12 @@ def test_an_accounts_record_is_the_series_the_validator_scores_on(tmp_path: Path
     the growth of 1 carried over such days, the worst fall from a peak, and the scored days' figures."""
     s = Store(tmp_path / "r.sqlite")
     a = "0x" + "aa" * 20
-    s.put_equity(a, "2026-10-01", 1000.0, 0.0)
-    s.put_equity(a, "2026-10-02", 1100.0, 0.0)  # +10%
-    s.put_equity(a, "2026-10-03", 990.0, 0.0)  # -10%
-    s.put_equity(a, "2026-10-04", 990.0, 0.0, known=False)  # not recorded: no return
-    s.put_equity(a, "2026-10-05", 1089.0, 0.0)  # follows an unknown day: no return
-    s.put_equity(a, "2026-10-06", 1197.9, 0.0)  # +10%
+    s.put_equity(a, "2026-10-01", 100_000.0, 0.0)
+    s.put_equity(a, "2026-10-02", 110_000.0, 0.0)  # +10%
+    s.put_equity(a, "2026-10-03", 99_000.0, 0.0)  # -10%
+    s.put_equity(a, "2026-10-04", 99_000.0, 0.0, known=False)  # not recorded: no return
+    s.put_equity(a, "2026-10-05", 108_900.0, 0.0)  # follows an unknown day: no return
+    s.put_equity(a, "2026-10-06", 119_790.0, 0.0)  # +10%
     assert s.account_record(a) is None  # never scored
     for day, agent in (("2026-10-05", False), ("2026-10-06", True)):
         s.put_miner_days(day, [{"hotkey": "hk", "address": a, "notional": 5000.0, "fills": 3, "pay_alpha": 1.5,
@@ -343,7 +354,7 @@ def test_one_missing_day_does_not_shorten_the_return_series(tmp_path: Path) -> N
     for i, d in enumerate(days):
         if i == 189:
             continue  # no account value that day
-        s.put_equity("0xA", d, 1000.0 + i, 0.0, known=i != 150)
+        s.put_equity("0xA", d, 100_000.0 + 100 * i, 0.0, known=i != 150)
     dated = s.dated_returns("0xA", 90)
     assert len(dated) == 90 and len(s.returns("0xA", 90)) == 90
     assert days[189] not in dated and days[190] not in dated and days[-1] in dated
@@ -355,7 +366,7 @@ def test_one_missing_day_does_not_shorten_the_return_series(tmp_path: Path) -> N
 def test_window_reads_stop_at_the_scored_day(tmp_path: Path) -> None:
     """Scoring 2026-10-03 again, with later days already stored: their returns, activity and reports are not read."""
     s = Store(tmp_path / "w.sqlite")
-    for i, value in enumerate((1000.0, 1100.0, 1210.0, 600.0, 300.0)):
+    for i, value in enumerate((100_000.0, 110_000.0, 121_000.0, 60_000.0, 30_000.0)):
         day = f"2026-10-{i + 1:02d}"
         s.put_equity("0xA", day, value, 0.0)
         s.put_activity("0xA", day, 1, 1, 10.0)
@@ -363,7 +374,7 @@ def test_window_reads_stop_at_the_scored_day(tmp_path: Path) -> None:
     assert list(s.dated_returns("0xA", 90, "2026-10-03")) == ["2026-10-02", "2026-10-03"]
     assert len(s.returns("0xA", 90)) == 4
     assert s.activity_window("0xA", 30, "2026-10-03") == (3, 3, 30.0)
-    assert s.mean_equity("0xA", 30, "2026-10-03") == pytest.approx(1103.33, abs=0.01)
+    assert s.mean_equity("0xA", 30, "2026-10-03") == pytest.approx(110_333.33, abs=0.01)
     s.put_penalty("0xB", 40, "2026-10-02", "hk", "mirrored")
     s.put_penalty("0xC", 40, "2026-10-03", "hk", "mirrored")
     assert s.penalties(14, before_day="2026-10-03") == {"0xb": 40} and set(s.penalties(14)) == {"0xb", "0xc"}

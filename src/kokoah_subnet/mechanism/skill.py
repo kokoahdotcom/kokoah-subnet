@@ -13,14 +13,15 @@ from dataclasses import dataclass
 from .params import Params
 
 
-def daily_return(equity_prev: float, equity: float, flows: float) -> float:
-    """`(E_d − E_{d−1} − flows_d) / (E_{d−1} + max(flows_d, 0))`, at least −100%: the whole day at once, over
-    yesterday's value plus what was moved in. Zero when yesterday's equity was not positive. The validator uses it
-    only for a past day without the exchange's recorded points (one stored before this validator kept them, or before
-    it began): a day it scores always has them, and its return is time-weighted (`eligibility.day_twr`)."""
+def daily_return(equity_prev: float, equity: float, flows: float, floor: float = 0.0) -> float:
+    """`(E_d − E_{d−1} − flows_d) / max(E_{d−1} + max(flows_d, 0), floor)`, at least −100%: the whole day at once,
+    over yesterday's value plus what was moved in (at least `floor`). Zero when yesterday's equity was not positive.
+    The validator uses it only for a past day without the exchange's recorded points (one stored before this
+    validator kept them, or before it began): a day it scores always has them, and its return is time-weighted
+    (`eligibility.day_twr`)."""
     if equity_prev <= 0:
         return 0.0
-    return max(-1.0, (equity - equity_prev - flows) / (equity_prev + max(flows, 0.0)))
+    return max(-1.0, (equity - equity_prev - flows) / max(equity_prev + max(flows, 0.0), floor))
 
 
 def capped(returns: Sequence[float], cap: float) -> list[float]:

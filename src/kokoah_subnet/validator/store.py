@@ -320,16 +320,17 @@ class Store:
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
         timed = self._day_twrs(address, moves)
+        floor = DEFAULT.min_equity_usd  # every return is over at least the eligibility floor
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)
-                out[d1] = min(daily_return(e0, e1, f1 + o1), max(-1.0, (e1 - e0 - f1 - o1) / e0))
+                out[d1] = min(daily_return(e0, e1, f1 + o1, floor), max(-1.0, (e1 - e0 - f1 - o1) / e0))
                 continue
             if t is None:  # a past day without recorded points: the whole day at once
-                out[d1] = daily_return(e0, e1, f1 + o1)
+                out[d1] = daily_return(e0, e1, f1 + o1, floor)
                 continue
             # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
             # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
@@ -377,7 +378,15 @@ class Store:
         for d, fills in days.items():
             d0 = _day_ms(d)
             d1 = d0 + 86_400_000
-            t = day_twr(near(values, v_times, d0, d1), near(profits, p_times, d0, d1), d0, d1, origins.get(d), fills)
+            t = day_twr(
+                near(values, v_times, d0, d1),
+                near(profits, p_times, d0, d1),
+                d0,
+                d1,
+                origins.get(d),
+                fills,
+                DEFAULT.min_equity_usd,  # every return is over at least the eligibility floor
+            )
             if t is not None:
                 out[d] = t
         return out

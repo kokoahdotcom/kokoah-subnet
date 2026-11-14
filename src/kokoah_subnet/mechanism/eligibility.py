@@ -155,6 +155,7 @@ def day_twr(
     end_ms: int,
     origin_ms: int | None = None,
     moved_in: Iterable[tuple[int, float]] = (),
+    floor: float = 0.0,
 ) -> DayReturn | None:
     """The day over the exchange's recorded value and profit points, cut at every recorded point inside it. Each
     step's profit is the recorded profit's change less the money moved in through off-market fills during it
@@ -164,11 +165,12 @@ def day_twr(
     alone (money moved in during it counts from the next recorded point, so a loss is never spread over money that
     came after it, however much: one that held nothing at its start lost everything). A step never loses more than
     everything, and the steps' returns are chained: money moved in never counts for the part of the day before it.
-    A day without money moved has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its
-    capital is `E_{d−1}`. Values at the
-    day's edges are read on the straight line between recorded points, as `day_change` reads them (an edge before the
-    account's history began holds nothing). None when `day_change` cannot say what the day did. A step whose base is
-    not positive (nothing held) adds no return."""
+    Every base and the day's capital are at least `floor` (the validator's: the eligibility floor, so money kept out
+    of the account at the recorded points never makes a small balance carry the day). A day without money moved, its
+    value at least `floor`, has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its
+    capital is `E_{d−1}`. Values at the day's edges are read on the straight line between recorded points, as
+    `day_change` reads them (an edge before the account's history began holds nothing). None when `day_change` cannot
+    say what the day did. A step that made money on a base that is not positive (nothing held) adds no return."""
     vals, pnls = list(values), list(profits)
     change = day_change(vals, pnls, start_ms, end_ms, origin_ms)
     if not change.known:
@@ -192,14 +194,14 @@ def day_twr(
         v0, v1 = edge(vals, t0), edge(vals, t1)
         dp = edge(pnls, t1) - edge(pnls, t0) - moved
         flow = v1 - v0 - dp
-        base = v0 + max(flow, 0.0) if dp >= 0 else v0
+        base = max(v0 + max(flow, 0.0) if dp >= 0 else v0, floor)
         if dp < 0 and base <= 0:
             growth = 0.0  # lost money it did not hold at the step's start
         elif base > 0:
             growth *= max(0.0, 1 + dp / base)
         profit += dp
         capital += flow * ((end_ms - t0) if flow > 0 else (end_ms - t1)) / span
-    return DayReturn(growth - 1, profit, capital)
+    return DayReturn(growth - 1, profit, max(capital, floor))
 
 
 def daily_average_equity(
