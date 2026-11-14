@@ -168,17 +168,23 @@ def test_money_moved_in_inside_a_losing_step_never_shrinks_its_loss() -> None:
 
 
 def test_a_step_never_loses_more_than_everything() -> None:
-    """$100, then $10,000 in and $300 lost before the next point: the step is a total loss, not −300%. An account that
-    held nothing at the step's start lost a share of what came in."""
+    """$100, then $10,000 in and $300 lost before the next point: the step is a total loss, not −300%. So is a loss in
+    a step that started with nothing: money moved in counts from the next recorded point, whatever its size."""
     values = [(DAY0, 100.0), (DAY0 + 2 * H, 9_800.0), (DAY0 + 24 * H, 9_800.0)]
     profits = [(DAY0, 0.0), (DAY0 + 2 * H, -300.0), (DAY0 + 24 * H, -300.0)]
     t = _twr(values, profits)
     assert t is not None and t.twr == -1.0
     empty = _twr(
-        [(DAY0, 0.0), (DAY0 + 2 * H, 9_900.0), (DAY0 + 24 * H, 9_900.0)],
-        [(DAY0, 0.0), (DAY0 + 2 * H, -100.0), (DAY0 + 24 * H, -100.0)],
+        [(DAY0, 1_000.0), (DAY0 + 2 * H, 0.0), (DAY0 + 4 * H, 9_900.0), (DAY0 + 24 * H, 9_900.0)],
+        [(DAY0, 0.0), (DAY0 + 2 * H, 0.0), (DAY0 + 4 * H, -100.0), (DAY0 + 24 * H, -100.0)],
     )
-    assert empty is not None and empty.twr == pytest.approx(-0.01)
+    assert empty is not None and empty.twr == -1.0
+    # a gain in a step that started with nothing counts over what came in
+    gain = _twr(
+        [(DAY0, 1_000.0), (DAY0 + 2 * H, 0.0), (DAY0 + 4 * H, 10_100.0), (DAY0 + 24 * H, 10_100.0)],
+        [(DAY0, 0.0), (DAY0 + 2 * H, 0.0), (DAY0 + 4 * H, 100.0), (DAY0 + 24 * H, 100.0)],
+    )
+    assert gain is not None and gain.twr == pytest.approx(0.01)
 
 
 def test_money_moved_out_counts_until_the_end_of_its_step() -> None:
