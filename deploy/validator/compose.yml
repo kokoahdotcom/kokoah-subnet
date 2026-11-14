@@ -43,12 +43,13 @@ services:
     pids_limit: 256
     stop_grace_period: 60s
     healthcheck:
-      # healthy once the record is at this release's schema version: the updater starts the interface after that
+      # healthy once the record is at this release's schema version: the updater starts the interface after that.
+      # The start period is the time a migration may take (the updater's VALIDATOR_WAIT_S).
       test: ["CMD", "kokoah-subnet", "validator", "ready"]
       interval: 60s
       timeout: 30s
       retries: 3
-      start_period: 30m
+      start_period: 2h
       start_interval: 10s
 
   interface:
