@@ -323,7 +323,12 @@ class Store:
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
-            if t is None:  # no recorded points for the day: the whole day at once, over yesterday's value
+            if t is None and d1 not in moves:
+                # stored before the off-market fills' times were kept, with money moved in through them: the whole
+                # day, never above what it was scored at then (over yesterday's value alone)
+                out[d1] = min(daily_return(e0, e1, f1 + o1), max(-1.0, (e1 - e0 - f1 - o1) / e0))
+                continue
+            if t is None:  # a past day without recorded points: the whole day at once
                 out[d1] = daily_return(e0, e1, f1 + o1)
                 continue
             # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
@@ -477,9 +482,11 @@ class Store:
             }
             linked = c.execute(select(S.bindings.c.hotkey).where(S.bindings.c.address == a)).first() is not None
         returns = self.dated_returns(a, len(stored))
+        # the last 90 known returns over the last 181 stored days, as `dated_returns(a, 90)` reads them
+        recent = sorted(stored)[-(2 * 90 + 1) :]
         # what the chain paid, only for the whole record (the leaderboard's rows read the record's figures alone)
         earned_days = self.earned_by_address_day(a, {str(m["hotkey"]) for m in scored}) if with_days else {}
-        window = list(self.dated_returns(a, 90).values())
+        window = [r for d, r in returns.items() if not recent or d > recent[0]][-90:]
         every = list(returns.values())
         by_day = {str(m["day"]): m for m in scored}
         days = sorted(set(stored) | set(by_day))
