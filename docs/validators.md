@@ -281,32 +281,35 @@ minutes (a request Docker Hub does not count as a pull). For a new image it:
    for this image. A leaked Docker Hub login can publish an image, but no updater installs it. An image whose build
    number (the workflow run, inside the signature) is below the installed one's is refused too, so an older release
    cannot be put back;
-2. downloads it by its digest and checks that its compose file works on this host (`docker compose config`); if not,
-   nothing changes and it looks again an hour later;
+2. downloads it by its digest and checks it on this host: its compose file must work here (`docker compose config`),
+   and it must say whether it can be rolled back (below); if not, nothing changes and it waits an hour;
 3. tags it `kokoah-subnet:current` (the release running well until then stays as `kokoah-subnet:previous`), installs
-   its compose file, and restarts the validator: the new validator must bring the record to the release's schema
-   version (it migrates it) within two hours and then run two minutes without a restart;
-4. then restarts the health check and the interface, records the release in `release.json`, removes older images
-   (keeping `current` and `previous`) and restarts itself.
+   its compose file, and starts the new validator, which must bring the record to the release's schema version (it
+   migrates it) within two hours and then run two minutes without a restart. A validator that stops or restarts
+   fails at once, without waiting out the two hours;
+4. records the release in `release.json`, starts the health check and the interface, removes older images (keeping
+   `current` and `previous`) and restarts itself (its helper container's log: `docker logs kokoah-subnet-updater-hop`).
 
-A validator of a new release that does not start or keeps restarting is **rolled back** at step 3: the release before
-comes back with its own compose file and everything restarts. If the release before then runs, the new one is noted
-in `refused.json` and tried again only after six hours (a passing problem of the host, such as the database being
-down, would otherwise keep a good release out); if neither runs, the host is the problem and nothing is refused.
-The record stays as the new release left it. Releases only add to it, so the release before reads it; a release
-whose migration does more says so (`ROLLBACK_FLOOR` in `src/kokoah_subnet/validator/migrations.py`), and is never
-rolled back onto older code: it stays until a fixed release follows.
+A validator of a new release that fails at step 3 is **rolled back**: the release before comes back with its own
+compose file and everything restarts. If the release before then runs, the new one is held back from this host in
+`refused.json`, for six hours and twice as long at each new failure, up to a week (a passing problem of the host would
+otherwise keep a good release out for good); if neither runs, the host is the problem and the new one is tried again
+an hour later. The record stays as the new release left it. Releases only add to it, so the release before reads it;
+a release whose migration does more says so (`ROLLBACK_FLOOR` in `src/kokoah_subnet/validator/migrations.py`), and
+once the record has gone through that step it is never rolled back onto older code: it stays until a fixed release
+follows.
 
 Every look first makes sure the host runs the release in `release.json`: an install or a rollback cut short (a
-reboot, Docker restarting) is put right at the next look, and so is an updater that did not restart itself. Docker
-not answering is never taken as a verdict on a release.
+reboot, Docker restarting) is put right at the next look, and so is an updater that did not restart itself. A repair
+that does not hold is tried again an hour later, and meanwhile the look goes on to the published release, so a fixed
+release still installs. Docker not answering is never taken as a verdict on a release.
 
-The updater's log says what it installed, refused or rolled back: `sudo docker logs kokoah-subnet-updater`. To try a
-refused release again sooner, remove its entry from `/opt/kokoah-subnet/docker/refused.json`. To hold updates, stop
-the updater (`sudo docker stop kokoah-subnet-updater`; it stays stopped until `sudo docker start
-kokoah-subnet-updater`, which first puts the recorded release back and then installs the newest). A release that
-needs a step on the host as well (such as a new database role) says so in its announcement, and its compose file
-check keeps it from installing until the step is done when the file depends on it.
+The updater's log says what it installed, held back or rolled back: `sudo docker logs kokoah-subnet-updater`. To try
+a held-back release again sooner, remove its entry from `/opt/kokoah-subnet/docker/refused.json`. To hold updates,
+stop the updater (`sudo docker stop kokoah-subnet-updater`; it stays stopped until `sudo docker start
+kokoah-subnet-updater` or `install.sh`, which first put the recorded release back and then install the newest). A
+release that needs a step on the host as well (such as a new database role) says so in its announcement, and its
+compose file check keeps it from installing until the step is done when the file depends on it.
 
 **By hand (systemd).**
 
