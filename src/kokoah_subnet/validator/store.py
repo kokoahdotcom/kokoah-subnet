@@ -394,6 +394,7 @@ class Store:
             }
             linked = c.execute(select(S.bindings.c.hotkey).where(S.bindings.c.address == a)).first() is not None
         returns = self.dated_returns(a, len(stored))
+        earned_days = self.earned_by_address_day(a, {str(m["hotkey"]) for m in scored})
         window = list(self.dated_returns(a, 90).values())
         every = list(returns.values())
         by_day = {str(m["day"]): m for m in scored}
@@ -409,6 +410,9 @@ class Store:
             "return_all": ret_all,
             "worst_drop_all": drop_all,
             "agent_days": sum(1 for m in scored if m["agent_verified"]),
+            # what the chain paid the address's hotkeys (all of its scored ones), and the scored days' planned total
+            "earned_alpha": sum(earned_days.values()),
+            "planned_alpha": float(sum(float(m["pay_alpha"] or 0.0) for m in scored)),
             "first_day": days[0],
             "last_day": days[-1],
             # the skill record counts the days after this one (the latest scored day's link)
@@ -433,7 +437,10 @@ class Store:
                         "avg_equity_usd": float(avg) if avg is not None else None,
                         "volume_usd": float(m["notional"] or 0.0) if m is not None else 0.0,
                         "fills": int(m["fills"] or 0) if m is not None else 0,
+                        # the scored day's planned allocation (also as `pay_alpha`), and what the chain paid that day
                         "pay_alpha": float(m["pay_alpha"] or 0.0) if m is not None else 0.0,
+                        "planned_alpha": float(m["pay_alpha"] or 0.0) if m is not None else 0.0,
+                        "earned_alpha": earned_days.get(d, 0.0),
                         "eligible": bool(m["eligible"]) if m is not None else False,
                         "agent_verified": bool(m["agent_verified"]) if m is not None else False,
                     }
@@ -946,6 +953,59 @@ class Store:
             ).all()
         return {str(hk): (float(total or 0.0), first, last) for hk, total, first, last in rows}
 
+    def earned_by_day(self, hotkeys: Iterable[str] | None = None) -> dict[str, dict[str, float]]:
+        """Per hotkey, the alpha the chain actually paid it each UTC day: the `emission` of every epoch this validator
+        recorded (once a tempo), summed by the UTC day it recorded the epoch (within a tempo of the payment). What a
+        miner received, as opposed to a scored day's planned allocation (`miner_days.pay_alpha`): that plan is paid
+        over the following tempos, and only in proportion to the stake behind the validators that set it. Epochs this
+        validator did not record (while it was down) are missing. Only `hotkeys` when given."""
+        e, n = S.epochs, S.epoch_neurons
+        query = select(n.c.hotkey, e.c.at, n.c.emission).select_from(n.join(e, e.c.block == n.c.block))
+        query = query.where(n.c.emission > 0)
+        wanted = None if hotkeys is None else sorted(set(hotkeys))
+        if wanted is not None:
+            if not wanted:
+                return {}
+            query = query.where(n.c.hotkey.in_(wanted))
+        out: dict[str, dict[str, float]] = {}
+        with self._engine.connect() as c:
+            for hk, at, emission in c.execute(query).all():
+                when = at.astimezone(UTC) if at.tzinfo else at.replace(tzinfo=UTC)
+                days = out.setdefault(str(hk), {})
+                day = when.strftime("%Y-%m-%d")
+                days[day] = days.get(day, 0.0) + float(emission or 0.0)
+        return out
+
+    def earned_by_address_day(self, address: str, hotkeys: Iterable[str]) -> dict[str, float]:
+        """The alpha the chain paid `address`'s miners each UTC day (`earned_by_day` of its hotkeys): a day's payment
+        counts for the address its hotkey was scored with on the latest scored day before it, whose weights paid it
+        (a hotkey that moved to another address earns for that one from then on)."""
+        a = address.lower()
+        hks = sorted(set(hotkeys))
+        if not hks:
+            return {}
+        md = S.miner_days
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(md.c.hotkey, md.c.day, md.c.address).where(md.c.hotkey.in_(hks)).order_by(md.c.day)
+            ).all()
+        scored: dict[str, list[tuple[str, str]]] = {}
+        for hk, day, addr in rows:
+            scored.setdefault(str(hk), []).append((str(day), str(addr or "").lower()))
+        out: dict[str, float] = {}
+        for hk, paid in self.earned_by_day(hks).items():
+            history = scored.get(hk, [])
+            for day, alpha in paid.items():
+                before = [addr for d, addr in history if d < day]
+                if before and before[-1] == a:
+                    out[day] = out.get(day, 0.0) + alpha
+        return out
+
+    def miner_hotkeys(self) -> list[str]:
+        """Every hotkey ever scored as a miner."""
+        with self._engine.connect() as c:
+            return [str(hk) for (hk,) in c.execute(select(S.miner_days.c.hotkey).distinct()).all()]
+
     # ----- totals for the ranking -------------------------------------------------------------------------
 
     def miner_totals(self) -> dict[str, dict[str, float]]:
@@ -989,12 +1049,27 @@ class Store:
                     func.sum(d.c.volume_usd),
                 )
             ).first()
+            prices = {str(day): float(p) for day, p in c.execute(select(d.c.day, d.c.price_usd)).all() if p is not None}
         n, paid, burn, paid_usd, fees, vol = row if row else (0, 0, 0, 0, 0, 0)
+        # what the chain actually paid the miners, each day valued at that day's price (a day not scored yet, such as
+        # today, at the latest one)
+        earned, earned_usd = 0.0, 0.0
+        latest_price = prices[max(prices)] if prices else 0.0
+        for days in self.earned_by_day(self.miner_hotkeys()).values():
+            for day, alpha in days.items():
+                earned += alpha
+                earned_usd += alpha * prices.get(day, latest_price)
         return {
             "days": float(n or 0),
+            # the scored days' planned allocations (what the validators set the weights for), kept under their old
+            # names; `earned_*` is what the chain actually paid
             "paid_alpha": float(paid or 0.0),
+            "planned_alpha": float(paid or 0.0),
             "burn_alpha": float(burn or 0.0),
             "paid_usd": float(paid_usd or 0.0),
+            "planned_usd": float(paid_usd or 0.0),
+            "earned_alpha": earned,
+            "earned_usd": earned_usd,
             "builder_fee_usd": float(fees or 0.0),
             "volume_usd": float(vol or 0.0),
         }

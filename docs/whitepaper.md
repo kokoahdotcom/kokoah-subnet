@@ -517,5 +517,6 @@ artifact: per-miner eligibility, credit, skill and its parts, the entry test, th
 status; weights; file hash and whether it matches Kokoah's commitment; refused bindings; errors), `/bindings`,
 `/leaderboard` (the ranking with totals over all days and each account's record: 90-day return, worst drop, losing
 days, verified agent days), `/accounts/{address}` (one account's whole record: every stored day's return as scored,
-the growth curve and the scored figures), `/summary` (alpha paid, builder fees, totals over all days), and `/` (the
-leaderboard page).
+the growth curve and the scored figures), `/summary` (alpha planned and actually paid, builder fees, totals over all
+days), and `/` (the leaderboard page). Planned is a scored day's allocation; earned is what the chain paid each
+hotkey, read from the metagraph every tempo.

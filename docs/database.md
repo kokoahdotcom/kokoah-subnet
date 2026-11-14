@@ -53,6 +53,8 @@ SELECT day, notional, builder_fee, confidence, quality, skill, entry_psr, entry_
 SELECT day, hotkey, ok, reason, image_digest FROM agent_checks ORDER BY day DESC;
 -- what the chain actually paid each UID per epoch
 SELECT e.at, n.uid, n.hotkey, n.emission, n.incentive FROM epoch_neurons n JOIN epochs e ON e.block = n.block ORDER BY e.at, n.uid;
+-- what each hotkey actually earned per UTC day (the interface's `earned_alpha`)
+SELECT (e.at AT TIME ZONE 'UTC')::date AS day, n.hotkey, sum(n.emission) FROM epoch_neurons n JOIN epochs e ON e.block = n.block WHERE n.emission > 0 GROUP BY 1, 2 ORDER BY 1, 2;
 -- who was not eligible, and why
 SELECT day, hotkey, ineligible_reason, avg_equity_usd, equity_points, qual_trades, qual_notional FROM miner_days WHERE NOT eligible ORDER BY day;
 -- where the counted fills came from (the builder file, or the account's own history)

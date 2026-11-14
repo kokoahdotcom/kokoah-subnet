@@ -94,6 +94,8 @@ def create_app(store: Store) -> FastAPI:
         if latest is None:
             return []
         totals = store.miner_totals()
+        hotkeys = [m["hotkey"] for m in json.loads(latest[2])["miners"]]
+        earned = store.earned_by_day(hotkeys)
         rows = []
         for m in json.loads(latest[2])["miners"]:
             t = totals.get(m["hotkey"], {})
@@ -115,7 +117,11 @@ def create_app(store: Store) -> FastAPI:
                     "mean_equity_usd": store.mean_equity(m["address"], DEFAULT.gate_days, latest[0]),
                     "volume_pay_alpha": m.get("volume_pay_alpha", 0.0),
                     "skill_pay_alpha": m.get("skill_pay_alpha", 0.0),
+                    # planned: the scored day's allocation (what the weights were set for; also as `pay_alpha`)
                     "pay_alpha": m["pay_alpha"],
+                    "planned_alpha": m["pay_alpha"],
+                    # earned: what the chain actually paid the hotkey during that UTC day, from the epochs recorded
+                    "earned_alpha": earned.get(m["hotkey"], {}).get(latest[0], 0.0),
                     "mirrored_share": m["mirrored_share"],
                     "reported": m["reported"],
                     "eligible": m.get("eligible", True),
@@ -126,6 +132,8 @@ def create_app(store: Store) -> FastAPI:
                     "days": int(t.get("days", 0)),
                     "active_days": int(t.get("active_days", 0)),
                     "total_pay_alpha": t.get("pay_alpha", 0.0),
+                    "total_planned_alpha": t.get("pay_alpha", 0.0),
+                    "total_earned_alpha": sum(earned.get(m["hotkey"], {}).values()),
                     "total_builder_fee_usd": t.get("builder_fee_usd", 0.0),
                     "total_volume_usd": t.get("volume_usd", 0.0),
                     "profit_usd": t.get("profit_usd", 0.0),

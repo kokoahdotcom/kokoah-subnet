@@ -458,6 +458,31 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         assert (await c.get("/accounts/0x" + "99" * 20)).status_code == 404
         assert (await c.get("/accounts/not-an-address")).status_code == 400
         assert summary["burn_alpha"] == pytest.approx(DEFAULT.miner_pool_alpha - summary["paid_alpha"])
+        # planned (the scored day's allocation) and earned (what the chain paid): nothing paid on chain yet
+        assert board[0]["planned_alpha"] == board[0]["pay_alpha"] > 0
+        assert board[0]["total_planned_alpha"] == board[0]["total_pay_alpha"]
+        assert board[0]["earned_alpha"] == 0.0 and board[0]["total_earned_alpha"] == 0.0
+        assert summary["planned_alpha"] == summary["paid_alpha"] and summary["earned_alpha"] == 0.0
+        assert account["record"]["planned_alpha"] == pytest.approx(board[0]["pay_alpha"])
+        assert account["record"]["earned_alpha"] == 0.0 and account["days"][-1]["earned_alpha"] == 0.0
+        # the chain pays the hotkey: the interface reports it as earned
+        from datetime import datetime
+
+        from sqlalchemy import update
+
+        from kokoah_subnet.validator import schema as S
+
+        assert store.put_epoch(9_999, 27, 360, 0.01, [{"uid": 0, "hotkey": board[0]["hotkey"], "emission": 147.6}])
+        with store._engine.begin() as conn:
+            conn.execute(
+                update(S.epochs)
+                .where(S.epochs.c.block == 9_999)
+                .values(at=datetime.fromisoformat(f"{DAY}T12:00:00+00:00"))
+            )
+        paid = (await c.get("/leaderboard")).json()
+        row = next(r for r in paid if r["hotkey"] == board[0]["hotkey"])
+        assert row["earned_alpha"] == pytest.approx(147.6) and row["total_earned_alpha"] == pytest.approx(147.6)
+        assert (await c.get("/summary")).json()["earned_alpha"] == pytest.approx(147.6)
         assert summary["builder_fee_usd"] == pytest.approx(300.0)
         assert "access-control-allow-origin" in {
             k.lower() for k in (await c.get("/summary", headers={"Origin": "https://x"})).headers
