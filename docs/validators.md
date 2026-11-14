@@ -285,23 +285,28 @@ minutes (a request Docker Hub does not count as a pull). For a new image it:
    nothing changes and it looks again an hour later;
 3. tags it `kokoah-subnet:current` (the release running well until then stays as `kokoah-subnet:previous`), installs
    its compose file, and restarts the validator: the new validator must bring the record to the release's schema
-   version (it migrates it) within 30 minutes and then run two minutes without a restart;
+   version (it migrates it) within two hours and then run two minutes without a restart;
 4. then restarts the health check and the interface, records the release in `release.json`, removes older images
    (keeping `current` and `previous`) and restarts itself.
 
-A validator of a new release that does not start or keeps restarting is **rolled back** at step 3: `previous` becomes
-`current` again with its compose file, everything restarts, and the release is noted in `refused.json` and never
-tried again on this host (a fixed release has a new digest). The record stays as the new release left it; releases
-only add to it, so the release before reads it.
+A validator of a new release that does not start or keeps restarting is **rolled back** at step 3: the release before
+comes back with its own compose file and everything restarts. If the release before then runs, the new one is noted
+in `refused.json` and tried again only after six hours (a passing problem of the host, such as the database being
+down, would otherwise keep a good release out); if neither runs, the host is the problem and nothing is refused.
+The record stays as the new release left it. Releases only add to it, so the release before reads it; a release
+whose migration does more says so (`ROLLBACK_FLOOR` in `src/kokoah_subnet/validator/migrations.py`), and is never
+rolled back onto older code: it stays until a fixed release follows.
 
-The updater's log says what it installed, refused or rolled back: `sudo docker logs kokoah-subnet-updater`. To hold
-updates, stop it (`sudo docker stop kokoah-subnet-updater`; it stays stopped until
-`sudo docker start kokoah-subnet-updater`, which also installs the newest release). To go back one release by hand,
-with the updater stopped: `sudo docker tag kokoah-subnet:previous kokoah-subnet:current`, then
-`sudo docker compose --project-directory /opt/kokoah-subnet/docker up -d validator interface check` (without
-`interface` when the profile is off), and keep the updater stopped until a fixed release is out. A release that needs
-a step on the host as well (such as a new database role) says so in its announcement, and its compose file check
-keeps it from installing until the step is done when the file depends on it.
+Every look first makes sure the host runs the release in `release.json`: an install or a rollback cut short (a
+reboot, Docker restarting) is put right at the next look, and so is an updater that did not restart itself. Docker
+not answering is never taken as a verdict on a release.
+
+The updater's log says what it installed, refused or rolled back: `sudo docker logs kokoah-subnet-updater`. To try a
+refused release again sooner, remove its entry from `/opt/kokoah-subnet/docker/refused.json`. To hold updates, stop
+the updater (`sudo docker stop kokoah-subnet-updater`; it stays stopped until `sudo docker start
+kokoah-subnet-updater`, which first puts the recorded release back and then installs the newest). A release that
+needs a step on the host as well (such as a new database role) says so in its announcement, and its compose file
+check keeps it from installing until the step is done when the file depends on it.
 
 **By hand (systemd).**
 
@@ -327,7 +332,8 @@ The scripts and unit files are copied again, so changes to them take effect too.
 `sudo systemctl disable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer`. Then follow
 the Docker part of section 6 (the `.env` file, then `install.sh` from the repository): the settings, the data and the
 record stay as they are. `install.sh` refuses to start while a systemd validator, interface or check runs, restarts
-or is enabled, and prints the command that stops them.
+or is enabled, and prints the command that stops them. Run again later, it never installs a release older than the
+one recorded unless given `--allow-older`.
 
 - **Parameter changes** are versioned in the code, announced at least seven days before they take effect, and
   published in every daily artifact as the mechanism's version. Such a change reaches main on the day it takes
