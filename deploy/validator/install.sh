@@ -55,8 +55,10 @@ digest=$(docker run --rm "$cosign" verify "$image:latest" \
 [ -n "$digest" ] || { echo "$image:latest carries no signature of the release workflow: not installed" >&2; exit 1; }
 echo "verified $image@$digest" >&2
 
-# an updater of an earlier install waits meanwhile (one installs at a time), and runs again whatever happens
-if docker stop kokoah-subnet-updater >/dev/null 2>&1; then
+# a running updater of an earlier install waits meanwhile (one installs at a time) and runs again whatever happens;
+# the setup itself starts the updater when it is done
+if [ "$(docker inspect --type container --format '{{.State.Running}}' kokoah-subnet-updater 2>/dev/null)" = true ]; then
+    docker stop kokoah-subnet-updater >/dev/null
     trap 'rm -rf "$DOCKER_CONFIG"; docker start kokoah-subnet-updater >/dev/null 2>&1 || true' EXIT
 fi
 docker pull --quiet "$image@$digest" >/dev/null
