@@ -833,19 +833,6 @@ def test_the_compose_file_keeps_the_names_the_updater_and_older_hosts_rely_on() 
     assert period and int(period.group(1)) * 3600 >= u.VALIDATOR_WAIT_S
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="needs docker compose")
-def test_the_compose_file_is_valid(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("KOKOAH_UID=998\nKOKOAH_GID=998\nCOMPOSE_PROFILES=interface\n")
-    args = ["docker", "compose", "--project-directory", str(tmp_path), "-f", str(ROOT / "deploy/validator/compose.yml")]
-    if subprocess.run([*args[:2], "version"], capture_output=True).returncode != 0:
-        pytest.skip("needs docker compose")
-    subprocess.run([*args, "config", "--quiet", "--no-env-resolution"], check=True, capture_output=True)
-    services = subprocess.run(
-        [*args, "config", "--services", "--no-env-resolution"], check=True, capture_output=True, text=True
-    )
-    assert set(services.stdout.split()) == {"validator", "interface", "check", "updater"}
-
-
 def test_install_script_and_image_pin_what_the_updater_trusts() -> None:
     install = (ROOT / "deploy/validator/install.sh").read_text()
     dockerfile = (ROOT / "deploy/validator/Dockerfile").read_text()

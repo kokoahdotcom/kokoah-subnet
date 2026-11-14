@@ -67,3 +67,14 @@ jobs:
           run --entrypoint docker kokoah-subnet:ci compose version
           run --entrypoint cosign kokoah-subnet:ci version
           run --entrypoint cat kokoah-subnet:ci /opt/kokoah-subnet/compose.yml | cmp - deploy/validator/compose.yml
+      - name: the image's compose file, checked by the compose that will run it
+        run: |
+          mkdir -p "$RUNNER_TEMP/etc" "$RUNNER_TEMP/project"
+          touch "$RUNNER_TEMP/etc/db.env" "$RUNNER_TEMP/etc/db-reader.env" "$RUNNER_TEMP/etc/validator-main.env"
+          printf 'KOKOAH_UID=998\nKOKOAH_GID=998\nCOMPOSE_PROFILES=interface\n' > "$RUNNER_TEMP/project/.env"
+          compose() {
+            docker run --rm -v "$RUNNER_TEMP/etc:/etc/kokoah-subnet:ro" -v "$RUNNER_TEMP/project:/project:ro" \
+              --entrypoint docker kokoah-subnet:ci compose --project-directory /project -f /opt/kokoah-subnet/compose.yml "$@"
+          }
+          compose config --quiet
+          test "$(compose config --services | sort | tr '\n' ' ')" = "check interface updater validator "
