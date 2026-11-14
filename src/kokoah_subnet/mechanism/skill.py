@@ -14,10 +14,13 @@ from .params import Params
 
 
 def daily_return(equity_prev: float, equity: float, flows: float) -> float:
-    """`(E_d − E_{d−1} − flows_d) / E_{d−1}`; zero when yesterday's equity was not positive."""
+    """`(E_d − E_{d−1} − flows_d) / (E_{d−1} + max(flows_d, 0))`, at least −100%: the day's profit over the capital at
+    work, money moved in counted from the start of the day (a deposit on a nearly empty account makes the day's
+    profit or loss a share of what was traded with, not of yesterday's few dollars). Zero when yesterday's equity was
+    not positive."""
     if equity_prev <= 0:
         return 0.0
-    return (equity - equity_prev - flows) / equity_prev
+    return max(-1.0, (equity - equity_prev - flows) / (equity_prev + max(flows, 0.0)))
 
 
 def capped(returns: Sequence[float], cap: float) -> list[float]:

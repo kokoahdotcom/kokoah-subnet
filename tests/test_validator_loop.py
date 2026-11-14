@@ -332,7 +332,8 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     # stored: equity, positions, activity, bindings, states, the day's artifact with its file hash
     # the backfilled day, then today; the 2,000-dollar off-market gift (1 BTC bought 2% under the mark) is a flow
     assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, pytest.approx(2000.0))]
-    assert store.returns(addr_a, 5) == [pytest.approx((25000 - 24000 - 2000) / 24000)]
+    # 2,000 moved in: the day's loss of 1,000 over the 26,000 at work
+    assert store.returns(addr_a, 5) == [pytest.approx((25000 - 24000 - 2000) / (24000 + 2000))]
     assert store.position_series([addr_a], [DAY])[addr_a] == {"BTC": [50000.0]}
     assert store.activity_window(addr_a, 30, DAY) == (10, 1, 1_000_000.0)
     assert set(store.bindings()) == {HK_A, HK_B}
