@@ -177,18 +177,26 @@ for information; it does not bound pay.
 
 ## 7. Skill factor `g'` (windows 60 and 30 days, smoothed)
 
-Daily returns of the bound address, deposits and withdrawals removed, over the capital at work, capped at ±10%:
+Daily returns of the bound address, deposits and withdrawals removed, capped at ±10%. Each day is cut into steps
+`i` at the exchange's recorded account-value and profit points inside it (the day's edges read on the straight line
+between points, as in §3):
 
 ```
-F_d = flows_d + offmarket_d
-r_d = max(−1, (E_d − E_{d−1} − F_d) / (E_{d−1} + max(F_d, 0)))       r̃_d = max(−0.10, min(0.10, r_d))
+Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i        B_i = E_{i−1} + max(F_i, 0)
+TWR_d = Π_i (1 + Δp_i / B_i) − 1
+C_d   = E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0)
+r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
-`flows_d` are deposits, withdrawals, account and vault transfers; `offmarket_d` is the money moved in through
-off-market fills that day (§3, item 2). Money moved in counts as capital from the start of the day, so a deposit into
-a nearly empty account makes the day's profit or loss a share of what was traded with; a day never loses more than
-everything (−100%). A day has a return only when its account value and the previous day's are
-both known; the windows below count known returns, so a day without one (an account value that could not be read,
+`offmarket_i` is the money moved in through off-market fills (§3, item 2) during the step, by the fills' times;
+`F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
+the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there when it
+was made, so money moved in after it never shrinks it; a gain is at most the day's profit over its time-weighted
+capital `C_d`, so one made on a few dollars before a deposit is not counted as made on all of it (with `C_d ≤ 0`, a
+day that made nothing has no gain). A day without money moved has exactly `(E_d − E_{d−1}) / E_{d−1}`. A day
+without recorded points around it, or with off-market fills whose times are not known, is read whole:
+`r_d = max(−1, (E_d − E_{d−1} − flows_d − offmarket_d) / E_{d−1})`. A day never loses more than everything (−100%).
+A day has a return only when its account value and the previous day's are both known; the windows below count known returns, so a day without one (an account value that could not be read,
 or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 
 Confidence, last 60 days: `PSR` = probabilistic Sharpe ratio of `r̃` (Bailey and López de Prado 2012; skew- and

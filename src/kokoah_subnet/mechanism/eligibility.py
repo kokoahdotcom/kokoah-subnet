@@ -137,6 +137,66 @@ def day_change(
     return DayChange(v0, v1, p1 - p0)
 
 
+@dataclass(frozen=True)
+class DayReturn:
+    """A day from the exchange's own record, cut at its recorded points: its time-weighted return, its profit and the
+    capital at work."""
+
+    twr: float  # the steps' returns chained: Π(1 + Δp_i / base_i) − 1
+    profit: float  # the recorded profit over the day, less the money moved in through off-market fills
+    capital: float  # the start value plus each step's money moved in (from the step's start) or out (from its end),
+    # weighted by the part of the day after it (Modified Dietz)
+
+
+def day_twr(
+    values: Iterable[tuple[int, float]],
+    profits: Iterable[tuple[int, float]],
+    start_ms: int,
+    end_ms: int,
+    origin_ms: int | None = None,
+    moved_in: Iterable[tuple[int, float]] = (),
+) -> DayReturn | None:
+    """The day over the exchange's recorded value and profit points, cut at every recorded point inside it. Each
+    step's profit is the recorded profit's change less the money moved in through off-market fills during it
+    (`moved_in`: time ms, amount; a fill before the first recorded point or after the last one counts in the step
+    next to it), which counts as money moved in instead. Its base is the value at the step's start plus what was moved
+    in during it (`max(V_i − V_{i−1} − Δp_i, 0)`), and the steps' returns are chained: money moved in therefore counts
+    only from the step it arrived in, never for the part of the day before it. A day without money moved has exactly
+    the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its capital is `E_{d−1}`. Values at the
+    day's edges are read on the straight line between recorded points, as `day_change` reads them (an edge before the
+    account's history began holds nothing). None when `day_change` cannot say what the day did. A step whose base is
+    not positive (nothing held) adds no return."""
+    vals, pnls = list(values), list(profits)
+    change = day_change(vals, pnls, start_ms, end_ms, origin_ms)
+    if not change.known:
+        return None
+
+    def edge(points: list[tuple[int, float]], t: int) -> float:
+        v = value_at(points, t)
+        return 0.0 if v is None else v  # before the history began (day_change accepted it only then)
+
+    inner = sorted({int(t) for t, _ in vals + pnls if start_ms < int(t) < end_ms})
+    times = [start_ms, *inner, end_ms]
+    moves = sorted((min(max(int(t), start_ms), end_ms), float(a)) for t, a in moved_in)
+    span = end_ms - start_ms
+    growth, profit, capital = 1.0, 0.0, edge(vals, start_ms)
+    k = 0
+    for i, (t0, t1) in enumerate(zip(times, times[1:], strict=False)):
+        moved = 0.0
+        while k < len(moves) and (moves[k][0] <= t1 or i == len(times) - 2):
+            moved += moves[k][1]
+            k += 1
+        v0, v1 = edge(vals, t0), edge(vals, t1)
+        dp = edge(pnls, t1) - edge(pnls, t0) - moved
+        flow = v1 - v0 - dp
+        base = v0 + max(flow, 0.0)
+        if base > 0:
+            growth *= 1 + dp / base
+        profit += dp
+        capital += flow * ((end_ms - t0) if flow > 0 else (end_ms - t1)) / span
+    return DayReturn(growth - 1, profit, capital)
+
+
 def daily_average_equity(
     points: Iterable[tuple[int, float]],
     start_ms: int,

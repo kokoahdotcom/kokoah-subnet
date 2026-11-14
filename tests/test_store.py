@@ -15,23 +15,106 @@ def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
     s.put_equity("0xA", "2026-10-02", 1100.0, 50.0)
     s.put_equity("0xA", "2026-10-04", 1200.0, 0.0)  # 10-03 missing: no return across the gap
     s.put_equity("0xA", "2026-10-05", 1140.0, 0.0)
-    # 10-02: 50 moved in, 50 made, over the 1,050 at work.
-    assert s.returns("0xa", 60) == pytest.approx([50 / 1050, -0.05])
+    # no recorded points: each day at once, over the day before's value (10-02: 50 moved in, 50 made)
+    assert s.returns("0xa", 60) == pytest.approx([0.05, -0.05])
     assert s.mean_equity("0xA", 30, "2026-10-05") == pytest.approx((1000 + 1100 + 1200 + 1140) / 4)
     assert s.equity_series("0xA", 2) == [("2026-10-04", 1200.0, 0.0), ("2026-10-05", 1140.0, 0.0)]
 
 
+H = 3_600_000
+
+
+def _ms(day: str, hour: float = 0.0) -> int:
+    from datetime import UTC, datetime
+
+    return int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000 + hour * H)
+
+
+def _record(s: Store, address: str, day: str, points: list[tuple[float, float, float]]) -> None:
+    """The exchange's recorded (hour of `day`, value, profit) points, as a validator keeps them."""
+    from kokoah_subnet.mechanism import DEFAULT
+
+    s.put_equity_points(address, DEFAULT.equity_window, [(_ms(day, h), v) for h, v, _ in points], day)
+    s.put_equity_points(address, DEFAULT.equity_window + ":pnl", [(_ms(day, h), p) for h, _, p in points], day)
+
+
 def test_a_deposit_day_s_return_is_over_the_capital_at_work(tmp_path: Path) -> None:
-    """An account holding a few dollars that takes a deposit and loses a little that day: the stored return, the
-    account record's growth and its worst drop stay sane (the old base, yesterday's few dollars, gave −1,080%)."""
+    """An account holding a few dollars takes a deposit and loses a little that day: about −0.36%, not the −1,080% of
+    the old base (yesterday's few dollars). A day the recorded points don't cover is read whole."""
     s = Store(tmp_path / "v.sqlite")
-    s.put_equity("0xA", "2026-11-12", 3.98, 0.0)
-    s.put_equity("0xA", "2026-11-13", 3.98 + 11_900.0 - 43.0, 11_900.0)
-    s.put_equity("0xA", "2026-11-14", 11_860.98 * 1.01, 0.0)
+    _record(
+        s, "0xA", "2026-11-13", [(0, 3.98, 0.0), (2, 11_903.98, 0.0), (20, 11_860.98, -43.0), (24, 11_860.98, -43.0)]
+    )
+    s.put_equity("0xA", "2026-11-12", 3.98, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 11_860.98, 11_900.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-14", 11_860.98 * 1.01, 0.0, offmarket_moves=())
     assert s.dated_returns("0xA", 5) == {
         "2026-11-13": pytest.approx(-43 / 11_903.98),
-        "2026-11-14": pytest.approx(0.01),
+        "2026-11-14": pytest.approx(0.01),  # no points to the end of the day: the whole day
     }
+
+
+def test_a_day_without_recorded_points_never_loses_more_than_everything(tmp_path: Path) -> None:
+    s = Store(tmp_path / "v.sqlite")
+    s.put_equity("0xA", "2026-11-12", 3.98, 0.0)
+    s.put_equity("0xA", "2026-11-13", 11_860.98, 11_900.0)
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": -1.0}
+
+
+def test_a_gain_made_on_a_few_dollars_before_a_deposit_counts_over_the_capital_at_work(tmp_path: Path) -> None:
+    """$100 makes $10 by 02:00, then $10,000 comes in by 04:00: the day's gain is $10 over the capital at work that
+    day, not the +10% the few dollars made (which a deposit after the fact would otherwise carry)."""
+    s = Store(tmp_path / "v.sqlite")
+    _record(s, "0xA", "2026-11-13", [(0, 100.0, 0.0), (2, 110.0, 10.0), (4, 10_110.0, 10.0), (24, 10_110.0, 10.0)])
+    s.put_equity("0xA", "2026-11-12", 100.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 10_110.0, 10_000.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(10 / (100 + 10_000 * 22 / 24))}
+
+
+def test_money_moved_in_off_market_is_taken_off_where_it_came(tmp_path: Path) -> None:
+    """$100, then $1,000 moved in through an off-market fill at 01:00 and $100,000 deposited by 04:00: no return."""
+    s = Store(tmp_path / "v.sqlite")
+    _record(
+        s,
+        "0xA",
+        "2026-11-13",
+        [(0, 100.0, 0.0), (2, 1_100.0, 1_000.0), (4, 101_100.0, 1_000.0), (24, 101_100.0, 1_000.0)],
+    )
+    s.put_equity("0xA", "2026-11-12", 100.0, 0.0, offmarket_moves=())
+    s.put_equity(
+        "0xA",
+        "2026-11-13",
+        101_100.0,
+        100_000.0,
+        offmarket_pnl=1_000.0,
+        offmarket_moves=[(_ms("2026-11-13", 1), 1_000.0)],
+    )
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(0.0)}
+
+
+def test_a_day_whose_profit_does_not_count_shows_only_its_loss(tmp_path: Path) -> None:
+    """A thin market's or a cut history's day: its profit is held back (`offmarket_pnl` beyond the off-market fills),
+    so a gain shows as nothing; a loss still counts."""
+    s = Store(tmp_path / "v.sqlite")
+    _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (24, 1_050.0, 50.0)])
+    _record(s, "0xA", "2026-11-14", [(24, 1_000.0, 0.0)])
+    s.put_equity("0xA", "2026-11-12", 1_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 1_050.0, 0.0, offmarket_pnl=50.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-14", 1_000.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": 0.0, "2026-11-14": pytest.approx(-50 / 1_050)}
+
+
+def test_a_day_recorded_before_off_market_times_were_kept_is_read_whole(tmp_path: Path) -> None:
+    """A row from an older release with money moved in off-market has no times for it: the whole day, as it was
+    scored then. One without any is read over the recorded points."""
+    s = Store(tmp_path / "v.sqlite")
+    _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (12, 2_000.0, 30.0), (24, 2_000.0, 30.0)])
+    _record(s, "0xB", "2026-11-13", [(0, 1_000.0, 0.0), (12, 2_000.0, 30.0), (24, 2_000.0, 30.0)])
+    for address, held in (("0xA", 20.0), ("0xB", 0.0)):
+        s.put_equity(address, "2026-11-12", 1_000.0, 0.0)
+        s.put_equity(address, "2026-11-13", 2_000.0, 970.0, offmarket_pnl=held)
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx((2_000 - 1_000 - 970 - 20) / 1_000)}
+    assert s.dated_returns("0xB", 5) == {"2026-11-13": pytest.approx(min(30 / 1_970, 30 / (1_000 + 970 / 2)))}
 
 
 def test_the_skill_record_counts_only_days_after_joining(tmp_path: Path) -> None:
@@ -314,6 +397,7 @@ def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path)
         "12: penalties: one row per report",
         "13: miner_days.joined_day",
         "14: earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs",
+        "15: equity.offmarket_moves",
     ]
     s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
     assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
@@ -333,6 +417,7 @@ def test_step_13_adds_the_join_day_to_an_existing_record(tmp_path: Path) -> None
     assert s.migrations_applied == [
         "13: miner_days.joined_day",
         "14: earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs",
+        "15: equity.offmarket_moves",
     ]
     s.put_miner_days("2026-10-21", [{"hotkey": "hk", "address": "0xa", "joined_day": "2026-09-30"}])
     assert s.miner_days("hk")[0]["joined_day"] == "2026-09-30"
