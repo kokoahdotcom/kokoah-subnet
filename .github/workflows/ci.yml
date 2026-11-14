@@ -6,6 +6,10 @@ on:
   workflow_call: # the release runs these same jobs first (release.yml)
 # No token scope by default; the job asks only for what it needs.
 permissions: {}
+# bash with pipefail: a failing command in a pipe fails its step
+defaults:
+  run:
+    shell: bash
 jobs:
   check:
     runs-on: ubuntu-24.04
