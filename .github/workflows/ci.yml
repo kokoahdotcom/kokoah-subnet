@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # the release runs these same jobs first (release.yml)
 # No token scope by default; the job asks only for what it needs.
 permissions: {}
 jobs:
@@ -40,3 +41,25 @@ jobs:
       - run: uv sync --locked --quiet
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: sudo env KOKOAH_SANDBOX_TESTS=required .venv/bin/python -m pytest -q -rs -p no:cacheprovider tests/test_agent_sandbox.py
+
+  image:
+    # The validator image builds, and its commands start the way compose.yml runs them: read-only, as the service
+    # user, with the updater's tools.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --file deploy/validator/Dockerfile --build-arg COMMIT="$GITHUB_SHA" --tag kokoah-subnet:ci .
+      - name: the image's commands
+        run: |
+          run() { docker run --rm --read-only --tmpfs /tmp -e HOME=/tmp --user 998:998 "$@"; }
+          run kokoah-subnet:ci validator ready --help >/dev/null
+          run kokoah-subnet:ci validator update hop --help >/dev/null
+          run --entrypoint python kokoah-subnet:ci -c "import kokoah_subnet.validator.loop, kokoah_subnet.validator.serve"
+          run --entrypoint docker kokoah-subnet:ci compose version
+          run --entrypoint cosign kokoah-subnet:ci version
+          run --entrypoint cat kokoah-subnet:ci /opt/kokoah-subnet/compose.yml | cmp - deploy/validator/compose.yml

@@ -21,25 +21,17 @@ concurrency:
 env:
   IMAGE: docker.io/kokoahdotcom/kokoah-subnet
 jobs:
-  check:
-    runs-on: ubuntu-24.04
+  ci:
+    # the pull requests' checks, the image's included
+    uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
-    timeout-minutes: 20
-    steps:
-      # Actions pinned by commit; the token is not kept in .git/config.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          version: "0.11.19"
-          python-version: "3.12"
-      - run: scripts/check.sh
   publish:
-    needs: check
+    needs: ci
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    # the Docker Hub login is the release environment's, which only main can use
+    environment: release
     permissions:
       contents: read
       id-token: write # the keyless signature: GitHub certifies that this workflow on main signed the image
@@ -81,14 +73,30 @@ jobs:
       - name: publish as latest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD: ${{ github.run_number }}
+          SPEC: ${{ steps.spec.outputs.version }}
         run: |
+          # the check every updater makes, with the same identity
+          verify() {
+            cosign verify "$1" --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "https://github.com/kokoahdotcom/kokoah-subnet/.github/workflows/release.yml@refs/heads/main"
+          }
+          verify "$IMAGE@$DIGEST" >/dev/null
+          # never back: a run older than the published build (a re-run, or one that finished late) leaves latest
+          published=$(verify "$IMAGE:latest" 2>/dev/null \
+            | python3 -c 'import json, sys; print(max(int(i["optional"]["build"]) for i in json.load(sys.stdin)))' \
+            || echo 0)
+          if [ "$published" -ge "$BUILD" ]; then
+            echo "latest is build $published already: left as it is" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           # a copy of the signed manifest itself, never a new index around it (that would have another digest)
           docker buildx imagetools create --prefer-index=false --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
           test "$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' "$IMAGE:latest")" = "\"$DIGEST\""
           {
             echo "## Validator image"
             echo
-            echo "\`$IMAGE@$DIGEST\` (build ${{ github.run_number }}, spec ${{ steps.spec.outputs.version }})"
+            echo "\`$IMAGE@$DIGEST\` (build $BUILD, spec $SPEC)"
             echo
             echo "Validators with the updater install it within five minutes."
           } >> "$GITHUB_STEP_SUMMARY"
