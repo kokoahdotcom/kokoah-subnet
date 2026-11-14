@@ -394,6 +394,8 @@ class Store:
             }
             linked = c.execute(select(S.bindings.c.hotkey).where(S.bindings.c.address == a)).first() is not None
         returns = self.dated_returns(a, len(stored))
+        # what the chain paid, only for the whole record (the leaderboard's rows read the record's figures alone)
+        earned_days = self.earned_by_address_day(a, {str(m["hotkey"]) for m in scored}) if with_days else {}
         window = list(self.dated_returns(a, 90).values())
         every = list(returns.values())
         by_day = {str(m["day"]): m for m in scored}
@@ -416,6 +418,9 @@ class Store:
         }
         out: dict[str, Any] = {"address": a, "hotkey": str(scored[-1]["hotkey"]), "linked": linked, "record": record}
         if with_days:
+            # what the chain paid the address's hotkeys while it was scored with them, and the scored days' plan
+            record["earned_alpha"] = sum(earned_days.values())
+            record["planned_alpha"] = float(sum(float(m["pay_alpha"] or 0.0) for m in scored))
             index, rows = 1.0, []
             for d in days:
                 r = returns.get(d)
@@ -433,7 +438,10 @@ class Store:
                         "avg_equity_usd": float(avg) if avg is not None else None,
                         "volume_usd": float(m["notional"] or 0.0) if m is not None else 0.0,
                         "fills": int(m["fills"] or 0) if m is not None else 0,
+                        # the scored day's planned allocation (also as `pay_alpha`), and what the chain paid that day
                         "pay_alpha": float(m["pay_alpha"] or 0.0) if m is not None else 0.0,
+                        "planned_alpha": float(m["pay_alpha"] or 0.0) if m is not None else 0.0,
+                        "earned_alpha": earned_days.get(d, 0.0),
                         "eligible": bool(m["eligible"]) if m is not None else False,
                         "agent_verified": bool(m["agent_verified"]) if m is not None else False,
                     }
@@ -880,17 +888,26 @@ class Store:
     # ----- epochs (what the chain paid each tempo) and the miners dimension ----------------------------------
 
     def put_epoch(
-        self, block: int, step: int, tempo: int, price_tao: float | None, rows: Iterable[Mapping[str, Any]]
+        self,
+        block: int,
+        step: int,
+        tempo: int,
+        price_tao: float | None,
+        rows: Iterable[Mapping[str, Any]],
+        at: datetime | None = None,
     ) -> bool:
-        """Record one epoch's metagraph; False when that block was recorded already."""
+        """Record one epoch's metagraph read at `block` (`step`: the epoch's own block, else the tempo window; `at`:
+        when the epoch ran, default now), and add what it paid each hotkey to its UTC day's earned (`earned_days`);
+        False when that block was recorded already."""
         rows = list(rows)
+        when = at or _now()
         with self._engine.begin() as c:
             if c.execute(select(S.epochs.c.block).where(S.epochs.c.block == int(block))).first():
                 return False
             c.execute(
                 insert(S.epochs).values(
                     block=int(block),
-                    at=_now(),
+                    at=when,
                     step=int(step),
                     tempo=int(tempo),
                     price_tao=price_tao,
@@ -899,6 +916,7 @@ class Store:
             )
             for r in rows:
                 c.execute(insert(S.epoch_neurons).values(block=int(block), **dict(r)))
+            _add_earned(c, _utc_day(when), [(str(r.get("hotkey")), float(r.get("emission") or 0.0)) for r in rows])
         return True
 
     def put_subnet_epoch(self, block: int, **fields: Any) -> None:
@@ -946,6 +964,57 @@ class Store:
             ).all()
         return {str(hk): (float(total or 0.0), first, last) for hk, total, first, last in rows}
 
+    def earned_by_day(self, hotkeys: Iterable[str] | None = None) -> dict[str, dict[str, float]]:
+        """Per hotkey, the alpha the chain actually paid it each UTC day: the `emission` of every epoch this validator
+        recorded (once per epoch of the chain), summed by the UTC day the epoch ran (`earned_days`). What a miner
+        received, as opposed to a scored day's planned allocation (`miner_days.pay_alpha`): that plan is paid over
+        the following tempos, and only in proportion to the stake behind the validators that set it. Epochs this
+        validator did not record (while it was down) are missing. Only `hotkeys` when given."""
+        query = select(S.earned_days.c.hotkey, S.earned_days.c.day, S.earned_days.c.alpha)
+        if hotkeys is not None:
+            wanted = sorted(set(hotkeys))
+            if not wanted:
+                return {}
+            query = query.where(S.earned_days.c.hotkey.in_(wanted))
+        out: dict[str, dict[str, float]] = {}
+        with self._engine.connect() as c:
+            for hk, day, alpha in c.execute(query).all():
+                out.setdefault(str(hk), {})[str(day)] = float(alpha or 0.0)
+        return out
+
+    def earned_by_address_day(self, address: str, hotkeys: Iterable[str]) -> dict[str, float]:
+        """The alpha the chain paid `address`'s miners each UTC day (`earned_by_day` of its hotkeys): a day's payment
+        counts for the address its hotkey was scored with on the latest scored day before it, whose weights paid it
+        (a hotkey that moved to another address earns for that one from then on)."""
+        a = address.lower()
+        hks = sorted(set(hotkeys))
+        if not hks:
+            return {}
+        md = S.miner_days
+        with self._engine.connect() as c:
+            rows = c.execute(
+                select(md.c.hotkey, md.c.day, md.c.address).where(md.c.hotkey.in_(hks)).order_by(md.c.day)
+            ).all()
+        scored: dict[str, list[tuple[str, str]]] = {}
+        for hk, day, addr in rows:
+            scored.setdefault(str(hk), []).append((str(day), str(addr or "").lower()))
+        out: dict[str, float] = {}
+        for hk, paid in self.earned_by_day(hks).items():
+            history = scored.get(hk, [])  # by day
+            i, owner = 0, None
+            for day in sorted(paid):
+                while i < len(history) and history[i][0] < day:
+                    owner = history[i][1]
+                    i += 1
+                if owner == a:
+                    out[day] = out.get(day, 0.0) + paid[day]
+        return out
+
+    def miner_hotkeys(self) -> list[str]:
+        """Every hotkey ever scored as a miner."""
+        with self._engine.connect() as c:
+            return [str(hk) for (hk,) in c.execute(select(S.miner_days.c.hotkey).distinct()).all()]
+
     # ----- totals for the ranking -------------------------------------------------------------------------
 
     def miner_totals(self) -> dict[str, dict[str, float]]:
@@ -989,12 +1058,27 @@ class Store:
                     func.sum(d.c.volume_usd),
                 )
             ).first()
+            prices = {str(day): float(p) for day, p in c.execute(select(d.c.day, d.c.price_usd)).all() if p is not None}
         n, paid, burn, paid_usd, fees, vol = row if row else (0, 0, 0, 0, 0, 0)
+        # what the chain actually paid the miners, each day valued at that day's price (a day not scored yet, such as
+        # today, at the latest one)
+        earned, earned_usd = 0.0, 0.0
+        latest_price = prices[max(prices)] if prices else 0.0
+        for days in self.earned_by_day(self.miner_hotkeys()).values():
+            for day, alpha in days.items():
+                earned += alpha
+                earned_usd += alpha * prices.get(day, latest_price)
         return {
             "days": float(n or 0),
+            # the scored days' planned allocations (what the validators set the weights for), kept under their old
+            # names; `earned_*` is what the chain actually paid
             "paid_alpha": float(paid or 0.0),
+            "planned_alpha": float(paid or 0.0),
             "burn_alpha": float(burn or 0.0),
             "paid_usd": float(paid_usd or 0.0),
+            "planned_usd": float(paid_usd or 0.0),
+            "earned_alpha": earned,
+            "earned_usd": earned_usd,
             "builder_fee_usd": float(fees or 0.0),
             "volume_usd": float(vol or 0.0),
         }
@@ -1036,6 +1120,28 @@ def _state_from_json(s: str) -> MinerState:
     raw["paid_days"] = tuple((int(d), float(a)) for d, a in raw.get("paid_days", ()))
     known = set(MinerState.__dataclass_fields__)
     return MinerState(**{k: v for k, v in raw.items() if k in known})
+
+
+def _utc_day(when: datetime) -> str:
+    """The UTC day (YYYY-MM-DD) of a time (a naive one is UTC, as SQLite gives it back)."""
+    return (when.astimezone(UTC) if when.tzinfo else when.replace(tzinfo=UTC)).strftime("%Y-%m-%d")
+
+
+def _add_earned(c: Connection, day: str, paid: Iterable[tuple[str, float]]) -> None:
+    """Add each hotkey's alpha paid in one epoch to its `earned_days` row for `day`."""
+    e = S.earned_days
+    for hotkey, alpha in paid:
+        if alpha <= 0:
+            continue
+        row = c.execute(select(e.c.alpha, e.c.epochs).where(e.c.day == day, e.c.hotkey == hotkey)).first()
+        if row is None:
+            c.execute(insert(e).values(day=day, hotkey=hotkey, alpha=alpha, epochs=1))
+        else:
+            c.execute(
+                e.update()
+                .where(e.c.day == day, e.c.hotkey == hotkey)
+                .values(alpha=float(row[0]) + alpha, epochs=int(row[1]) + 1)
+            )
 
 
 def _next_day(day: str) -> str:

@@ -72,6 +72,7 @@ class _Metagraph:
     owner_hotkey: str
     neurons: list[_Neuron]
     price: float
+    last_step: int | None = None
 
 
 @dataclass
@@ -94,6 +95,7 @@ class _FakeChain:
         self.rate_limit = 100
         self.block_times: dict[int, datetime] = {}  # set by a test; others are 12 s a block back from now
         self.block_info_fails = False
+        self.last_step: int | None = None  # the chain's last epoch block (None: an older client without it)
         self.neurons = [
             _Neuron(0, OWNER, "ckOwner"),
             _Neuron(1, HK_A, "ckA", _Balance(10 * 10**9)),
@@ -116,7 +118,7 @@ class _FakeChain:
         return self._block
 
     async def metagraph(self, netuid: int, block: int | None = None, commitments: bool = True) -> _Metagraph:
-        return _Metagraph(block or self._block, 360, OWNER, list(self.neurons), 0.5)
+        return _Metagraph(block or self._block, 360, OWNER, list(self.neurons), 0.5, self.last_step)
 
     async def commitments(self, netuid: int) -> dict[str, _Commitment]:
         return self._commitments
@@ -458,10 +460,69 @@ async def test_serve_reads_the_store(tmp_path: Path) -> None:
         assert (await c.get("/accounts/0x" + "99" * 20)).status_code == 404
         assert (await c.get("/accounts/not-an-address")).status_code == 400
         assert summary["burn_alpha"] == pytest.approx(DEFAULT.miner_pool_alpha - summary["paid_alpha"])
+        # planned (the scored day's allocation) and earned (what the chain paid): nothing paid on chain yet
+        assert board[0]["planned_alpha"] == board[0]["pay_alpha"] > 0
+        assert board[0]["total_planned_alpha"] == board[0]["total_pay_alpha"]
+        assert board[0]["earned_alpha"] == 0.0 and board[0]["total_earned_alpha"] == 0.0
+        assert summary["planned_alpha"] == summary["paid_alpha"] and summary["earned_alpha"] == 0.0
+        assert account["record"]["planned_alpha"] == pytest.approx(board[0]["pay_alpha"])
+        assert account["record"]["earned_alpha"] == 0.0 and account["days"][-1]["earned_alpha"] == 0.0
+        # the chain pays the hotkey: the interface reports it as earned
+        from datetime import datetime
+
+        ran = datetime.fromisoformat(f"{DAY}T12:00:00+00:00")
+        assert store.put_epoch(9_999, 27, 360, 0.01, [{"uid": 0, "hotkey": board[0]["hotkey"], "emission": 147.6}], ran)
+        paid = (await c.get("/leaderboard")).json()
+        row = next(r for r in paid if r["hotkey"] == board[0]["hotkey"])
+        assert row["earned_alpha"] == pytest.approx(147.6) and row["total_earned_alpha"] == pytest.approx(147.6)
+        assert (await c.get("/summary")).json()["earned_alpha"] == pytest.approx(147.6)
         assert summary["builder_fee_usd"] == pytest.approx(300.0)
         assert "access-control-allow-origin" in {
             k.lower() for k in (await c.get("/summary", headers={"Origin": "https://x"})).headers
         }
+    await hl.close()
+
+
+async def test_the_metagraph_is_recorded_once_per_epoch_of_the_chain_dated_by_its_block(tmp_path: Path) -> None:
+    """With the chain's last epoch block the validator records each epoch once, however its passes fall in the
+    tempo windows, dated by that block; a newer epoch is recorded again."""
+    from kokoah_subnet.validator.loop import chain_step
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    chain._block, chain.last_step = 10_000, 9_700
+    now = DAY_MS / 1000 + 86_400 + 600
+    first = await chain_step(cfg, store, chain, WALLET, DAY, now)
+    assert first["epoch"]["block"] == 10_000
+    chain._block = 10_100  # a later pass in the same epoch (and another tempo window): nothing new
+    assert "epoch" not in await chain_step(cfg, store, chain, WALLET, DAY, now + 1_200)
+    chain._block, chain.last_step = 10_200, 10_061  # the next epoch ran
+    assert (await chain_step(cfg, store, chain, WALLET, DAY, now + 2_400))["epoch"]["block"] == 10_200
+    with store._engine.connect() as c:
+        from kokoah_subnet.validator import schema as S
+
+        rows = c.execute(S.epochs.select().order_by(S.epochs.c.block)).mappings().all()
+    assert [(r["block"], r["step"]) for r in rows] == [(10_000, 9_700), (10_200, 10_061)]
+    # dated by the epoch's block, 12 s a block before the pass that read it
+    at = rows[0]["at"]
+    at = at if at.tzinfo else at.replace(tzinfo=UTC)
+    assert at.timestamp() == pytest.approx(now - 300 * 12, abs=1)
+    await hl.close()
+
+
+async def test_an_epoch_an_older_release_recorded_is_not_recorded_again(tmp_path: Path) -> None:
+    """An older release recorded once per tempo window (its `step` the window, not the epoch's block): after the
+    upgrade, an epoch it already read is not added to earned a second time; the next one is."""
+    from kokoah_subnet.validator.loop import chain_step
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    store.put_epoch(10_085, 10_085 // 360, 360, 0.5, [{"uid": 0, "hotkey": HK_A, "emission": 147.6}])
+    chain._block, chain.last_step = 10_200, 10_061  # the epoch the older release read at 10,085
+    now = DAY_MS / 1000 + 86_400 + 600
+    assert "epoch" not in await chain_step(cfg, store, chain, WALLET, DAY, now)
+    assert sum(store.earned_by_day([HK_A])[HK_A].values()) == pytest.approx(147.6)  # counted once
+    chain._block, chain.last_step = 10_500, 10_421  # the next epoch
+    assert (await chain_step(cfg, store, chain, WALLET, DAY, now + 4_320))["epoch"]["block"] == 10_500
+    assert store.last_epoch_block() == 10_500
     await hl.close()
 
 

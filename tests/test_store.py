@@ -214,7 +214,8 @@ def test_an_accounts_record_is_the_series_the_validator_scores_on(tmp_path: Path
     assert [d["scored"] for d in days] == [False] * 4 + [True] * 2 and days[0]["hotkey"] is None
     assert days[-1] == {"day": "2026-10-06", "scored": True, "hotkey": "hk", "return": pytest.approx(0.1),
                         "index": pytest.approx(1.089), "avg_equity_usd": 1100.0, "volume_usd": 5000.0, "fills": 3,
-                        "pay_alpha": 1.5, "eligible": True, "agent_verified": True}  # fmt: skip
+                        "pay_alpha": 1.5, "planned_alpha": 1.5, "earned_alpha": 0.0, "eligible": True,
+                        "agent_verified": True}  # fmt: skip
     assert "days" not in (s.account_record(a, with_days=False) or {})
 
 
@@ -295,7 +296,11 @@ def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path)
         c.execute(text("UPDATE meta SET value = '11' WHERE key = 'schema_version'"))
     old.close()
     s = Store(path)
-    assert s.migrations_applied == ["12: penalties: one row per report", "13: miner_days.joined_day"]
+    assert s.migrations_applied == [
+        "12: penalties: one row per report",
+        "13: miner_days.joined_day",
+        "14: earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs",
+    ]
     s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
     assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
     assert Store(path).migrations_applied == []
@@ -311,7 +316,10 @@ def test_step_13_adds_the_join_day_to_an_existing_record(tmp_path: Path) -> None
         c.execute(text("UPDATE meta SET value = '12' WHERE key = 'schema_version'"))
     old.close()
     s = Store(path)
-    assert s.migrations_applied == ["13: miner_days.joined_day"]
+    assert s.migrations_applied == [
+        "13: miner_days.joined_day",
+        "14: earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs",
+    ]
     s.put_miner_days("2026-10-21", [{"hotkey": "hk", "address": "0xa", "joined_day": "2026-09-30"}])
     assert s.miner_days("hk")[0]["joined_day"] == "2026-09-30"
     assert Store(path).migrations_applied == []
@@ -336,3 +344,83 @@ def test_readers_open_the_record_without_changing_it(tmp_path: Path) -> None:
         c.execute(text("UPDATE meta SET value = '1' WHERE key = 'schema_version'"))
     with pytest.raises(RuntimeError, match="start the validator of this release first"):
         Store(path, create=False)
+
+
+def _epoch(s: Store, block: int, at: str, paid: dict[str, float]) -> None:
+    """One recorded epoch that ran at `at` (ISO, UTC) paying each hotkey its alpha."""
+    from datetime import datetime
+
+    rows = [{"uid": i, "hotkey": hk, "emission": alpha} for i, (hk, alpha) in enumerate(paid.items())]
+    assert s.put_epoch(block, block, 360, 0.01, rows, at=datetime.fromisoformat(at))
+
+
+def test_earned_is_what_the_chain_paid_each_utc_day(tmp_path: Path) -> None:
+    """The epochs this validator recorded, summed per hotkey and UTC day: what a miner actually received."""
+    s = Store(tmp_path / "v.sqlite")
+    _epoch(s, 1_000, "2026-11-12T22:00:00+00:00", {"hkA": 147.6, "hkOwner": 10.0})
+    _epoch(s, 1_360, "2026-11-12T23:30:00+00:00", {"hkA": 147.6, "hkB": 0.0})
+    _epoch(s, 1_720, "2026-11-13T00:40:00+00:00", {"hkA": 147.6})
+    earned = s.earned_by_day()
+    assert earned["hkA"] == {"2026-11-12": pytest.approx(295.2), "2026-11-13": pytest.approx(147.6)}
+    assert "hkB" not in earned  # nothing paid
+    assert s.earned_by_day(["hkA"]).keys() == {"hkA"} and s.earned_by_day([]) == {}
+
+
+def test_an_address_earns_what_its_hotkey_was_paid_while_it_was_scored_with_it(tmp_path: Path) -> None:
+    """A day's payment counts for the address the hotkey was scored with on the latest scored day before it: after
+    the hotkey moves to another address, what it is paid counts for that one."""
+    from sqlalchemy import insert
+
+    from kokoah_subnet.validator import schema as S
+
+    s = Store(tmp_path / "v.sqlite")
+    with s._engine.begin() as c:
+        for day, address in (("2026-11-11", "0xold"), ("2026-11-12", "0xold"), ("2026-11-13", "0xnew")):
+            c.execute(insert(S.miner_days).values(day=day, hotkey="hkA", address=address, pay_alpha=2952.0))
+    _epoch(s, 1_000, "2026-11-12T10:00:00+00:00", {"hkA": 100.0})  # paid on the weights of 11-11 (0xold)
+    _epoch(s, 1_360, "2026-11-13T10:00:00+00:00", {"hkA": 200.0})  # the weights of 11-12 (0xold)
+    _epoch(s, 1_720, "2026-11-14T10:00:00+00:00", {"hkA": 300.0})  # the weights of 11-13 (0xnew)
+    _epoch(s, 2_080, "2026-11-11T10:00:00+00:00", {"hkA": 50.0})  # before any scored day: no address yet
+    assert s.earned_by_address_day("0xOLD", ["hkA"]) == {"2026-11-12": 100.0, "2026-11-13": 200.0}
+    assert s.earned_by_address_day("0xnew", ["hkA"]) == {"2026-11-14": 300.0}
+    assert s.miner_hotkeys() == ["hkA"]
+
+
+def test_the_subnet_totals_show_what_was_planned_and_what_the_chain_paid(tmp_path: Path) -> None:
+    from sqlalchemy import insert
+
+    from kokoah_subnet.validator import schema as S
+
+    s = Store(tmp_path / "v.sqlite")
+    with s._engine.begin() as c:
+        for i, (day, price) in enumerate((("2026-11-12", 1.5), ("2026-11-13", 2.0))):
+            c.execute(insert(S.days).values(day=day, day_index=i, paid_alpha=2952.0, burn_alpha=0.0, price_usd=price))
+            c.execute(insert(S.miner_days).values(day=day, hotkey="hkA", address="0xa", pay_alpha=2952.0))
+    _epoch(s, 1_000, "2026-11-13T10:00:00+00:00", {"hkA": 100.0, "hkOwner": 999.0})  # the owner isn't a miner
+    _epoch(s, 1_360, "2026-11-14T10:00:00+00:00", {"hkA": 200.0})  # today, not scored: the latest price
+    totals = s.subnet_totals()
+    assert totals["planned_alpha"] == totals["paid_alpha"] == pytest.approx(5904.0)
+    assert totals["earned_alpha"] == pytest.approx(300.0)
+    assert totals["earned_usd"] == pytest.approx(100.0 * 2.0 + 200.0 * 2.0)
+
+
+def test_epochs_recorded_before_the_earned_table_are_backfilled(tmp_path: Path) -> None:
+    """A store from before earned_days: the migration sums the epochs it recorded into it."""
+    from datetime import datetime
+
+    from sqlalchemy import delete, insert
+
+    from kokoah_subnet.validator import schema as S
+    from kokoah_subnet.validator.migrations import _backfill_earned
+
+    s = Store(tmp_path / "v.sqlite")
+    _epoch(s, 1_000, "2026-11-12T23:00:00+00:00", {"hkA": 100.0, "hkB": 0.0})
+    _epoch(s, 1_360, "2026-11-13T01:00:00+00:00", {"hkA": 50.0})
+    with s._engine.begin() as c:
+        c.execute(delete(S.earned_days))  # as before the table existed
+        c.execute(insert(S.epochs).values(block=2_000, at=datetime.fromisoformat("2026-11-13T02:00:00+00:00"), step=1))
+        c.execute(insert(S.epoch_neurons).values(block=2_000, uid=0, hotkey="hkA", emission=25.0))
+    with s._engine.begin() as c:
+        _backfill_earned(c, False)
+        _backfill_earned(c, False)  # run again: the same totals
+    assert s.earned_by_day() == {"hkA": {"2026-11-12": 100.0, "2026-11-13": 75.0}}

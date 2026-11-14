@@ -63,8 +63,8 @@ tbody tr:last-child td { border-bottom: 0; }
 <section class="strip" id="strip" aria-label="Subnet summary"></section>
 <div class="controls">
   <label>Sort by <select id="sort">
-    <option value="skill">skill</option><option value="volume_usd">volume (day)</option><option value="pay_alpha">pay (day)</option>
-    <option value="total_pay_alpha">pay (all days)</option><option value="total_volume_usd">volume (all days)</option>
+    <option value="skill">skill</option><option value="volume_usd">volume (day)</option><option value="pay_alpha">planned (day)</option>
+    <option value="total_earned_alpha">earned on chain (all days)</option><option value="total_pay_alpha">planned (all days)</option><option value="total_volume_usd">volume (all days)</option>
     <option value="profit_usd">profit (all days)</option><option value="skill_pay_alpha">skill pay (day)</option><option value="mean_equity_usd">capital</option>
   </select></label>
   <label><input type="checkbox" id="hideInactive" checked> hide miners without fills today</label>
@@ -74,7 +74,7 @@ tbody tr:last-child td { border-bottom: 0; }
 <div class="tbl"><table id="table" aria-describedby="note">
   <thead><tr>
     <th class="l">#</th><th class="l">Miner</th><th>Skill</th><th>Skill weight</th><th>Volume (day)</th>
-    <th>Builder fee (day)</th><th>Volume pay (day)</th><th>Skill pay (day)</th><th>Pay (day)</th><th>Capital</th><th>Volume (all)</th><th>Pay (all)</th><th>Profit (all)</th><th>Days</th><th class="l">Flags</th>
+    <th>Builder fee (day)</th><th>Volume pay (day)</th><th>Skill pay (day)</th><th>Planned (day)</th><th>Capital</th><th>Volume (all)</th><th>Earned on chain (all)</th><th>Profit (all)</th><th>Days</th><th class="l">Flags</th>
   </tr></thead>
   <tbody id="rows"><tr><td colspan="15" class="empty">Loading…</td></tr></tbody>
 </table></div>
@@ -82,8 +82,9 @@ tbody tr:last-child td { border-bottom: 0; }
 emission is split in two: 80% shared by the builder fees each trader paid, and 20% shared by skill weight among traders
 who pass the skill pool's entry test (a proven record of at least 30 days since joining, weighing more as it
 grows to 90 days); verified agents get 10% more skill weight.
-Profit is the exchange's closed PnL on builder-code fills and never affects pay. Every number comes from the
-validator's published daily artifact (<code>/days/latest</code>).</p>
+Profit is the exchange's closed PnL on builder-code fills and never affects pay. The day's numbers come from the
+validator's published daily artifact (<code>/days/latest</code>); planned is the alpha a scored day allocates, earned
+is what the chain actually paid each hotkey, read from the metagraph every epoch.</p>
 </div>
 <script>
 (function () {
@@ -113,10 +114,12 @@ validator's published daily artifact (<code>/days/latest</code>).</p>
       ["Miners", board.length, (d.miners || []).filter(m => m.fees.fills > 0).length + " with fills"],
       ["Volume (day)", fmt.usd((d.miners || []).reduce((a, m) => a + m.fees.notional, 0)), fmt.usd(s.volume_usd) + " all days"],
       ["Builder fees (day)", fmt.usd((d.miners || []).reduce((a, m) => a + m.fees.builder_fee, 0)), fmt.usd(s.builder_fee_usd) + " all days"],
-      ["Paid (day)", fmt.alpha(d.paid_alpha), fmt.alpha(s.paid_alpha) + " all days"],
+      ["Planned (day)", fmt.alpha(d.paid_alpha), fmt.alpha(s.planned_alpha ?? s.paid_alpha) + " all days"],
+      ["Earned on chain (all days)", fmt.alpha(s.earned_alpha), s.earned_usd == null ? "" : fmt.usd(s.earned_usd)],
       ["Burned (day)", fmt.alpha(d.burn_alpha), fmt.alpha(s.burn_alpha) + " all days"],
       ["Alpha price", d.price_usd == null ? "—" : "$" + d.price_usd.toFixed(3), d.price_tao == null ? "" : d.price_tao.toFixed(4) + " τ · TAO $" + (d.tao_usd || 0).toFixed(2)],
-      ["Paid / fees (all days)", s.builder_fee_usd > 0 ? fmt.num(s.paid_usd / s.builder_fee_usd, 2) + "×" : "—", "bounded by 2× by design"],
+      ["Planned / fees (all days)", s.builder_fee_usd > 0 ? fmt.num(s.paid_usd / s.builder_fee_usd, 2) + "×" : "—", "bounded by 2× by design"],
+      ["Earned / fees (all days)", s.builder_fee_usd > 0 && s.earned_usd != null ? fmt.num(s.earned_usd / s.builder_fee_usd, 2) + "×" : "—", "what the chain paid"],
     ];
     $("strip").innerHTML = items.map(([k, v, sub]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || ""}</div></div>`).join("");
   }
@@ -144,7 +147,7 @@ validator's published daily artifact (<code>/days/latest</code>).</p>
         <td>${fmt.num(r.skill, 2)}</td><td>${fmt.num(r.skill_weight, 3)}</td>
         <td><span class="bar" style="width:${Math.round(60 * (r.volume_usd || 0) / maxVol)}px"></span>${fmt.usd(r.volume_usd)}</td>
         <td>${fmt.usd(r.builder_fee_usd)}</td><td>${fmt.alpha(r.volume_pay_alpha)}</td><td>${fmt.alpha(r.skill_pay_alpha)}</td><td>${fmt.alpha(r.pay_alpha)}</td>
-        <td>${fmt.usd(r.mean_equity_usd)}</td><td>${fmt.usd(r.total_volume_usd)}</td><td>${fmt.alpha(r.total_pay_alpha)}</td>
+        <td>${fmt.usd(r.mean_equity_usd)}</td><td>${fmt.usd(r.total_volume_usd)}</td><td title="planned ${fmt.alpha(r.total_pay_alpha)}">${fmt.alpha(r.total_earned_alpha)}</td>
         <td>${fmt.usd(r.profit_usd)}</td><td>${r.days || 0}</td><td class="l">${flags.join(" ")}</td></tr>`;
     }).join("") : `<tr><td colspan="15" class="empty">No miners to show for this day.</td></tr>`;
     $("stamp").textContent = latest ? "Day " + latest.day + " · refreshed " + new Date().toLocaleTimeString() : "No day scored yet";

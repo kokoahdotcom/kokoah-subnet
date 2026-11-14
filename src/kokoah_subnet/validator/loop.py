@@ -22,7 +22,7 @@ from kokoah_subnet.chain import NETWORKS
 from kokoah_subnet.mechanism import DEFAULT, SPEC_VERSION, Params
 
 from .builder_feed import NotPublished, download, sha256
-from .chain import set_weights, snapshot, subnet_counters, weights_by_uid, weights_rate_limit
+from .chain import BLOCK_SECONDS, set_weights, snapshot, subnet_counters, weights_by_uid, weights_rate_limit
 from .collect import ValidatorConfig, collect_and_score
 from .hyperliquid import HyperliquidInfo
 from .store import Store
@@ -169,11 +169,22 @@ async def chain_step(
     report: dict[str, Any] = {"weights": None}
     clock = now if now is not None else time.time()
     snap = await snapshot(client, cfg.netuid)
-    # every tempo: record the metagraph as the chain paid it (emission per UID), and who is who
-    step_now = snap.block // max(1, snap.tempo)
-    last_epoch = store.last_epoch_block()
-    if last_epoch is None or snap.block // max(1, snap.tempo) != last_epoch // max(1, snap.tempo):
-        if store.put_epoch(snap.block, step_now, snap.tempo, snap.price_tao, [n.as_row() for n in snap.neurons]):
+    # every epoch: record the metagraph as the chain paid it (emission per UID), and who is who. With the chain's own
+    # epoch block, once per epoch it ran (when no read since that block is recorded: epochs recorded by a release
+    # without it count too), dated by that block (12 s a block); without it, once per tempo window
+    if snap.last_step is not None:
+        step_now = snap.last_step
+        last_read = store.last_epoch_block()
+        due = last_read is None or last_read < step_now or last_read > snap.block  # ahead of the chain: a reset one
+        ran_at = datetime.fromtimestamp(clock - (snap.block - snap.last_step) * BLOCK_SECONDS, UTC)
+    else:
+        step_now = snap.block // max(1, snap.tempo)
+        last_epoch = store.last_epoch_block()
+        due = last_epoch is None or step_now != last_epoch // max(1, snap.tempo)
+        ran_at = None
+    if due:
+        rows = [n.as_row() for n in snap.neurons]
+        if store.put_epoch(snap.block, step_now, snap.tempo, snap.price_tao, rows, at=ran_at):
             report["epoch"] = {"block": snap.block, "uids": len(snap.neurons)}
             try:
                 store.put_subnet_epoch(snap.block, **(await subnet_counters(client, cfg.netuid)))

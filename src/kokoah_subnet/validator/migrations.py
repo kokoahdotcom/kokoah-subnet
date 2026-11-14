@@ -52,6 +52,34 @@ def _hide_run_passwords(c: Connection, is_postgres: bool) -> None:
             c.execute(text("UPDATE runs SET config = :c WHERE id = :i"), {"c": json.dumps(settings), "i": run_id})
 
 
+def _backfill_earned(c: Connection, is_postgres: bool) -> None:
+    """earned_days (a new table, made by `create_all`) from every epoch recorded before it: each hotkey's emission
+    summed by the UTC day of the epoch's record."""
+    from datetime import UTC
+
+    totals: dict[tuple[str, str], tuple[float, int]] = {}
+    rows = c.execute(
+        text(
+            "SELECT n.hotkey, e.at, n.emission FROM epoch_neurons n JOIN epochs e ON e.block = n.block "
+            "WHERE n.emission > 0"
+        )
+    ).all()
+    for hotkey, at, emission in rows:
+        if isinstance(at, str):
+            from datetime import datetime
+
+            at = datetime.fromisoformat(at)
+        day = (at.astimezone(UTC) if at.tzinfo else at.replace(tzinfo=UTC)).strftime("%Y-%m-%d")
+        alpha, epochs = totals.get((str(hotkey), day), (0.0, 0))
+        totals[(str(hotkey), day)] = (alpha + float(emission), epochs + 1)
+    c.execute(text("DELETE FROM earned_days"))
+    for (hotkey, day), (alpha, epochs) in totals.items():
+        c.execute(
+            text("INSERT INTO earned_days (day, hotkey, alpha, epochs) VALUES (:d, :h, :a, :n)"),
+            {"d": day, "h": hotkey, "a": alpha, "n": epochs},
+        )
+
+
 def _penalty_per_report(c: Connection, is_postgres: bool) -> None:
     """penalties: one row per report (the address and the day it was made) instead of one per address, so a renewal
     never hides the report that was in force before it."""
@@ -155,6 +183,7 @@ STEPS: list[tuple[int, str, Step]] = [
     (11, "errors.level", _add_column("errors", "level", "varchar(8)")),
     (12, "penalties: one row per report", _penalty_per_report),
     (13, "miner_days.joined_day", _add_column("miner_days", "joined_day", "varchar(10)")),
+    (14, "earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs", _backfill_earned),
 ]
 
 
