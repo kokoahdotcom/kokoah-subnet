@@ -196,8 +196,8 @@ start of its step: money moved in during a losing step counts from the next reco
 loss, and a step never loses more than everything. Every base and the day's capital are at least the $10,000
 eligibility floor (§9a), so money kept out of the account at the recorded points never makes a small balance carry
 the day (an account under $10,000 has its returns measured over $10,000). A gain is at most the day's profit over its time-weighted capital
-`C_d`, so one made on a few dollars before a deposit is not counted as made on all of it (with `C_d ≤ 0`, a day that
-made nothing has no gain). A day without money moved has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
+`C_d`, so one made on a few dollars before a deposit is not counted as made on all of it. A day without money moved,
+the account at $10,000 or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
 `r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), $10,000))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
