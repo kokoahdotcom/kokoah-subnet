@@ -198,7 +198,8 @@ Earned is what the chain actually paid, from the metagraph this validator record
 the chain's last epoch block changes): each epoch's emission of the hotkey, summed by the UTC day of that block (at
 12 s a block) in `earned_days`. A scored day's planned allocation is paid over the following tempos, and only in
 proportion to the stake of the validators that set those weights, so the two differ; epochs this validator did not
-record (while it was down) are missing from earned.
+record (while it was down) are missing from earned. Epochs recorded before earned was kept per epoch count as
+they were read: once per tempo window, by the UTC day of the read.
 
 To publish it, put it behind a reverse proxy with TLS; `deploy/nginx/kokoah-subnet.conf` is a template with a
 request limit. Publishing lets miners and other validators compare figures with yours.

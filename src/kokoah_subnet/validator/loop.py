@@ -170,10 +170,12 @@ async def chain_step(
     clock = now if now is not None else time.time()
     snap = await snapshot(client, cfg.netuid)
     # every epoch: record the metagraph as the chain paid it (emission per UID), and who is who. With the chain's own
-    # epoch block, once per epoch it ran, dated by that block (12 s a block); without it, once per tempo window
+    # epoch block, once per epoch it ran (when no read since that block is recorded: epochs recorded by a release
+    # without it count too), dated by that block (12 s a block); without it, once per tempo window
     if snap.last_step is not None:
         step_now = snap.last_step
-        due = store.last_epoch_step() != step_now
+        last_read = store.last_epoch_block()
+        due = last_read is None or last_read < step_now
         ran_at = datetime.fromtimestamp(clock - (snap.block - snap.last_step) * BLOCK_SECONDS, UTC)
     else:
         step_now = snap.block // max(1, snap.tempo)

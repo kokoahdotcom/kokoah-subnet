@@ -509,6 +509,23 @@ async def test_the_metagraph_is_recorded_once_per_epoch_of_the_chain_dated_by_it
     await hl.close()
 
 
+async def test_an_epoch_an_older_release_recorded_is_not_recorded_again(tmp_path: Path) -> None:
+    """An older release recorded once per tempo window (its `step` the window, not the epoch's block): after the
+    upgrade, an epoch it already read is not added to earned a second time; the next one is."""
+    from kokoah_subnet.validator.loop import chain_step
+
+    cfg, store, hl, chain, _, _ = _setup(tmp_path)
+    store.put_epoch(10_085, 10_085 // 360, 360, 0.5, [{"uid": 0, "hotkey": HK_A, "emission": 147.6}])
+    chain._block, chain.last_step = 10_200, 10_061  # the epoch the older release read at 10,085
+    now = DAY_MS / 1000 + 86_400 + 600
+    assert "epoch" not in await chain_step(cfg, store, chain, WALLET, DAY, now)
+    assert sum(store.earned_by_day([HK_A])[HK_A].values()) == pytest.approx(147.6)  # counted once
+    chain._block, chain.last_step = 10_500, 10_421  # the next epoch
+    assert (await chain_step(cfg, store, chain, WALLET, DAY, now + 4_320))["epoch"]["block"] == 10_500
+    assert store.last_epoch_block() == 10_500
+    await hl.close()
+
+
 async def test_without_a_registered_burn_hotkey_the_owner_hotkey_is_the_fallback(tmp_path: Path) -> None:
     cfg, store, hl, chain, _, _ = _setup(tmp_path)
     cfg = ValidatorConfig(**{**cfg.__dict__, "burn_hotkey": "hkNowhere"})

@@ -919,12 +919,6 @@ class Store:
             _add_earned(c, _utc_day(when), [(str(r.get("hotkey")), float(r.get("emission") or 0.0)) for r in rows])
         return True
 
-    def last_epoch_step(self) -> int | None:
-        """The `step` of the latest recorded epoch (the chain's epoch block, for epochs recorded by it)."""
-        with self._engine.connect() as c:
-            row = c.execute(select(S.epochs.c.step).order_by(S.epochs.c.block.desc()).limit(1)).first()
-        return int(row[0]) if row and row[0] is not None else None
-
     def put_subnet_epoch(self, block: int, **fields: Any) -> None:
         """The subnet-level emission counters at an epoch (TAO in, alpha in and out, pool reserves, MinerBurned)."""
         with self._engine.begin() as c:
