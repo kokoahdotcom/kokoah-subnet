@@ -187,6 +187,13 @@ STEPS: list[tuple[int, str, Step]] = [
 ]
 
 
+# The updater goes back to the release before when a new one's validator does not run (validator/update.py). The
+# record then stays as the new release left it, so the release before must be able to work with it. Steps that only
+# add (a column, a table, rows) keep that true. A step that changes or drops what older code relies on sets this to
+# its number: no release whose code ends below it is put back on a record that went through it.
+ROLLBACK_FLOOR = 12  # step 12 changed the penalties table's key
+
+
 def latest_version() -> int:
     """The schema version this release writes and reads."""
     return STEPS[-1][0]
