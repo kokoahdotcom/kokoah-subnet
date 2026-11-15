@@ -79,3 +79,15 @@ jobs:
           }
           compose config --quiet
           test "$(compose config --services | sort | tr '\n' ' ')" = "check interface updater validator "
+      - name: the compose file, checked by the compose of the release validators run now
+        # their updater checks the new file with its own compose before anything switches
+        run: |
+          published=docker.io/kokoahdotcom/kokoah-subnet:latest
+          if ! out=$(docker pull --quiet "$published" 2>&1); then
+            grep -qiE "not found|manifest unknown" <<<"$out" || { echo "$out" >&2; exit 1; }
+            echo "no release published yet"
+            exit 0
+          fi
+          docker run --rm -v "$RUNNER_TEMP/etc:/etc/kokoah-subnet:ro" -v "$RUNNER_TEMP/project:/project:ro" \
+            -v "$PWD/deploy/validator/compose.yml:/new/compose.yml:ro" --entrypoint docker "$published" \
+            compose --project-directory /project -f /new/compose.yml config --quiet

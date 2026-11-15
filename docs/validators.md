@@ -283,8 +283,9 @@ minutes (a request Docker Hub does not count as a pull). For a new image it:
    cannot be put back;
 2. downloads it by its digest and checks it on this host: its compose file must work here (`docker compose config`),
    it must say which schema version it brings the record to and whether it can be rolled back (below), and its own
-   updater must run here (a dry run that reads the host and the registry and changes nothing). If any of this fails,
-   nothing changes: the release waits an hour (six hours when its updater does not run, longer at each failure);
+   updater must run here (a dry run, as the updater service runs, that reads the host, checks the compose file with
+   its own compose and the release's signature, and changes nothing). If any of this fails, nothing changes and the
+   release waits an hour;
 3. tags it `kokoah-subnet:current` (the release running well until then stays as `kokoah-subnet:previous`), installs
    its compose file, and starts the new validator, which must bring the record to the release's schema version (it
    migrates it) within two hours and then run two minutes without a restart. A validator that stops or restarts
@@ -299,9 +300,11 @@ compose file and everything restarts. If the release before then runs, the new o
 otherwise keep a good release out for good); if neither runs, the host is the problem and the new one is tried again
 an hour later. The record stays as the new release left it. Releases only add to it, so the release before reads it;
 a release whose migration does more says so (`ROLLBACK_FLOOR` in `src/kokoah_subnet/validator/migrations.py`), and
-once its validator has run and the record has gone through that step (the validator is stopped and the record read
-first), it is never rolled back onto older code: it stays until a fixed release follows. A validator that was never
-created never ran, so its release goes back without a look at the record.
+once its validator has run and the record has gone through that step, it is never rolled back onto older code: it
+stays, its validator running, until a fixed release follows. A record still below that step is read again with the
+new validator stopped, so it cannot cross it meanwhile; a record that cannot be read (its database not up yet) never
+decides: the choice waits for a later look. A validator that was never created never ran, so its release goes back
+without a look at the record.
 
 Every look first makes sure the host runs the release in `release.json`: an install or a rollback cut short (a
 reboot, Docker restarting) is put right at the next look, and so is an updater that did not restart itself. An install
