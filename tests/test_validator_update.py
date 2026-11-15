@@ -64,6 +64,10 @@ class Host:
         self.floor: dict[str, int] = {}  # a release's ROLLBACK_FLOOR
         self.schema: dict[str, int] = {}  # a release's schema version
         self.unreadable: set[str] = set()  # releases whose numbers cannot be read
+        self.bad_updater: set[str] = set()  # releases whose updater fails its dry run
+        self.stopped: set[str] = set()  # releases whose validator stops at once
+        self.no_health: set[str] = set()  # releases whose validator has no health check
+        self.unpullable: set[str] = set()  # digests the registry no longer serves
         self.record: int | None = 15  # the record's schema version (None: cannot be read)
         self.fail_others = 0  # how many times starting the other services fails
         self.fail_tag = 0  # how many times `docker tag` fails
@@ -72,13 +76,15 @@ class Host:
         self.services = "validator\ninterface\ncheck\nupdater\n"
         self.calls: list[list[str]] = []
 
-    def installed(self, digest: str, build: int) -> None:
+    def installed(self, digest: str, build: int, schema: int = 15, floor: int = 12) -> None:
         """A host where `digest` was installed as `build` and runs."""
         self.pulled.add(digest)
         self.tags[u.CURRENT] = digest
         self.validator = self.updater = digest
+        self.schema[digest], self.floor[digest] = schema, floor
         (self.project / "compose.yml").write_text(f"# compose file of {digest}\n")
-        (self.project / u.STATE_FILE).write_text(json.dumps({"digest": digest, "build": build, "commit": ""}))
+        state = {"digest": digest, "build": build, "commit": "", "schema": schema, "floor": floor}
+        (self.project / u.STATE_FILE).write_text(json.dumps(state))
 
     def head(self, image: str, tag: str) -> str:
         assert (image, tag) == (u.IMAGE, u.CHANNEL)
@@ -98,7 +104,10 @@ class Host:
         if self.validator in self.crashing:
             self.restarts += 1
         health = "unhealthy" if self.validator in self.unhealthy else "starting" if self.validator in self.slow else ""
-        return f"true {self.restarts} {health or 'healthy'}\n"
+        running = "false" if self.validator in self.stopped else "true"
+        if self.validator in self.no_health:
+            return f"{running} {self.restarts} \n"
+        return f"{running} {self.restarts} {health or 'healthy'}\n"
 
     def run(self, args: list[str], timeout: float) -> str:
         self.calls.append(args)
@@ -126,7 +135,10 @@ class Host:
                 raise u.UpdateError(f"Error response from daemon: No such container: {args[6]}")
             return _id(running) + "\n"
         if args[:2] == ["docker", "pull"]:
-            self.pulled.add(args[3].rsplit("@", 1)[1])
+            digest = args[3].rsplit("@", 1)[1]
+            if digest in self.unpullable:
+                raise u.UpdateError("Error response from daemon: manifest unknown")
+            self.pulled.add(digest)
             return ""
         if args[:2] == ["docker", "tag"]:
             if self.fail_tag:
@@ -134,13 +146,18 @@ class Host:
                 raise u.UpdateError("Error response from daemon: disk full")
             self.tags[args[3]] = self._resolve(args[2])
             return ""
+        if args[:2] == ["docker", "run"] and "probe" in args:
+            assert args == u.Updater(self.project)._probe_command(args[-6]), "the dry run mounts what the updater does"
+            if self._resolve(args[-6]) in self.bad_updater:
+                raise u.UpdateError("Traceback (most recent call last): ImportError")
+            return "the updater runs here\n"
         if args[:2] == ["docker", "run"]:
             digest = self._resolve(args[7])
             if args[6] == "cat":
                 return f"# compose file of {digest}\n"
             if digest in self.unreadable:
                 raise u.UpdateError("Error response from daemon: context deadline exceeded")
-            return f"{self.floor.get(digest, 0) if 'ROLLBACK_FLOOR' in args[9] else self.schema.get(digest, 15)}\n"
+            return f"{self.floor.get(digest, 12) if 'ROLLBACK_FLOOR' in args[9] else self.schema.get(digest, 15)}\n"
         if args[:3] == ["docker", "image", "ls"]:
             rows = [{"Repository": REPO, "Digest": d, "ID": _id(d)} for d in sorted(self.pulled)] + self.others
             return "\n".join(json.dumps(r) for r in rows) + "\n"
@@ -262,8 +279,9 @@ def test_a_new_signed_release_is_checked_installed_and_kept_only_if_its_validato
         f"docker pull --quiet {ref}",
         f"docker run --rm --network none --entrypoint cat {ref} {u.IMAGE_COMPOSE}",
         f"docker compose -f {u.NEW_COMPOSE} config --quiet",
+        f"docker run --rm --network none --entrypoint python {ref} -c {u.SCHEMA_CODE}",
         f"docker run --rm --network none --entrypoint python {ref} -c {u.ROLLBACK_FLOOR_CODE}",
-        f"docker run --rm --network none --entrypoint python {old} -c {u.SCHEMA_CODE}",
+        " ".join(updater._probe_command(ref)),  # a dry run of its updater, before anything switches
         f"docker image inspect {old} --format {{{{.Id}}}}",
         f"docker tag {old} {u.PREVIOUS}",
         f"docker tag {ref} {u.CURRENT}",
@@ -282,7 +300,9 @@ def test_a_new_signed_release_is_checked_installed_and_kept_only_if_its_validato
     assert u.STEADY_S in clock.slept
     assert (tmp_path / "compose.yml").read_text() == f"# compose file of {NEW}\n"
     assert not (tmp_path / u.NEW_COMPOSE).exists()
-    assert _state(tmp_path) == {"digest": NEW, "build": 5, "commit": f"{5:040d}"}
+    assert _state(tmp_path) == {"digest": NEW, "build": 5, "commit": f"{5:040d}", "schema": 15, "floor": 12}
+    assert not (tmp_path / u.PENDING_FILE).exists()
+    assert not any(f"python {old}" in c for c in steps)  # the installed release's image is never needed
     assert host.tags == {u.CURRENT: NEW, u.PREVIOUS: OLD} and host.pulled == {OLD, NEW}
     # the helper container's `hop` recreates the updater; then the host is up to date
     updater.hop()
@@ -422,18 +442,20 @@ def test_a_repair_that_does_not_hold_never_keeps_a_fixed_release_out(tmp_path: P
     assert any("put back build 4, but its validator does not run" in s for s in said)
 
 
-def test_an_updater_that_does_not_restart_is_retried_hourly_and_holds_nothing_up(tmp_path: Path) -> None:
-    host, updater, said, clock = _setup(tmp_path, latest=NEW, signed={NEW: 5})
+def test_an_updater_that_does_not_restart_is_retried_hourly_and_ends_its_look(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=FIX, signed={NEW: 5, FIX: 6})
     host.installed(NEW, 5)
     host.pulled.add(OLD)
     host.updater = OLD  # its helper container never replaced it
-    assert updater.check() == "up to date"
-    assert "restarting the updater with build 5" in said
-    assert updater.check() == "up to date"
-    assert host.count("docker compose run -d") == 1
+    # the look that starts the helper ends there: no install races the updater being replaced
+    assert updater.check() == "restarting the updater with build 5"
+    assert host.count("cosign") == 0
+    # an hour of other looks goes on as usual meanwhile
+    assert updater.check().startswith("installed build 6")
+    assert host.count("docker compose run -d") == 2  # the install's own restart of the updater
     clock.now += u.RETRY_S
-    updater.check()
-    assert host.count("docker compose run -d") == 2
+    host.updater = OLD
+    assert updater.check() == "restarting the updater with build 6"
 
 
 def test_other_services_that_do_not_start_never_cost_the_validator_a_restart(tmp_path: Path) -> None:
@@ -967,3 +989,139 @@ def test_the_watch_says_each_outcome_once(tmp_path: Path) -> None:
     updater.watch(1, rounds=3)
     assert said[0].startswith("updater of commit ") and f"build 4 ({OLD[:19]})" in said[0]
     assert len(said) == 2 and said[1].startswith("refused")
+
+
+def test_an_install_cut_short_past_the_rollback_floor_is_kept_when_the_record_went_through(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4, schema=15)
+    host.floor[NEW], host.record = 16, 16  # build 5 changed the record in a way build 4 cannot follow
+    original = host.run
+    reads = {"state": 0}
+
+    def silent_after_the_start(args: list[str], timeout: float) -> str:
+        if args[-1] == u.VALIDATOR and u.VALIDATOR_STATE in args and host.validator == NEW:
+            reads["state"] += 1
+            if reads["state"] > 1:  # the new validator started and migrated; then a reboot, Docker restarting
+                raise u.UpdateError("Error response from daemon: i/o timeout")
+        return original(args, timeout)
+
+    updater.run = silent_after_the_start
+    with pytest.raises(u.UpdateError, match="i/o timeout"):
+        updater.check()
+    assert (tmp_path / u.PENDING_FILE).exists() and _state(tmp_path)["digest"] == OLD
+    updater.run = original
+    host.calls.clear()
+    result = updater.check()
+    assert result.startswith("build 5 stays although its install was cut short")
+    steps = host.commands()
+    assert steps.index("docker compose stop validator") < steps.index(
+        f"docker compose run --rm --no-deps -T --entrypoint python validator -c {u.RECORD_SCHEMA_CODE}"
+    )
+    assert host.tags[u.CURRENT] == NEW and host.validator == NEW and _state(tmp_path)["digest"] == NEW
+    assert not (tmp_path / u.PENDING_FILE).exists()
+
+
+def test_an_install_cut_short_before_the_record_moved_goes_back(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4, schema=15)
+    host.floor[NEW], host.record = 16, 15
+    host.fail_inspect = 4
+    with pytest.raises(u.UpdateError):
+        updater.check()
+    host.fail_inspect = 0
+    assert updater.check() == "put back build 4"
+    assert host.tags[u.CURRENT] == OLD and not (tmp_path / u.PENDING_FILE).exists()
+
+
+def test_a_validator_that_was_never_created_goes_back_without_reading_the_record(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4, schema=15)
+    host.not_created.add(NEW)
+    host.floor[NEW], host.record = 16, None  # the record cannot even be read: it does not matter
+    assert updater.check().startswith("went back to build 4: build 5 not started")
+    assert host.count("docker compose run --rm") == 0 and host.count("docker compose stop") == 0
+
+
+def test_a_repair_that_cannot_even_be_tried_never_keeps_a_fixed_release_out(tmp_path: Path) -> None:
+    host, updater, said, _ = _setup(tmp_path, latest=FIX, signed={OLD: 4, NEW: 5, FIX: 6})
+    host.installed(OLD, 4)
+    host.pulled.discard(OLD)  # pruned by hand, and the registry no longer serves it
+    host.unpullable.add(OLD)
+    host.pulled.add(NEW)
+    host.tags[u.CURRENT] = NEW
+    assert updater.check().startswith("installed build 6")
+    assert any(s.startswith("could not put back build 4") for s in said)
+    assert host.count(f"docker tag {u.IMAGE}@{OLD}") == 0  # no previous to keep: none is made up
+
+
+def test_a_release_whose_updater_fails_its_dry_run_changes_nothing(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.bad_updater.add(NEW)
+    result = updater.check()
+    assert result.startswith("build 5 (commit") and "its updater does not run here, nothing changed" in result
+    assert host.tags == {u.CURRENT: OLD} and host.validator == OLD and host.count(START) == 0
+    assert _held(tmp_path)[NEW]["tries"] == 1
+    assert updater.check().startswith(f"held back {NEW[:19]}: its updater does not run here")
+
+
+def test_a_hold_that_is_no_refusal_keeps_the_count_of_refusals(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.unhealthy.add(NEW)
+    updater.check()
+    assert _held(tmp_path)[NEW]["tries"] == 1
+    clock.now += u.REFUSED_RETRY_S
+    host.unhealthy.add(OLD)  # now neither runs
+    assert "neither release runs" in updater.check()
+    assert _held(tmp_path)[NEW]["tries"] == 1
+
+
+def test_a_release_that_cannot_be_downloaded_is_tried_again_after_a_while(tmp_path: Path) -> None:
+    host, updater, _, clock = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.unpullable.add(NEW)
+    with pytest.raises(u.UpdateError, match="manifest unknown"):
+        updater.check()
+    assert updater.check().startswith("not downloaded")
+    assert host.count("cosign") == 1
+    clock.now += u.PULL_RETRY_S
+    host.unpullable.clear()
+    assert updater.check().startswith("installed build 5")
+
+
+def test_going_back_on_purpose_never_goes_below_what_the_record_went_through(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(NEW, 5, schema=16, floor=16)
+    host.pulled.add(OLD)
+    host.schema[OLD] = 15
+    host.record = 16
+    with pytest.raises(u.UpdateError, match="cannot work with the record"):
+        updater.setup(OLD, allow_older=True)
+    assert host.tags[u.CURRENT] == NEW
+    host.record = 15  # (a record that never went through it)
+    assert updater.setup(OLD, allow_older=True).startswith("installed build 4")
+
+
+def test_a_validator_that_stops_at_once_or_has_no_health_check(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    host.stopped.add(NEW)
+    assert updater.check() == "went back to build 4: build 5 stopped before it was ready"
+    (tmp_path / "b").mkdir()
+    host2, updater2, _, _ = _setup(tmp_path / "b", latest=NEW, signed={OLD: 4, NEW: 5})
+    host2.installed(OLD, 4)
+    host2.no_health.add(NEW)  # no health check: running steadily is enough
+    assert updater2.check().startswith("installed build 5")
+
+
+def test_the_dry_run_reads_and_changes_nothing(tmp_path: Path) -> None:
+    host, updater, _, _ = _setup(tmp_path, latest=NEW, signed={OLD: 4, NEW: 5})
+    host.installed(OLD, 4)
+    assert updater.probe() == f"the updater runs here (installed: 4, published: {NEW[:19]})"
+    assert host.count("docker tag") == 0 and host.count("docker compose") == 0 and host.count("docker pull") == 0
+    host.signed.pop(NEW)
+    with pytest.raises(u.UpdateError):
+        updater.probe()
+    probe = build_parser().parse_args(["validator", "update", "probe", "--project-dir", "/x"])
+    assert probe.update_command == "probe" and str(probe.project_dir) == "/x"

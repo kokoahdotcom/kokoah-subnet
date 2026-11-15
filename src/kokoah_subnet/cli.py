@@ -289,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("once", "check once and install a new signed release"),
         ("setup", "first start: install the release this image is (deploy/validator/install.sh)"),
         ("hop", "recreate the updater with the installed release (run by the updater's helper container)"),
+        ("probe", "a dry run of this release's updater on the host, before the host switches to it"),
     ):
         u = usub.add_parser(name, help=text)
         u.add_argument("--project-dir", type=Path, default=Path("/opt/kokoah-subnet/docker"))
@@ -477,6 +478,8 @@ def _update(args: argparse.Namespace) -> int:
             print(updater.setup(args.digest, args.allow_older))
         elif args.update_command == "hop":
             updater.hop()
+        elif args.update_command == "probe":
+            print(updater.probe())
     except UpdateError as exc:
         print(f"update: {exc}", file=sys.stderr)
         return 1

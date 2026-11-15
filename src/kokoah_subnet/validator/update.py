@@ -39,7 +39,8 @@ WORKFLOW_IDENTITY = "https://github.com/kokoahdotcom/kokoah-subnet/.github/workf
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 PROJECT_DIR = Path("/opt/kokoah-subnet/docker")
 IMAGE_COMPOSE = "/opt/kokoah-subnet/compose.yml"  # the release's compose file, inside its image
-STATE_FILE = "release.json"  # the last release installed and running well: digest, build, commit
+STATE_FILE = "release.json"  # the last release installed and running well: digest, build, commit, schema, floor
+PENDING_FILE = "installing.json"  # the release being switched to, until it is kept or left
 REFUSED_FILE = "refused.json"  # releases this host went back from: digest -> why and when
 LOCK_FILE = ".update.lock"  # one update at a time on a host
 NEW_COMPOSE = ".compose.new.yml"  # a release's compose file while it is checked
@@ -52,6 +53,7 @@ VALIDATOR_WAIT_S = 7200  # for the record's migration (the health check's start 
 STEADY_S = 120  # a new validator must then run this long without a restart
 POLL_S = 10  # how often a starting validator is looked at
 RETRY_S = 3600  # a release that could not be tried here is tried again after this long
+PULL_RETRY_S = 900  # one that could not be downloaded, after this long
 REFUSED_RETRY_S = 6 * 3600  # one this host went back from, after this long (then twice as long each time)
 REFUSED_MAX_S = 7 * 86400
 DOCKER_DOWN = ("cannot connect to the docker daemon", "error during connect", "is the docker daemon running")
@@ -211,15 +213,25 @@ RECORD_SCHEMA_CODE = (
 
 
 @dataclass(frozen=True)
+class Installed:
+    """A release on this host, with what its code knows of the record: the schema version it brings the record to,
+    and its rollback floor (migrations.ROLLBACK_FLOOR). `schema` is None when it was not recorded."""
+
+    release: Release
+    schema: int | None
+    floor: int
+
+
+@dataclass(frozen=True)
 class Outcome:
     ok: bool  # the release installed and its validator runs
     message: str
 
 
 class Updater:
-    """One validator host's Docker setup in `project`: its compose file and `.env`, the release that last installed
-    and ran well (`release.json`, the state every look brings the host back to) and the releases held back from
-    this host for a while (`refused.json`: the ones it went back from, and the ones that could not be tried)."""
+    """One validator host's Docker setup in `project`: its compose file and `.env`; the release that last installed
+    and ran well (`release.json`, the state every look brings the host back to); the release being switched to
+    (`installing.json`, while it is); and the releases held back from this host for a while (`refused.json`)."""
 
     def __init__(
         self,
@@ -240,7 +252,7 @@ class Updater:
         self.sleep = sleep
         self.clock = clock
         self.wall = wall
-        self._failed: dict[str, tuple[str, float]] = {}  # tag digests whose signature check failed: why, when
+        self._failed: dict[str, tuple[str, float]] = {}  # digests that failed here lately: why, until (monotonic)
         self._repair_failed_at: float | None = None
         self._hop_at: float | None = None
         self._others_pending = True  # a new updater makes sure the other services run, once
@@ -280,15 +292,31 @@ class Updater:
         args = ["docker", "inspect", "--type", "container", "--format", "{{.Image}}", name]
         return self._docker(args, "no such container", "no such object")
 
-    def installed_release(self) -> Release | None:
+    def _read(self, name: str) -> Installed | None:
         try:
-            data = json.loads((self.project / STATE_FILE).read_text())
-            return Release(str(data["digest"]), int(data["build"]), str(data.get("commit", "")))
-        except (OSError, ValueError, KeyError, TypeError):
+            data = json.loads((self.project / name).read_text())
+            schema = data.get("schema")
+            return Installed(
+                Release(str(data["digest"]), int(data["build"]), str(data.get("commit", ""))),
+                int(schema) if schema is not None else None,
+                int(data.get("floor", 0)),
+            )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return None
 
-    def _record(self, release: Release) -> None:
-        self._write(STATE_FILE, json.dumps(asdict(release), indent=2) + "\n")
+    def installed(self) -> Installed | None:
+        return self._read(STATE_FILE)
+
+    def installed_release(self) -> Release | None:
+        good = self.installed()
+        return good.release if good is not None else None
+
+    def _save(self, name: str, release: Release, schema: int | None, floor: int) -> None:
+        self._write(name, json.dumps({**asdict(release), "schema": schema, "floor": floor}, indent=2) + "\n")
+
+    def _record(self, new: Installed) -> None:
+        self._save(STATE_FILE, new.release, new.schema, new.floor)
+        (self.project / PENDING_FILE).unlink(missing_ok=True)
 
     # ----- releases held back ------------------------------------------------------------------------------
 
@@ -315,17 +343,20 @@ class Updater:
         return str(entry.get("why", ""))
 
     def _hold(self, digest: str, why: str, refused: bool) -> None:
-        """Hold a release back: for an hour when it could not be tried; when this host went back from it, for six
-        hours, twice as long each time after (a passing problem of the host would otherwise keep it out)."""
+        """Hold a release back: for an hour when it could not be tried; when it failed here, for six hours, twice as
+        long each time after (a passing problem of the host would otherwise keep it out)."""
         held = self.held()
         try:
             before = int(str(held.get(digest, {}).get("tries", 0)))
         except ValueError:
             before = 0
-        tries = before + 1 if refused else 0
+        tries = before + 1 if refused else before
         wait = min(REFUSED_RETRY_S * 2 ** (tries - 1), REFUSED_MAX_S) if refused else RETRY_S
         held[digest] = {"why": why, "until": self.wall() + wait, "tries": tries}
         self._write(REFUSED_FILE, json.dumps(held, indent=2) + "\n")
+
+    def _remember(self, digest: str, why: str, for_s: float) -> None:
+        self._failed[digest] = (why, self.clock() + for_s)
 
     # ----- files and locks ---------------------------------------------------------------------------------
 
@@ -379,6 +410,15 @@ class Updater:
         except (ValueError, IndexError):
             raise UpdateError(f"{ref}: printed no number") from None
 
+    def _probe_command(self, ref: str) -> list[str]:
+        """The new release's updater, run once as a dry run, with what the updater service mounts (read-only)."""
+        project = str(self.project)
+        return [
+            "docker", "run", "--rm", "--network", "host", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
+            "-e", "HOME=/tmp", "-e", "DOCKER_CONFIG=/tmp/docker", "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{project}:{project}:ro", ref, "validator", "update", "probe", "--project-dir", project,
+        ]  # fmt: skip
+
     def _record_schema(self) -> int | None:
         """The schema version the record is at now, read with the validator's own settings; None if unreadable."""
         try:
@@ -390,6 +430,35 @@ class Updater:
         except (UpdateError, ValueError, IndexError):
             return None
 
+    def _past_the_floor(self, new: Installed, back: Installed) -> bool:
+        """Whether going back from `new` to `back` would put code on a record it cannot work with: `new` marks a
+        migration that `back`'s code ends before, its code ran here, and the record went through it (or cannot be
+        read). The new validator is stopped first, so the record does not move while it is read."""
+        if new.floor <= (back.schema if back.schema is not None else 0):
+            return False
+        if self.container_image(VALIDATOR) != self.image_id(f"{self.image}@{new.release.digest}"):
+            return False  # its code never ran here
+        try:
+            self.compose("stop", "validator")
+        except UpdateError as exc:
+            self.say(f"the new validator did not stop ({exc}); reading the record anyway")
+        record = self._record_schema()
+        return record is None or record >= new.floor
+
+    def _keep(self, new: Installed, back: Installed, why: str) -> str:
+        """Stay on a release that cannot be rolled back, recorded as installed, until a fixed release follows."""
+        self._record(new)
+        self._others_pending = True
+        try:
+            self.compose("up", "-d", "--no-deps", "validator")
+        except UpdateError as exc:
+            self.say(f"the validator did not start again: {exc}")
+        name = f"build {new.release.build}"
+        return (
+            f"{name} stays although {why}: build {back.release.build} cannot work with the record it may have "
+            f"changed (this release's rollback floor {new.floor}); a fixed release must follow"
+        )
+
     # ----- one look ------------------------------------------------------------------------------------------
 
     def check(self) -> str:
@@ -398,7 +467,7 @@ class Updater:
             return self._check()
 
     def _check(self) -> str:
-        good = self.installed_release()
+        good = self.installed()
         if good is not None:
             done, settled = self.reconcile(good)
             if settled:
@@ -406,20 +475,20 @@ class Updater:
             if done:
                 self.say(done)  # a repair that did not hold: a newer release may fix it, so the look goes on
         latest = self.head(self.image, CHANNEL)
-        if good is not None and latest == good.digest:
+        if good is not None and latest == good.release.digest:
             return "up to date"
         why = self._held_why(latest)
         if why is not None:
             return f"held back {latest[:19]}: {why}"
         failed = self._failed.get(latest)
-        if failed is not None and self.clock() - failed[1] < RETRY_S:
+        if failed is not None and self.clock() < failed[1]:
             return failed[0]
         try:
             new = verify(self.run, f"{self.image}@{latest}", self.image)
         except UpdateError as exc:
-            self._failed[latest] = (f"not installed: {exc}", self.clock())
+            self._remember(latest, f"not installed: {exc}", RETRY_S)
             raise
-        floor = good
+        floor = good.release if good is not None else None
         if floor is None:
             current = self.installed_digest()
             if current is not None:
@@ -432,18 +501,30 @@ class Updater:
                 f"refused {new.digest[:19]} (build {new.build}, commit {new.commit[:12]}): older than the installed "
                 f"build {floor.build}"
             )
-            self._failed[latest] = (why, self.clock())
+            self._remember(latest, why, RETRY_S)
             return why
         return self.install(new).message
 
-    def reconcile(self, good: Release) -> tuple[str | None, bool]:
+    def reconcile(self, good: Installed) -> tuple[str | None, bool]:
         """Bring the host back to the installed release: what was done (None: nothing), and whether the look ends
-        there. A repair that did not hold, or an updater that did not restart, is tried again an hour later; the
-        look goes on meanwhile, so a fixed release still installs."""
-        if self.installed_digest() != good.digest or self.container_image(VALIDATOR) != self.image_id(CURRENT):
+        there. An install cut short after its code may have moved the record past what the installed release reads
+        is kept instead. A repair that fails is tried again an hour later, and the look goes on meanwhile, so a
+        fixed release still installs."""
+        current = self.installed_digest()
+        if current != good.release.digest or self.container_image(VALIDATOR) != self.image_id(CURRENT):
             if self._repair_failed_at is not None and self.clock() - self._repair_failed_at < RETRY_S:
                 return None, False
-            done, problem = self.restore(good, "the host does not run it")
+            pending = self._read(PENDING_FILE)
+            if pending is not None and current == pending.release.digest and self._past_the_floor(pending, good):
+                return self._keep(pending, good, "its install was cut short"), True
+            try:
+                done, problem = self.restore(good, "the host does not run it")
+            except UpdateError as exc:
+                if any(sign in str(exc).lower() for sign in DOCKER_DOWN):
+                    raise
+                self._repair_failed_at = self.clock()
+                return f"could not put back build {good.release.build}: {exc}", False
+            (self.project / PENDING_FILE).unlink(missing_ok=True)
             if problem is None:
                 self._repair_failed_at = None
                 return done, True
@@ -460,14 +541,14 @@ class Updater:
             if self._hop_at is None or self.clock() - self._hop_at >= RETRY_S:
                 self._hop_at = self.clock()
                 self.restart_updater()
-                return f"restarting the updater with build {good.build}", False
+                return f"restarting the updater with build {good.release.build}", True
         return None, False
 
-    def restore(self, good: Release, why: str) -> tuple[str, str | None]:
+    def restore(self, good: Installed, why: str) -> tuple[str, str | None]:
         """Put the installed release back, with its own compose file: what was done, and the validator's problem if
         it does not run."""
-        ref = f"{self.image}@{good.digest}"
-        self.say(f"putting back build {good.build}: {why}")
+        ref = f"{self.image}@{good.release.digest}"
+        self.say(f"putting back build {good.release.build}: {why}")
         if self.image_id(ref) is None:
             self.run(["docker", "pull", "--quiet", ref], 1800)  # by digest: the content it was checked with
         self.run(["docker", "tag", ref, CURRENT], 60)
@@ -478,36 +559,49 @@ class Updater:
         except UpdateError as exc:
             self._others_pending = True
             self.say(f"the other services do not start: {exc}")
-        done = f"put back build {good.build}"
+        done = f"put back build {good.release.build}"
         return (done + (f", but its validator does not run ({problem})" if problem else "")), problem
 
     def install(self, release: Release, restart_self: bool = True) -> Outcome:
-        """Check the release here, switch to it, keep it if its validator runs, else go back (or stay, when the
-        record went where the release before cannot follow)."""
+        """Check the release here (its compose file, what it knows of the record, a dry run of its updater), switch
+        to it, keep it if its validator runs, else go back (or stay, when the record went where the release before
+        cannot follow)."""
         ref = f"{self.image}@{release.digest}"
         name = f"build {release.build} (commit {release.commit[:12]}, {release.digest[:19]})"
-        good = self.installed_release()
-        if good is not None and good.digest == release.digest:
+        good = self.installed()
+        if good is not None and good.release.digest == release.digest:
             done, problem = self.restore(good, "installed again")
             return Outcome(problem is None, done)
         self.say(f"installing {name}")
-        self.run(["docker", "pull", "--quiet", ref], 1800)
+        try:
+            self.run(["docker", "pull", "--quiet", ref], 1800)
+        except UpdateError as exc:
+            if not any(sign in str(exc).lower() for sign in DOCKER_DOWN):
+                self._remember(release.digest, f"not downloaded: {exc}", PULL_RETRY_S)
+            raise
         self._write(NEW_COMPOSE, self._compose_of(ref))
         try:
             self.compose("config", "--quiet", file=NEW_COMPOSE)
-            floor = self._number(ref, ROLLBACK_FLOOR_CODE)
-            good_schema = self._number(f"{self.image}@{good.digest}", SCHEMA_CODE) if good is not None else 0
+            new = Installed(release, self._number(ref, SCHEMA_CODE), self._number(ref, ROLLBACK_FLOOR_CODE))
         except UpdateError as exc:
             self._hold(release.digest, f"it could not be checked here: {exc}", refused=False)
             raise UpdateError(f"{name}: not checked here, nothing changed: {exc}") from None
-        if good is not None and self.image_id(f"{self.image}@{good.digest}") is not None:
-            self.run(["docker", "tag", f"{self.image}@{good.digest}", PREVIOUS], 60)
+        try:
+            self.run(self._probe_command(ref), 300)
+        except UpdateError as exc:
+            if any(sign in str(exc).lower() for sign in DOCKER_DOWN):
+                raise
+            self._hold(release.digest, f"its updater does not run here ({exc})", refused=True)
+            return Outcome(False, f"{name}: its updater does not run here, nothing changed: {exc}")
+        if good is not None and self.image_id(f"{self.image}@{good.release.digest}") is not None:
+            self.run(["docker", "tag", f"{self.image}@{good.release.digest}", PREVIOUS], 60)
+        self._save(PENDING_FILE, release, new.schema, new.floor)
         self.run(["docker", "tag", ref, CURRENT], 60)
         os.replace(self.project / NEW_COMPOSE, self.project / "compose.yml")
         problem = self.start_validator()
         if problem is not None:
-            return self._go_back(release, name, problem, good, floor, good_schema)
-        self._record(release)  # from here on this release is the host's, whatever else fails
+            return self._go_back(new, name, problem, good)
+        self._record(new)  # from here on this release is the host's, whatever else fails
         try:
             self.start_others()
         except UpdateError as exc:
@@ -521,36 +615,27 @@ class Updater:
                 self.say(f"the updater did not restart ({exc}); the next looks try again")
         return Outcome(True, f"installed {name}")
 
-    def _go_back(
-        self, release: Release, name: str, problem: str, good: Release | None, floor: int, good_schema: int
-    ) -> Outcome:
+    def _go_back(self, new: Installed, name: str, problem: str, good: Installed | None) -> Outcome:
         """The new release's validator does not run: go back to the installed release, unless the record went
         through a step that release's code cannot follow; refuse the new one only if the old one then runs."""
+        release = new.release
         if good is None:
+            (self.project / PENDING_FILE).unlink(missing_ok=True)
             self._hold(release.digest, f"its validator does not run here ({problem})", refused=False)
             raise UpdateError(f"{name}: the validator does not run ({problem}), and there is no release to go back to")
-        if floor > good_schema:
-            record = self._record_schema()
-            if record is None or record >= floor:
-                self._record(release)
-                try:
-                    self.start_others()
-                except UpdateError:
-                    self._others_pending = True
-                return Outcome(
-                    False,
-                    f"{name} stays although its validator does not run ({problem}): build {good.build} cannot work "
-                    f"with the record as it is now (schema {record if record is not None else 'unknown'}, this "
-                    f"release's floor {floor}); a fixed release must follow",
-                )
-        self.say(f"{name}: the validator does not run ({problem}); going back to build {good.build}")
+        if self._past_the_floor(new, good):
+            return Outcome(False, self._keep(new, good, f"its validator does not run ({problem})"))
+        self.say(f"{name}: the validator does not run ({problem}); going back to build {good.release.build}")
         done, again = self.restore(good, f"build {release.build} does not run")
+        (self.project / PENDING_FILE).unlink(missing_ok=True)
         if again is not None:
-            self._hold(release.digest, f"neither it nor build {good.build} ran: the host is the problem", refused=False)
+            self._hold(
+                release.digest, f"neither it nor build {good.release.build} ran: the host is the problem", refused=False
+            )
             return Outcome(False, f"{done}: neither release runs, so the host is the problem; build {release.build} "
                                   "is tried again in an hour")  # fmt: skip
         self._hold(release.digest, f"this host went back from it ({problem})", refused=True)
-        return Outcome(False, f"went back to build {good.build}: build {release.build} {problem}")
+        return Outcome(False, f"went back to build {good.release.build}: build {release.build} {problem}")
 
     def start_validator(self) -> str | None:
         """Start the validator of `current`: None once its record is at the release's schema version (the health
@@ -565,9 +650,13 @@ class Updater:
             return f"not started: {exc}"
         running, base, health = self._validator_state()
         started = self.clock()
-        while health != "healthy":
-            if not running or health == "unhealthy":
-                return f"{'unhealthy' if running else 'stopped'} before it was ready"
+        while True:
+            if not running:
+                return "stopped before it was ready"
+            if health == "unhealthy":
+                return "unhealthy before it was ready"
+            if health == "healthy":
+                break
             if self.clock() - started > VALIDATOR_WAIT_S:
                 return f"not ready in {VALIDATOR_WAIT_S // 3600} hours"
             self.sleep(POLL_S)
@@ -581,8 +670,8 @@ class Updater:
         return None
 
     def _validator_state(self) -> tuple[bool, int, str]:
-        """Whether the validator's container runs, its restart count and its health; asked three times before
-        Docker's silence is an error (never a verdict on the release)."""
+        """Whether the validator's container runs, its restart count and its health ("healthy" without a health
+        check); asked three times before Docker's silence is an error (never a verdict on the release)."""
         problem: Exception | None = None
         for attempt in range(3):
             if attempt:
@@ -603,8 +692,7 @@ class Updater:
             self.compose("up", "-d", "--no-deps", "--remove-orphans", *others)
 
     def restart_updater(self) -> None:
-        """From a helper container, which outlives this one: `hop` recreates the updater with the new release. The
-        helper stays after it ends, for its log (`docker logs kokoah-subnet-updater-hop`)."""
+        """From a helper container, which outlives this one: `hop` recreates the updater with the new release."""
         try:
             self.run(["docker", "rm", "-f", HOP], 60)
         except UpdateError:
@@ -639,18 +727,41 @@ class Updater:
         self.sleep(2)
         self.compose("up", "-d", "--no-deps", "updater")
 
+    def probe(self) -> str:
+        """A dry run of this release's updater on the host, before the host switches to it: it reads the host's
+        files, Docker and the registry and checks the published release's signature; it changes nothing."""
+        good = self.installed()
+        self.held()
+        self.installed_digest()
+        latest = self.head(self.image, CHANNEL)
+        verify(self.run, f"{self.image}@{latest}", self.image)
+        return f"the updater runs here (installed: {good.release.build if good else 'none'}, published: {latest[:19]})"
+
     def setup(self, digest: str, allow_older: bool = False) -> str:
         """First start (`deploy/validator/install.sh`), run from the image it installs. The updater is started
-        whatever happens; an install that does not hold is an error."""
+        whatever happens; an install that does not hold is an error. Going back on purpose (`allow_older`) never
+        goes below what the record has been through."""
         try:
             with self._locked():
                 release = verify(self.run, f"{self.image}@{digest}", self.image)
-                good = self.installed_release()
-                if good is not None and release.build < good.build and not allow_older:
-                    raise UpdateError(
-                        f"build {release.build} is older than the installed build {good.build}; "
-                        "run install.sh --allow-older to go back on purpose"
-                    )
+                good = self.installed()
+                if good is not None and release.build < good.release.build:
+                    if not allow_older:
+                        raise UpdateError(
+                            f"build {release.build} is older than the installed build {good.release.build}; "
+                            "run install.sh --allow-older to go back on purpose"
+                        )
+                    ref = f"{self.image}@{release.digest}"
+                    self.run(["docker", "pull", "--quiet", ref], 1800)
+                    older = Installed(release, self._number(ref, SCHEMA_CODE), self._number(ref, ROLLBACK_FLOOR_CODE))
+                    if good.floor > (older.schema or 0):
+                        record = self._record_schema()
+                        if record is None or record >= good.floor:
+                            raise UpdateError(
+                                f"build {release.build} cannot work with the record (schema "
+                                f"{record if record is not None else 'unknown'}, past the floor {good.floor} of build "
+                                f"{good.release.build}): not installed"
+                            )
                 outcome = self.install(release, restart_self=False)
         finally:
             if (self.project / "compose.yml").exists():
