@@ -282,13 +282,16 @@ minutes (a request Docker Hub does not count as a pull). For a new image it:
    number (the workflow run, inside the signature) is below the installed one's is refused too, so an older release
    cannot be put back;
 2. downloads it by its digest and checks it on this host: its compose file must work here (`docker compose config`),
-   and it must say whether it can be rolled back (below); if not, nothing changes and it waits an hour;
+   it must say which schema version it brings the record to and whether it can be rolled back (below), and its own
+   updater must run here (a dry run that reads the host and the registry and changes nothing). If any of this fails,
+   nothing changes: the release waits an hour (six hours when its updater does not run, longer at each failure);
 3. tags it `kokoah-subnet:current` (the release running well until then stays as `kokoah-subnet:previous`), installs
    its compose file, and starts the new validator, which must bring the record to the release's schema version (it
    migrates it) within two hours and then run two minutes without a restart. A validator that stops or restarts
    fails at once, without waiting out the two hours;
-4. records the release in `release.json`, starts the health check and the interface, removes older images (keeping
-   `current` and `previous`) and restarts itself (its helper container's log: `docker logs kokoah-subnet-updater-hop`).
+4. records the release in `release.json` (with its schema version and rollback floor, so the release before's image
+   is never needed again), starts the health check and the interface, removes older images (keeping `current` and
+   `previous`) and restarts itself with the new release.
 
 A validator of a new release that fails at step 3 is **rolled back**: the release before comes back with its own
 compose file and everything restarts. If the release before then runs, the new one is held back from this host in
@@ -296,13 +299,16 @@ compose file and everything restarts. If the release before then runs, the new o
 otherwise keep a good release out for good); if neither runs, the host is the problem and the new one is tried again
 an hour later. The record stays as the new release left it. Releases only add to it, so the release before reads it;
 a release whose migration does more says so (`ROLLBACK_FLOOR` in `src/kokoah_subnet/validator/migrations.py`), and
-once the record has gone through that step it is never rolled back onto older code: it stays until a fixed release
-follows.
+once its validator has run and the record has gone through that step (the validator is stopped and the record read
+first), it is never rolled back onto older code: it stays until a fixed release follows. A validator that was never
+created never ran, so its release goes back without a look at the record.
 
 Every look first makes sure the host runs the release in `release.json`: an install or a rollback cut short (a
-reboot, Docker restarting) is put right at the next look, and so is an updater that did not restart itself. A repair
-that does not hold is tried again an hour later, and meanwhile the look goes on to the published release, so a fixed
-release still installs. Docker not answering is never taken as a verdict on a release.
+reboot, Docker restarting) is put right at the next look, and so is an updater that did not restart itself. An install
+cut short is noted in `installing.json` while it lasts, so the same rule holds there: a release whose record moved
+past what the release before reads is kept, not rolled back. A repair that fails, or cannot even be tried, is tried
+again an hour later, and meanwhile the look goes on to the published release, so a fixed release still installs.
+Docker not answering is never taken as a verdict on a release.
 
 The updater's log says what it installed, held back or rolled back: `sudo docker logs kokoah-subnet-updater`. To try
 a held-back release again sooner, remove its entry from `/opt/kokoah-subnet/docker/refused.json`. To hold updates,
@@ -336,7 +342,7 @@ The scripts and unit files are copied again, so changes to them take effect too.
 the Docker part of section 6 (the `.env` file, then `install.sh` from the repository): the settings, the data and the
 record stay as they are. `install.sh` refuses to start while a systemd validator, interface or check runs, restarts
 or is enabled, and prints the command that stops them. Run again later, it never installs a release older than the
-one recorded unless given `--allow-older`.
+one recorded unless given `--allow-older`, and never one whose code cannot work with the record as it is now.
 
 - **Parameter changes** are versioned in the code, announced at least seven days before they take effect, and
   published in every daily artifact as the mechanism's version. Such a change reaches main on the day it takes
