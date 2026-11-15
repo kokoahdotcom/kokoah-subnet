@@ -369,9 +369,17 @@ class Updater:
         except OSError:
             pass
         tmp = path.with_name(f".{name}.tmp")
-        tmp.write_text(text)
+        with open(tmp, "w") as f:  # on disk before it replaces the old file: a power cut leaves one or the other
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
         tmp.chmod(0o644)
         os.replace(tmp, path)
+        folder = os.open(self.project, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
         return True
 
     @contextmanager
@@ -410,49 +418,59 @@ class Updater:
         except (ValueError, IndexError):
             raise UpdateError(f"{ref}: printed no number") from None
 
-    def _probe_command(self, ref: str) -> list[str]:
-        """The new release's updater, run once as a dry run, with what the updater service mounts (read-only)."""
+    def _probe_command(self, ref: str, digest: str) -> list[str]:
+        """The new release's updater, run once as a dry run, as the updater service runs (its user, its limits, its
+        mounts, the project folder read-only), checking the release it is part of."""
         project = str(self.project)
         return [
             "docker", "run", "--rm", "--network", "host", "--user", "0:0", "--read-only", "--tmpfs", "/tmp",
+            "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
             "-e", "HOME=/tmp", "-e", "DOCKER_CONFIG=/tmp/docker", "-v", "/var/run/docker.sock:/var/run/docker.sock",
-            "-v", f"{project}:{project}:ro", ref, "validator", "update", "probe", "--project-dir", project,
+            "-v", f"{project}:{project}:ro", "-v", "/etc/kokoah-subnet:/etc/kokoah-subnet:ro",
+            "--entrypoint", "kokoah-subnet", ref,
+            "validator", "update", "probe", "--project-dir", project, "--digest", digest,
         ]  # fmt: skip
 
     def _record_schema(self) -> int | None:
-        """The schema version the record is at now, read with the validator's own settings; None if unreadable."""
+        """The schema version the record is at now, read with the validator's own settings; None when it cannot be
+        read (the database not up yet, say). Docker itself not answering is an error."""
         try:
             out = self.compose(
                 "run", "--rm", "--no-deps", "-T", "--entrypoint", "python", "validator", "-c", RECORD_SCHEMA_CODE,
                 timeout=300,
             )  # fmt: skip
             return int(out.strip().splitlines()[-1])
-        except (UpdateError, ValueError, IndexError):
+        except UpdateError as exc:
+            if any(sign in str(exc).lower() for sign in DOCKER_DOWN):
+                raise
+            return None
+        except (ValueError, IndexError):
             return None
 
-    def _past_the_floor(self, new: Installed, back: Installed) -> bool:
+    def _past_the_floor(self, new: Installed, back: Installed) -> bool | None:
         """Whether going back from `new` to `back` would put code on a record it cannot work with: `new` marks a
-        migration that `back`'s code ends before, its code ran here, and the record went through it (or cannot be
-        read). The new validator is stopped first, so the record does not move while it is read."""
+        migration that `back`'s code ends before, its code ran here, and the record went through it. None when the
+        record cannot be read: the choice waits, nothing is guessed. A record still below the floor is read again
+        with the new validator stopped, so it cannot cross the floor between the reading and going back."""
         if new.floor <= (back.schema if back.schema is not None else 0):
             return False
         if self.container_image(VALIDATOR) != self.image_id(f"{self.image}@{new.release.digest}"):
             return False  # its code never ran here
-        try:
-            self.compose("stop", "validator")
-        except UpdateError as exc:
-            self.say(f"the new validator did not stop ({exc}); reading the record anyway")
         record = self._record_schema()
-        return record is None or record >= new.floor
+        if record is None or record >= new.floor:
+            return None if record is None else True
+        self.compose("stop", "validator")
+        record = self._record_schema()
+        if record is None:
+            return None
+        return record >= new.floor
 
     def _keep(self, new: Installed, back: Installed, why: str) -> str:
-        """Stay on a release that cannot be rolled back, recorded as installed, until a fixed release follows."""
+        """Stay on a release that cannot be rolled back, until a fixed release follows: its validator is started
+        first and only then is the release recorded, so a failure leaves the choice to the next look."""
+        self.compose("up", "-d", "--no-deps", "validator")
         self._record(new)
         self._others_pending = True
-        try:
-            self.compose("up", "-d", "--no-deps", "validator")
-        except UpdateError as exc:
-            self.say(f"the validator did not start again: {exc}")
         name = f"build {new.release.build}"
         return (
             f"{name} stays although {why}: build {back.release.build} cannot work with the record it may have "
@@ -511,12 +529,21 @@ class Updater:
         is kept instead. A repair that fails is tried again an hour later, and the look goes on meanwhile, so a
         fixed release still installs."""
         current = self.installed_digest()
+        pending = self._read(PENDING_FILE)
+        if pending is not None and current == pending.release.digest != good.release.digest:
+            # an install was cut short: whether its release may be left depends on the record, before anything else
+            past = self._past_the_floor(pending, good)
+            if past:
+                return self._keep(pending, good, "its install was cut short"), True
+            if past is None:
+                self.compose("up", "-d", "--no-deps", "validator")
+                return (
+                    f"build {pending.release.build} was being installed and the record cannot be read yet: the "
+                    f"choice between it and build {good.release.build} waits for a later look"
+                ), True
         if current != good.release.digest or self.container_image(VALIDATOR) != self.image_id(CURRENT):
             if self._repair_failed_at is not None and self.clock() - self._repair_failed_at < RETRY_S:
                 return None, False
-            pending = self._read(PENDING_FILE)
-            if pending is not None and current == pending.release.digest and self._past_the_floor(pending, good):
-                return self._keep(pending, good, "its install was cut short"), True
             try:
                 done, problem = self.restore(good, "the host does not run it")
             except UpdateError as exc:
@@ -587,12 +614,13 @@ class Updater:
             self._hold(release.digest, f"it could not be checked here: {exc}", refused=False)
             raise UpdateError(f"{name}: not checked here, nothing changed: {exc}") from None
         try:
-            self.run(self._probe_command(ref), 300)
+            self.run(self._probe_command(ref, release.digest), 300)
         except UpdateError as exc:
             if any(sign in str(exc).lower() for sign in DOCKER_DOWN):
                 raise
-            self._hold(release.digest, f"its updater does not run here ({exc})", refused=True)
-            return Outcome(False, f"{name}: its updater does not run here, nothing changed: {exc}")
+            # held an hour, not refused: a registry or signature service hiccup fails it as surely as a broken one
+            self._hold(release.digest, f"its updater's dry run failed here ({exc})", refused=False)
+            return Outcome(False, f"{name}: its updater's dry run failed here, nothing changed: {exc}")
         if good is not None and self.image_id(f"{self.image}@{good.release.digest}") is not None:
             self.run(["docker", "tag", f"{self.image}@{good.release.digest}", PREVIOUS], 60)
         self._save(PENDING_FILE, release, new.schema, new.floor)
@@ -623,9 +651,17 @@ class Updater:
             (self.project / PENDING_FILE).unlink(missing_ok=True)
             self._hold(release.digest, f"its validator does not run here ({problem})", refused=False)
             raise UpdateError(f"{name}: the validator does not run ({problem}), and there is no release to go back to")
-        if self._past_the_floor(new, good):
+        past = self._past_the_floor(new, good)
+        if past:
             return Outcome(False, self._keep(new, good, f"its validator does not run ({problem})"))
+        if past is None:
+            raise UpdateError(
+                f"{name}: the validator does not run ({problem}) and the record cannot be read: the choice between "
+                f"it and build {good.release.build} waits for a later look"
+            )
         self.say(f"{name}: the validator does not run ({problem}); going back to build {good.release.build}")
+        # held while going back, so that a way back that fails does not bring this release in again at once
+        self._hold(release.digest, f"going back from it ({problem})", refused=False)
         done, again = self.restore(good, f"build {release.build} does not run")
         (self.project / PENDING_FILE).unlink(missing_ok=True)
         if again is not None:
@@ -727,15 +763,18 @@ class Updater:
         self.sleep(2)
         self.compose("up", "-d", "--no-deps", "updater")
 
-    def probe(self) -> str:
+    def probe(self, digest: str | None = None) -> str:
         """A dry run of this release's updater on the host, before the host switches to it: it reads the host's
-        files, Docker and the registry and checks the published release's signature; it changes nothing."""
+        files and Docker, checks the release's compose file with its own compose, reads the registry and checks the
+        release's signature (`digest`, else the published one's); it changes nothing."""
         good = self.installed()
         self.held()
         self.installed_digest()
+        if (self.project / NEW_COMPOSE).exists():
+            self.compose("config", "--quiet", file=NEW_COMPOSE)
         latest = self.head(self.image, CHANNEL)
-        verify(self.run, f"{self.image}@{latest}", self.image)
-        return f"the updater runs here (installed: {good.release.build if good else 'none'}, published: {latest[:19]})"
+        release = verify(self.run, f"{self.image}@{digest or latest}", self.image)
+        return f"the updater runs here (installed: {good.release.build if good else 'none'}, checked: {release.build})"
 
     def setup(self, digest: str, allow_older: bool = False) -> str:
         """First start (`deploy/validator/install.sh`), run from the image it installs. The updater is started

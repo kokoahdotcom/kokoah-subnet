@@ -298,6 +298,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "setup":
             u.add_argument("--digest", required=True, help="the verified digest install.sh pulled")
             u.add_argument("--allow-older", action="store_true", help="install it even if older than the installed")
+        if name == "probe":
+            u.add_argument("--digest", default=None, help="the release to check (default: the published one)")
     return parser
 
 
@@ -479,7 +481,7 @@ def _update(args: argparse.Namespace) -> int:
         elif args.update_command == "hop":
             updater.hop()
         elif args.update_command == "probe":
-            print(updater.probe())
+            print(updater.probe(args.digest))
     except UpdateError as exc:
         print(f"update: {exc}", file=sys.stderr)
         return 1
