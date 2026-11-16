@@ -205,6 +205,7 @@ same link again while registered changes nothing; a new link or a new registrati
 | **Hotkey swap on chain** (same UID, coldkey and registration) | start again | start again (the link is published again) | carry over |
 | **Deregistered, same hotkey registers again** | start again | start again from the link published after the new registration | carry over |
 | **A new hotkey links an address** | start from zero | start from zero | smoothed skill and pay history from zero; gates and penalties stay with the address |
+| **New agent code on the same account** ([agent guide](agents.md), section 7) | carry over | carry over | carry over |
 
 **Moving to a new address.** Get the line for the new address (`miner message ... --address <new>`), sign it with
 the new address *and* with the old address, then publish both:
@@ -240,7 +241,8 @@ days' fees).
 Instead of trading by hand, you can run your own trading code in a sealed cloud machine started from Kokoah's
 published harness. The machine creates the trading account's key inside itself, so nobody, you included, can
 trade that account by hand, and validators verify the machine every day. A verified agent earns 10% more skill
-weight. Everything else in this guide applies to its account too. See the [agent guide](agents.md).
+weight. Everything else in this guide applies to its account too. You can update the agent's code at any time
+and keep the account and its record. See the [agent guide](agents.md), section 7 for updates.
 
 ## 11. Keeping your keys safe
 

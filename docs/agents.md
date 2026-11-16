@@ -159,7 +159,8 @@ read it). Start a new machine from the newest approved image (its digest in `tee
 settings plus `tee-env-KOKOAH_AGENT_RESTORE=<account address>`: it proves to the service that it is a genuine sealed
 machine, gets the copy back, and the same account carries on as an agent. It resumes the account only for the master
 address and hotkey the copy was filed for: a machine started with others stops before using the key. Keep your
-password (or the generated file) safe: without it the copy cannot be opened, and nobody can recover it for you.
+password (or the generated file) safe: without it the copy cannot be opened, and nobody can recover it for you. The
+same restore puts new code on the account: see section 7.
 
 **Taking the key out yourself** (for example to trade the account by hand) ends the agent bonus for that account for
 good, and the release is public:
@@ -196,6 +197,105 @@ curl -X POST http://<machine>:8080/withdraw -H 'content-type: application/json' 
 Withdrawals go only to the master address. `agent message stop` and `POST /stop` cancel all open orders and stop the
 agent (positions stay open: close them first with the agent, or let it do so before you stop it). A signed message
 is good for 5 minutes from its time and works once; for another withdrawal or stop, print a new message.
+
+## 7. Update your agent
+
+You can change your agent's code whenever you like. The account stays the same, and so does its record:
+validators date the record from the day the account was linked, and a new code fingerprint for the same account
+doesn't change that. Your 30 days for the entry test, the record's length, your fee credit and your
+qualification all carry on. There is nothing to rebuild and no new account to fund. (A validator that joins later
+dates every link from its latest publish, an update's included, as for any link published again.)
+
+| After an update | |
+|---|---|
+| The account, its money and its positions | the same |
+| The record: days counted, daily returns, skill | carries on |
+| Fee credit and qualification | carry on |
+| The agent bonus | carries on; a switch while validators are checking costs the bonus for the day they are scoring (step 3) |
+
+An update replaces the machine: a new one runs the new code on the same account, with the account's key copy.
+
+**Before you start: you need your secret** (section 3: the password or the generated file). Only with it can a new
+machine open the account's key copy. Without it, don't stop the machine: withdraw the money with it first
+(section 6). New code then needs a new account, with another hotkey, and its record starts from zero.
+
+**1. Package and submit the new code** (section 2), under a new file name, so the old bundle and its key stay as
+they are (the tool refuses to write over an existing bundle key, but would write over a `--public` bundle):
+
+```bash
+uv run kokoah-subnet agent package ./my-agent --out ~/kokoah-agent/my-agent-v2.bundle
+# writes ~/kokoah-agent/my-agent-v2.bundle.key; then submit my-agent-v2.bundle as in section 2
+```
+
+Note the submission id and the code fingerprint the tool prints, and keep the bundle and its key: a later restore
+needs them, and the service keeps only your newest five bundles. One submission per hotkey per 12 hours: submit
+once, and use the same submission id for the test and for mainnet.
+
+**2. Try it first (recommended)** on Hyperliquid's test exchange with a separate machine. Nothing it trades counts,
+and your mainnet agent keeps running meanwhile. **Never run `agent bind` for the test machine:** your hotkey
+publishes one binding, so it would replace your mainnet account's, which then earns no agent bonus until you bind it
+again. Start it as in section 4 (the firewall rule is there already) with:
+
+- another instance name, for example `kokoah-agent-test` (`kokoah-agent` is your running mainnet machine);
+- the new submission id and its bundle key, and `KOKOAH_AGENT_NETWORK=testnet`;
+- its own start permission for the new submission, written to a new file (the tool won't overwrite one):
+  `agent authorize ... --submission <new id> --out ~/kokoah-agent/permit-test.txt`. The machine creates a new test
+  account.
+
+Send test USDC from your own testnet account to the test account (`address` in its `/status`): without a deposit
+the builder fee can't be approved and every order is refused. When you're done, delete the test machine
+(`gcloud compute instances delete kokoah-agent-test --zone=...`).
+
+**3. Pick a time.** Validators check every agent once a day, while they score the previous UTC day: normally
+between midnight UTC and noon. A check that finds the machine stopped, or running other code than the committed
+fingerprint, gives no agent bonus for the day being scored, which is the day *before* the switch; nothing else is
+affected. Between 13:00 and 22:00 UTC a switch normally costs nothing (a validator coming back from an outage checks
+whenever it is back, and may score several missed days then).
+
+**4. Stop the old machine.** Print and send a stop (section 6): the agent stops and the account's open orders are
+cancelled. Positions stay open with nothing managing them until
+the new code runs, so keep the switch short (and have the new code read the account's positions and orders when it
+starts), or let the old agent close them before you stop it. Then delete the machine:
+
+```bash
+gcloud compute instances delete kokoah-agent --zone=us-central1-a
+```
+
+Never run two machines on one account: both would trade it.
+
+**5. Start the new machine** with the command from section 4 (the firewall rule is there already), changing only
+these settings:
+
+- `tee-env-KOKOAH_AGENT_SUBMISSION=<the new submission id>`, and the new bundle key file:
+  `tee-env-KOKOAH_AGENT_BUNDLE_KEY=$HOME/kokoah-agent/my-agent-v2.bundle.key` (left out for a `--public` bundle);
+- add `~tee-env-KOKOAH_AGENT_RESTORE=<the account address>`;
+- leave out `KOKOAH_AGENT_PERMIT`: a start permission is needed only to create a new account;
+- `tee-image-reference`: the newest approved harness image, which may be newer than the old machine's.
+
+Keep `KOKOAH_AGENT_SECRET`, `KOKOAH_AGENT_MASTER`, `KOKOAH_AGENT_HOTKEY`, `KOKOAH_AGENT_NETUID` and
+`KOKOAH_AGENT_NETWORK` exactly as before. The machine proves to Kokoah's key service that it is a genuine sealed
+machine, gets the account's key copy back and opens it inside with your secret. It resumes the account only for the
+master address and hotkey the copy was filed for; with any others it stops before using the key. Forgetting
+`KOKOAH_AGENT_RESTORE` makes it stop too (it has no start permission to create an account).
+
+**6. Check it.** `curl http://<new machine>:8080/status` must show the same `address` (the account) and the new
+`code_sha256`. If it doesn't answer within a few minutes, check the settings above, delete the machine and start
+it again (the instance name stays taken until it is deleted).
+
+**7. Bind again** right away, with the new machine's address:
+
+```bash
+uv run kokoah-subnet agent bind --netuid 39 --network finney --endpoint http://<new machine>:8080 \
+  --wallet <wallet> --wallet-hotkey <hotkey>
+```
+
+This publishes the new code fingerprint and the new machine's address from your hotkey. From the next daily check
+on, validators challenge the new machine and expect the new code; until you bind, they still expect the old code at
+the old address. The account needs no new deposit: its money, its approved builder fee and its record are where
+they were.
+
+**Don't take the key out to update.** Taking the key out yourself (section 4) ends the agent bonus for that account
+for good, and an update never needs it.
 
 ## What the validators check every day
 
