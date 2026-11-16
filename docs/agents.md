@@ -211,7 +211,7 @@ dates every link from its latest publish, an update's included, as for any link 
 | The account, its money and its positions | the same |
 | The record: days counted, daily returns, skill | carries on |
 | Fee credit and qualification | carry on |
-| The agent bonus | carries on from the next daily check; at most the day of the switch is missed |
+| The agent bonus | carries on; a switch while validators are checking costs the bonus for the day they are scoring (step 3) |
 
 An update replaces the machine: a new one runs the new code on the same account, with the account's key copy.
 
@@ -219,23 +219,40 @@ An update replaces the machine: a new one runs the new code on the same account,
 machine open the account's key copy. Without it, don't stop the machine: withdraw the money with it first
 (section 6). New code then needs a new account, with another hotkey, and its record starts from zero.
 
-**1. Package and submit the new code** (section 2). Note the submission id and the code fingerprint the tool
-prints, and keep the bundle and its key: a later restore needs them, and the service keeps only your newest five
-bundles. One submission per hotkey per 12 hours: submit once, and use the same submission id for the test and for
-mainnet.
+**1. Package and submit the new code** (section 2), under a new file name, since the tool won't overwrite a bundle
+or its key:
 
-**2. Try it first (recommended)** on Hyperliquid's test exchange with a separate machine: the same submission,
-`KOKOAH_AGENT_NETWORK=testnet`, a new account and its own start permission. Nothing it trades counts, and your
-mainnet agent keeps running meanwhile. **Never run `agent bind` for the test machine:** your hotkey publishes one
-binding, so it would replace your mainnet account's, which then earns no agent bonus until you bind it again.
+```bash
+uv run kokoah-subnet agent package ./my-agent --out ~/kokoah-agent/my-agent-v2.bundle
+# writes ~/kokoah-agent/my-agent-v2.bundle.key; then submit my-agent-v2.bundle as in section 2
+```
+
+Note the submission id and the code fingerprint the tool prints, and keep the bundle and its key: a later restore
+needs them, and the service keeps only your newest five bundles. One submission per hotkey per 12 hours: submit
+once, and use the same submission id for the test and for mainnet.
+
+**2. Try it first (recommended)** on Hyperliquid's test exchange with a separate machine. Nothing it trades counts,
+and your mainnet agent keeps running meanwhile. Start it as in section 4 with:
+
+- another instance name, for example `kokoah-agent-test` (`kokoah-agent` is your running mainnet machine);
+- the new submission id and its bundle key, and `KOKOAH_AGENT_NETWORK=testnet`;
+- its own start permission for the new submission, written to a new file (the tool won't overwrite one):
+  `agent authorize ... --submission <new id> --out ~/kokoah-agent/permit-test.txt`. It creates a new test account.
+
+Deposit test USDC to the test account (`address` in its `/status`) on Hyperliquid's test exchange: without a
+deposit the builder fee can't be approved and every order is refused. When you're done, delete the test machine
+(`gcloud compute instances delete kokoah-agent-test --zone=...`). **Never run `agent bind` for the test machine:**
+your hotkey publishes one binding, so it would replace your mainnet account's, which then earns no agent bonus until
+you bind it again.
 
 **3. Pick a time.** Validators check every agent once a day, while they score the previous UTC day: normally
 between midnight UTC and noon. A check that finds the machine stopped, or running other code than the committed
-fingerprint, gives no agent bonus for that one day; nothing else is affected. Between 13:00 and 22:00 UTC a switch
-normally costs nothing (a validator coming back from an outage checks whenever it is back).
+fingerprint, gives no agent bonus for the day being scored, which is the day *before* the switch; nothing else is
+affected. Between 13:00 and 22:00 UTC a switch normally costs nothing (a validator coming back from an outage checks
+whenever it is back, and may score several missed days then).
 
 **4. Stop the old machine.** Print and send a stop (section 6): the agent stops and the account's open orders are
-cancelled, stop-losses and take-profits included. Positions stay open with nothing managing or protecting them until
+cancelled. Positions stay open with nothing managing them until
 the new code runs, so keep the switch short (and have the new code read the account's positions and orders when it
 starts), or let the old agent close them before you stop it. Then delete the machine:
 
@@ -248,8 +265,8 @@ Never run two machines on one account: both would trade it.
 **5. Start the new machine** with the command from section 4 (the firewall rule is there already), changing only
 these settings:
 
-- `tee-env-KOKOAH_AGENT_SUBMISSION=<the new submission id>`, and its bundle key in `KOKOAH_AGENT_BUNDLE_KEY` (left
-  out for a `--public` bundle);
+- `tee-env-KOKOAH_AGENT_SUBMISSION=<the new submission id>`, and the new bundle key file:
+  `tee-env-KOKOAH_AGENT_BUNDLE_KEY=$HOME/kokoah-agent/my-agent-v2.bundle.key` (left out for a `--public` bundle);
 - add `~tee-env-KOKOAH_AGENT_RESTORE=<the account address>`;
 - leave out `KOKOAH_AGENT_PERMIT`: a start permission is needed only to create a new account;
 - `tee-image-reference`: the newest approved harness image, which may be newer than the old machine's.
@@ -261,7 +278,8 @@ master address and hotkey the copy was filed for; with any others it stops befor
 `KOKOAH_AGENT_RESTORE` makes it stop too (it has no start permission to create an account).
 
 **6. Check it.** `curl http://<new machine>:8080/status` must show the same `address` (the account) and the new
-`code_sha256`. If it doesn't answer within a few minutes, check the settings above and start it again.
+`code_sha256`. If it doesn't answer within a few minutes, check the settings above, delete the machine and start
+it again (the instance name stays taken until it is deleted).
 
 **7. Bind again** right away, with the new machine's address:
 
