@@ -219,8 +219,8 @@ An update replaces the machine: a new one runs the new code on the same account,
 machine open the account's key copy. Without it, don't stop the machine: withdraw the money with it first
 (section 6). New code then needs a new account, with another hotkey, and its record starts from zero.
 
-**1. Package and submit the new code** (section 2), under a new file name, since the tool won't overwrite a bundle
-or its key:
+**1. Package and submit the new code** (section 2), under a new file name, so the old bundle and its key stay as
+they are (the tool refuses to write over an existing bundle key, but would write over a `--public` bundle):
 
 ```bash
 uv run kokoah-subnet agent package ./my-agent --out ~/kokoah-agent/my-agent-v2.bundle
@@ -232,18 +232,19 @@ needs them, and the service keeps only your newest five bundles. One submission 
 once, and use the same submission id for the test and for mainnet.
 
 **2. Try it first (recommended)** on Hyperliquid's test exchange with a separate machine. Nothing it trades counts,
-and your mainnet agent keeps running meanwhile. Start it as in section 4 with:
+and your mainnet agent keeps running meanwhile. **Never run `agent bind` for the test machine:** your hotkey
+publishes one binding, so it would replace your mainnet account's, which then earns no agent bonus until you bind it
+again. Start it as in section 4 (the firewall rule is there already) with:
 
 - another instance name, for example `kokoah-agent-test` (`kokoah-agent` is your running mainnet machine);
 - the new submission id and its bundle key, and `KOKOAH_AGENT_NETWORK=testnet`;
 - its own start permission for the new submission, written to a new file (the tool won't overwrite one):
-  `agent authorize ... --submission <new id> --out ~/kokoah-agent/permit-test.txt`. It creates a new test account.
+  `agent authorize ... --submission <new id> --out ~/kokoah-agent/permit-test.txt`. The machine creates a new test
+  account.
 
-Deposit test USDC to the test account (`address` in its `/status`) on Hyperliquid's test exchange: without a
-deposit the builder fee can't be approved and every order is refused. When you're done, delete the test machine
-(`gcloud compute instances delete kokoah-agent-test --zone=...`). **Never run `agent bind` for the test machine:**
-your hotkey publishes one binding, so it would replace your mainnet account's, which then earns no agent bonus until
-you bind it again.
+Send test USDC from your own testnet account to the test account (`address` in its `/status`): without a deposit
+the builder fee can't be approved and every order is refused. When you're done, delete the test machine
+(`gcloud compute instances delete kokoah-agent-test --zone=...`).
 
 **3. Pick a time.** Validators check every agent once a day, while they score the previous UTC day: normally
 between midnight UTC and noon. A check that finds the machine stopped, or running other code than the committed
