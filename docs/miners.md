@@ -144,8 +144,9 @@ first two trades earn no credit; the trade that completes both conditions, and e
 is no waiting period, and qualification lasts for as long as your identity does (section 9).
 
 **Account value (every day).** The day's **average account value must be at least $10,000**. It is measured from
-Hyperliquid's own record of your perpetuals account value, recorded about every two hours, averaged over the whole
-UTC day, never from a single snapshot. Falling below costs that day only: there is no penalty, and pay resumes on
+Hyperliquid's own record of your account's whole value, spot included (in a unified account your USDC sits in spot),
+recorded about every two hours, averaged over the whole UTC day, never from a single snapshot. Spot tokens count at
+Hyperliquid's price, but their price changes never count as trading returns. Falling below costs that day only: there is no penalty, and pay resumes on
 the next day at or above the floor. On an ineligible day nothing is added to your credit and you take no share of
 the pool, so you dilute nobody.
 
