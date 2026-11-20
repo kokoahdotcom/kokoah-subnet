@@ -203,7 +203,8 @@ the account at $10,000 or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
 `r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), $10,000))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
-never loses more than everything (−100%).
+never loses more than everything (−100%). The first day measured by the whole value (§9a) is never read whole: the day
+before holds the perps account's value, so without its own points it has no return.
 A day has a return only when its account value and the previous day's are both known; the windows below count known returns, so a day without one (an account value that could not be read,
 or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 
@@ -422,7 +423,8 @@ before the hotkey's current registration block never counts again.
   never pay. The bindings are read when a day is scored and the day's file is scored as a whole, so a binding
   accepted before a day is scored covers that whole day, including its earlier fills (they also count toward
   qualification). The account's history from before joining does not count for skill: on the first day an address
-  is scored, the exchange's portfolio history (perps window) backfills daily account values, which give that day its
+  is scored, the exchange's portfolio history (the month windows, each day by its own rule: §9a) backfills daily
+  account values; a day without a perps profit point (or after one) has no known money moved and no return. They give that day its
   return and the record page its history, but the entry test and the skill score read only the days after the
   binding was accepted (§7a).
 
