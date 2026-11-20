@@ -184,6 +184,7 @@ STEPS: list[tuple[int, str, Step]] = [
     (12, "penalties: one row per report", _penalty_per_report),
     (13, "miner_days.joined_day", _add_column("miner_days", "joined_day", "varchar(10)")),
     (14, "earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs", _backfill_earned),
+    (15, "equity.offmarket_moves", _add_column("equity", "offmarket_moves", "json")),
 ]
 
 
