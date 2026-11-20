@@ -575,3 +575,28 @@ async def test_the_items_a_response_returns_are_charged_too() -> None:
     assert await spent({"type": "userNonFundingLedgerUpdates"}) == 20 + 2  # 50 records
     assert await spent({"type": "userDetails"}) == 40  # an explorer request
     await hl.close()
+
+
+def test_whole_value_windows_from_spec_6_7() -> None:
+    """Before `whole_value_from`: the perps account's value and profit; from it on: the whole value (spot included)
+    with the perps account's profit, and a first-time address's history backfilled the same way."""
+    from kokoah_subnet.mechanism import DEFAULT
+    from kokoah_subnet.validator.hyperliquid import daily_equity_from_portfolio
+
+    day = DEFAULT.whole_value_from
+    assert DEFAULT.windows_for("2026-11-01") == ("perpWeek", "perpAllTime", "perpWeek")
+    assert DEFAULT.windows_for(day) == ("week", "allTime", "perpWeek")
+    assert DEFAULT.month_windows_for("2026-11-01") == ("perpMonth", "perpMonth")
+    assert DEFAULT.month_windows_for(day) == ("month", "perpMonth")
+    d1, d2 = 1_790_000_000_000, 1_790_000_000_000 + 86_400_000
+    windows = [
+        ["month", {"accountValueHistory": [[d1, "10000"], [d2, "10600"]], "pnlHistory": [[d1, "0"], [d2, "400"]]}],
+        ["perpMonth", {"accountValueHistory": [[d1, "3000"], [d2, "3100"]], "pnlHistory": [[d1, "0"], [d2, "100"]]}],
+    ]
+    # the whole value, and the change the perps profit doesn't explain (a spot token's gain of 300, and the rest) is
+    # money moved
+    (_, first, _), (_, second, flows) = daily_equity_from_portfolio(windows, "month", "perpMonth")
+    assert (first, second, flows) == (10000.0, 10600.0, 500.0)
+    # the perps windows alone, as before
+    (_, _, _), (_, perps, perps_flows) = daily_equity_from_portfolio(windows)
+    assert (perps, perps_flows) == (3100.0, 0.0)

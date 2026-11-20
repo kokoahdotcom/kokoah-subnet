@@ -331,26 +331,21 @@ def flows_from_updates(user: str, updates: list[dict[str, Any]]) -> float:
 
 
 def daily_equity_from_portfolio(
-    windows: list[Any], prefer: tuple[str, ...] = ("perpMonth", "month")
+    windows: list[Any], value_window: str = "perpMonth", profit_window: str | None = None
 ) -> list[tuple[str, float, float]]:
     """(day, end-of-day account value, net flows) per UTC day from the portfolio history: the last point of each day
-    gives the value; flows are the change in value not explained by the day's PnL. Perps-only windows are preferred."""
-    chosen: Mapping[str, Any] | None = None
-    for name in prefer:
-        for w in windows:
-            if isinstance(w, list | tuple) and len(w) == 2 and w[0] == name:
-                chosen = w[1]
-                break
-        if chosen is not None:
-            break
-    if not chosen:
+    of the `value_window` gives the value; flows are the change in value not explained by the day's profit, read from
+    the `profit_window` (the same one when None)."""
+    chosen = _window(windows, value_window)
+    gains = _window(windows, profit_window or value_window)
+    if not chosen or not gains:
         return []
     values = {}
     for ts, v in chosen.get("accountValueHistory", []):
         day = datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d")
         values[day] = float(v)
     pnls = {}
-    for ts, v in chosen.get("pnlHistory", []):
+    for ts, v in gains.get("pnlHistory", []):
         day = datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d")
         pnls[day] = float(v)
     out: list[tuple[str, float, float]] = []

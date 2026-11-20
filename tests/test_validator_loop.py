@@ -1,7 +1,7 @@
 """The whole validator pass against fakes: a cached builder file, a fake info endpoint, a fake chain."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +45,8 @@ TX_LOOKUPS: list[str] = []  # every txDetails hash asked
 SUBS: dict[str, list[str]] = {}  # address -> its sub-accounts
 FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
 FILLS_READ: list[str] = []  # every address whose fill history was asked
+WHOLE: dict[str, float] = {}  # address -> the whole account's value (spot included), when not the perps value
+SPOT_GAIN: dict[str, float] = {}  # address -> a spot token's gain through the day (in the whole value and its profit)
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 H = 3_600_000
@@ -266,9 +268,27 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         week_pnl = [[DAY_MS - 7 * 86_400_000 + 123, "0"]] + [[ts, pnl_at(ts)] for ts in times]
         week_pnl += [[DAY_MS + 86_400_000 + 3_600_000 + 456, "777"]]
         all_time = {"accountValueHistory": [[DAY_MS - 90 * 86_400_000, "1000"]], "pnlHistory": []}
+        # the whole account's windows (spot included): its own value, and a spot token's gain on top of the profit
+        spot = SPOT_GAIN.get(user, 0.0)
+
+        def through(ts: int) -> float:
+            return spot * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000))
+
+        def whole_at(ts: int) -> str:
+            return str((WHOLE[user] if user in WHOLE else float(value_at(ts))) + through(ts))
+
+        whole = [week[0]] + [[ts, whole_at(ts)] for ts in times] + [week[-1]]
+        whole_pnl = [week_pnl[0]] + [[ts, str(float(pnl_at(ts)) + through(ts))] for ts in times] + [week_pnl[-1]]
+        month = {
+            "accountValueHistory": [[DAY_MS - 86_400_000, str(WHOLE.get(user, 24000.0))]],
+            "pnlHistory": [[DAY_MS - 86_400_000, "0"]],
+        }
         return httpx.Response(
             200,
             json=[
+                ["month", month],
+                ["week", {"accountValueHistory": whole, "pnlHistory": whole_pnl}],
+                ["allTime", all_time],
                 ["perpMonth", hist],
                 ["perpWeek", {"accountValueHistory": week, "pnlHistory": week_pnl}],
                 ["perpAllTime", all_time],
@@ -283,6 +303,8 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 
 def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _FakeChain, str, str]:
     EQUITY.clear()
+    WHOLE.clear()
+    SPOT_GAIN.clear()
     LIVE.clear()
     STEP.clear()
     PNL_DAY.clear()
@@ -321,6 +343,45 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0, budget_per_minute=10**9)  # no waiting: pacing is tested apart
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(_info_handler))
     return cfg, store, hl, _FakeChain(commitments), a.address.lower(), b.address.lower()
+
+
+async def test_whole_value_from_its_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """From spec 6.7's day on, an account's value is its whole value: a unified account keeps its collateral in spot,
+    so its perps value says little. Eligible on $10,300 though its perps value is $4,000; a spot token's gain is money
+    moved, never profit: the day's return is the perps account's profit over the whole value."""
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism.eligibility import day_twr
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    EQUITY[addr_a] = 4_000.0  # the perps account's value
+    WHOLE[addr_a] = 10_300.0  # the whole account's, spot included
+    SPOT_GAIN[addr_a] = 300.0  # a spot token's price rises through the day
+    # before the day: the perps value, below the floor
+    before = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert not {r.hotkey: r for r in before.records}[HK_A].eligible
+    # from the day on: the whole value
+    (tmp_path / "whole").mkdir()
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / "whole")
+    EQUITY[addr_a], WHOLE[addr_a], SPOT_GAIN[addr_a] = 4_000.0, 10_300.0, 300.0
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, params)
+    record = {r.hotkey: r for r in result.records}[HK_A]
+    assert record.eligible
+    end = DAY_MS + 86_400_000
+    values = store.equity_points(addr_a, "week", DAY_MS - H, end + H)
+    profits = store.equity_points(addr_a, "perpWeek:pnl", DAY_MS - H, end + H)
+    assert values and profits and not store.equity_points(addr_a, "perpWeek", 0, 2**62)
+    # the day's value is the whole account's at its end; the spot token's gain is money moved, not profit
+    last_day, last_value, _ = store.equity_series(addr_a, 5)[-1]
+    assert last_day == DAY and last_value == pytest.approx(10_600.0)
+    moves = store._equity_rows(addr_a, 1)[-1][5]
+    assert moves is not None
+    t = day_twr(values, profits, DAY_MS, end, None, moves)
+    assert t is not None and t.profit == pytest.approx(-1000.0)  # the perps account's profit alone
+    (r,) = store.returns(addr_a, 5)
+    assert r == pytest.approx(min(t.twr, t.profit / t.capital))
+    assert -0.1 < r < -0.09  # the loss of 1,000 over about 10,300: the spot gain would have made it about -0.068
 
 
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:

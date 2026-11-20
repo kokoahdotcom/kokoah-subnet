@@ -354,10 +354,12 @@ class Store:
         a = address.lower()
         start = _day_ms(min(days)) - 2 * 86_400_000
         end = _day_ms(max(days)) + 2 * 86_400_000
-        window = DEFAULT.equity_window
-        values = self.equity_points(a, window, start, end)
-        profits = self.equity_points(a, window + ":pnl", start, end)
-        if not values or not profits:
+        # each day's value from the window it was scored with (spec 6.7: the whole value from `whole_value_from`
+        # on); the profit is the perps account's either way
+        windows = {DEFAULT.windows_for(d)[0] for d in days}
+        values_by = {w: self.equity_points(a, w, start, end) for w in windows}
+        profits = self.equity_points(a, DEFAULT.profit_window + ":pnl", start, end)
+        if not profits or not any(values_by.values()):
             return {}
         with self._engine.connect() as c:
             origins = {
@@ -368,7 +370,8 @@ class Store:
                     )
                 ).all()
             }
-        v_times, p_times = [t for t, _ in values], [t for t, _ in profits]
+        times_by = {w: [t for t, _ in pts] for w, pts in values_by.items()}
+        p_times = [t for t, _ in profits]
 
         def near(points: list[tuple[int, float]], times: list[int], lo: int, hi: int) -> list[tuple[int, float]]:
             # the points of [lo, hi] and one on each side: all a day's edges and steps read
@@ -378,8 +381,9 @@ class Store:
         for d, fills in days.items():
             d0 = _day_ms(d)
             d1 = d0 + 86_400_000
+            w = DEFAULT.windows_for(d)[0]
             t = day_twr(
-                near(values, v_times, d0, d1),
+                near(values_by[w], times_by[w], d0, d1),
                 near(profits, p_times, d0, d1),
                 d0,
                 d1,

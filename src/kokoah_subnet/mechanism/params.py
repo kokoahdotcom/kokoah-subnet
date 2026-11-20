@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SPEC_VERSION = "6.6"
+SPEC_VERSION = "6.7"
 
 
 @dataclass(frozen=True)
@@ -50,8 +50,16 @@ class Params:
     gate_mean_equity_usd: float = 500.0
     # eligibility (section 9a): no emission on a day the account is below the floor or before qualifying
     min_equity_usd: float = 10_000.0  # the day's time-weighted average account value
-    equity_window: str = "perpWeek"  # the exchange's portfolio history read for the average (perps account value)
+    equity_window: str = "perpWeek"  # before `whole_value_from`: the history read for the value (perps account value)
     equity_origin_window: str = "perpAllTime"  # its first point marks when the account's history begins
+    # from `whole_value_from` on (spec 6.7): the account's whole value as the exchange records it, spot included (in a
+    # unified account the collateral sits in spot and the perps value tells little); the profit stays the perps
+    # account's, so a spot token's price never counts as a trading return. Every validator switches on that day,
+    # whenever it updated
+    whole_value_from: str = "2026-11-22"
+    value_window: str = "week"
+    value_origin_window: str = "allTime"
+    profit_window: str = "perpWeek"
     equity_min_points: int = 4  # fewer recorded points inside the day: the average is unknown (never estimated)
     qualify_trades: int = 3  # a new identity's first trades: qualifying trades needed
     qualify_notional_usd: float = 1_000.0  # and their eligible notional
@@ -110,6 +118,18 @@ class Params:
     @property
     def miner_pool_alpha(self) -> float:
         return self.daily_emission_alpha * self.miner_slot
+
+    def windows_for(self, day: str) -> tuple[str, str, str]:
+        """The exchange's portfolio windows read for `day`: (value, history origin, profit)."""
+        if day >= self.whole_value_from:
+            return self.value_window, self.value_origin_window, self.profit_window
+        return self.equity_window, self.equity_origin_window, self.equity_window
+
+    def month_windows_for(self, day: str) -> tuple[str, str]:
+        """The month-long windows a first-time address's history is backfilled from, scoring `day`: (value, profit)."""
+        if day >= self.whole_value_from:
+            return "month", "perpMonth"
+        return "perpMonth", "perpMonth"
 
 
 DEFAULT = Params()
