@@ -77,7 +77,7 @@ from .hyperliquid import (
     transfer_partners,
 )
 from .run import result_json
-from .store import Store
+from .store import Store, profit_key
 
 log = logging.getLogger("kokoah_subnet.validator")
 BLOCK_SECONDS = 12
@@ -722,20 +722,32 @@ async def collect_and_score(
         no_profit = profit_made_up and portfolio_held_nothing(windows, profit_window, start_ms, end_ms)
         if profit_made_up and not no_profit and portfolio_live_holds(windows, profit_window) and not past_deadline:
             raise RuntimeError(f"the recorded profit of {address} does not show its perps account yet")
+        # the profit points: this request's, kept for this day (`profit_key`): the exchange's profit history starts
+        # from zero at each window's first point, so a day's profit is read from one request only
         if recorded and not made_up:
             store.put_equity_points(address, value_window, portfolio_points(windows, value_window), day)
             if no_profit:
-                store.put_equity_points(address, profit_window + ":pnl", [(start_ms, 0.0), (end_ms, 0.0)], day)
+                store.put_equity_points(address, profit_key(day), [(start_ms, 0.0), (end_ms, 0.0)], day)
             elif not profit_made_up:
-                store.put_equity_points(
-                    address, profit_window + ":pnl", portfolio_pnl_points(windows, profit_window), day
-                )
-                # a perps account funded after an empty spell made no profit before its first recorded point: a zero at
-                # the day's edges before it, as a validator that read the window while it was made up kept them
+                store.put_equity_points(address, profit_key(day), portfolio_pnl_points(windows, profit_window), day)
+                # a perps account funded after an empty spell made no profit before its first recorded point: a zero
+                # at the day's edges before it (the window's profit is zero at its far edge)
                 empty = portfolio_empty_until(windows, profit_window) if separate else None
                 if empty is not None:
                     zeros = [(t, 0.0) for t in (start_ms, end_ms) if t <= empty]
-                    store.put_equity_points(address, profit_window + ":pnl", zeros, day)
+                    store.put_equity_points(address, profit_key(day), zeros, day)
+                # the days before kept without their own request's points (scored before they were kept so, or
+                # missed): the points of this request's week, and of its month further back, where they cover the day
+                for back, window_name in ((range(1, 7), profit_window), (range(7, 31), params.profit_month_window)):
+                    pts = portfolio_pnl_points(windows, window_name)
+                    for k in back:
+                        d0 = start_ms - k * 86_400_000
+                        key = profit_key(datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d"))
+                        if len(pts) < 2 or not pts[0][0] < d0 or not pts[-1][0] > d0 + 86_400_000:
+                            continue
+                        if not store.has_equity_points(address, key):
+                            near = [(t, v) for t, v in pts if d0 - 86_400_000 <= t <= d0 + 2 * 86_400_000]
+                            store.put_equity_points(address, key, near, day)
         # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
         # the week when the week shows nothing held before it (an account funded after an empty spell)
         if not recorded:
@@ -901,7 +913,7 @@ async def collect_and_score(
             if held_nothing
             else day_change(
                 store.equity_points(address, value_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-                store.equity_points(address, profit_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+                store.equity_points(address, profit_key(day), start_ms - 2 * 86_400_000, end_ms + 86_400_000),
                 start_ms,
                 end_ms,
                 origin,

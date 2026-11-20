@@ -43,6 +43,13 @@ def _growth(returns: Sequence[float]) -> tuple[float | None, float | None]:
     return level - 1, drop
 
 
+def profit_key(day: str) -> str:
+    """The key the profit points read when `day` was scored are kept under. The exchange's profit history starts from
+    zero at each window's first point, so one moment reads differently from one request to the next: each day's profit
+    is read from one request's points, never from two (the same day's differences for every validator)."""
+    return f"pnl@{day}"
+
+
 class Store:
     """`Store(url)` for any SQLAlchemy URL, or `Store(Path)` for a SQLite file. The validator creates and migrates
     the schema; readers (the interface, the health check) open it with `create=False`, which needs no rights to
@@ -192,6 +199,18 @@ class Store:
                         raw=r.get("raw"),
                     )
                 )
+
+    def has_equity_points(self, address: str, window: str) -> bool:
+        """Whether any point is kept under `window` for the address."""
+        with self._engine.connect() as c:
+            return (
+                c.execute(
+                    select(S.equity_points.c.time_ms)
+                    .where(S.equity_points.c.address == address.lower(), S.equity_points.c.source_window == window)
+                    .limit(1)
+                ).first()
+                is not None
+            )
 
     def put_equity_points(self, address: str, window: str, points: Iterable[tuple[int, float]], day: str) -> int:
         """Keep the exchange's recorded account-value points (new ones only: a recorded point never changes)."""
@@ -368,8 +387,7 @@ class Store:
         # on); the profit is the perps account's either way
         windows = {DEFAULT.windows_for(d)[0] for d in days}
         values_by = {w: self.equity_points(a, w, start, end) for w in windows}
-        profits = self.equity_points(a, DEFAULT.profit_window + ":pnl", start, end)
-        if not profits or not any(values_by.values()):
+        if not any(values_by.values()):
             return {}
         with self._engine.connect() as c:
             origins = {
@@ -381,7 +399,6 @@ class Store:
                 ).all()
             }
         times_by = {w: [t for t, _ in pts] for w, pts in values_by.items()}
-        p_times = [t for t, _ in profits]
 
         def near(points: list[tuple[int, float]], times: list[int], lo: int, hi: int) -> list[tuple[int, float]]:
             # the points of [lo, hi] and one on each side: all a day's edges and steps read
@@ -392,9 +409,18 @@ class Store:
             d0 = _day_ms(d)
             d1 = d0 + 86_400_000
             w = DEFAULT.windows_for(d)[0]
+            # the day's profit from the one request made when it was scored (`profit_key`); a day kept before that, from
+            # the points kept then
+            profits = self.equity_points(a, profit_key(d), d0 - 2 * 86_400_000, d1 + 2 * 86_400_000)
+            if not profits:
+                profits = self.equity_points(
+                    a, DEFAULT.profit_window + ":pnl", d0 - 2 * 86_400_000, d1 + 2 * 86_400_000
+                )
+            if not profits:
+                continue
             t = day_twr(
                 near(values_by[w], times_by[w], d0, d1),
-                near(profits, p_times, d0, d1),
+                near(profits, [p for p, _ in profits], d0, d1),
                 d0,
                 d1,
                 origins.get(d),

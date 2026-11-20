@@ -60,6 +60,7 @@ class Params:
     value_window: str = "week"
     value_origin_window: str = "allTime"
     profit_window: str = "perpWeek"
+    profit_month_window: str = "perpMonth"  # further back: a day kept without its own request's profit points
     equity_min_points: int = 4  # fewer recorded points inside the day: the average is unknown (never estimated)
     qualify_trades: int = 3  # a new identity's first trades: qualifying trades needed
     qualify_notional_usd: float = 1_000.0  # and their eligible notional
