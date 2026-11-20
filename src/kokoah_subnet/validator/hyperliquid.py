@@ -332,7 +332,7 @@ def flows_from_updates(user: str, updates: list[dict[str, Any]]) -> float:
 
 def daily_equity_from_portfolio(
     windows: list[Any], value_window: str = "perpMonth", profit_window: str | None = None
-) -> list[tuple[str, float, float]]:
+) -> list[tuple[str, float, float | None]]:
     """(day, end-of-day account value, net flows) per UTC day from the portfolio history: the last point of each day
     of the `value_window` gives the value; flows are the change in value not explained by the day's profit, read from
     the `profit_window` (the same one when None)."""
@@ -350,18 +350,25 @@ def daily_equity_from_portfolio(
     for ts, v in gains.get("pnlHistory", []):
         day = datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%d")
         pnls[day] = float(v)
-    out: list[tuple[str, float, float]] = []
+    # with the profit from another window (spec 6.7: the perps account's), a day without a profit point on it or the
+    # day before, or a made-up profit window, leaves the money moved unknown (None): read as a return, it could count
+    # a deposit or a spot token's price
+    separate = profit_window is not None and profit_window != value_window
+    made_up = separate and portfolio_made_up(windows, profit_window or value_window)
+    out: list[tuple[str, float, float | None]] = []
     prev_value: float | None = None
     prev_pnl: float | None = None
     for day in sorted(values):
         value = values[day]
         pnl = pnls.get(day)
-        flows = 0.0
-        if prev_value is not None and pnl is not None and prev_pnl is not None:
+        flows: float | None = 0.0
+        if prev_value is not None and pnl is not None and prev_pnl is not None and not made_up:
             flows = (value - prev_value) - (pnl - prev_pnl)
+        elif separate and prev_value is not None:
+            flows = None
         out.append((day, value, flows))
         prev_value = value
-        if pnl is not None:
+        if pnl is not None or separate:  # with another window's profit, only the day before's own point counts
             prev_pnl = pnl
     return out
 

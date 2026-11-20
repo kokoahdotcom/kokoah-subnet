@@ -569,3 +569,21 @@ def test_the_first_whole_value_day_is_read_over_its_own_points(tmp_path: Path, m
     s.put_equity("0xA", "2026-11-14", 10_403.0, 0.0, offmarket_moves=())
     returns = s.dated_returns("0xA", 5)
     assert returns["2026-11-14"] == pytest.approx(103 / 10_300.0)
+
+
+def test_the_switch_day_has_no_return_without_its_points(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A switch day stored without the exchange's points around it (an address first scored long after): the day
+    before holds the perps value, the day itself the whole value, so the whole day at once would count the spot
+    balance as made that day. It has no return."""
+    from dataclasses import replace
+
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism import DEFAULT
+
+    monkeypatch.setattr(store_module, "DEFAULT", replace(DEFAULT, whole_value_from="2026-11-14"))
+    s = Store(tmp_path / "v.sqlite")
+    s.put_equity("0xA", "2026-11-12", 20_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 20_000.0, 0.0, offmarket_moves=())  # perps $20,000 (and $50,000 in spot)
+    s.put_equity("0xA", "2026-11-14", 70_000.0, 0.0, offmarket_moves=())  # the whole value
+    s.put_equity("0xA", "2026-11-15", 70_000.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": 0.0, "2026-11-15": 0.0}

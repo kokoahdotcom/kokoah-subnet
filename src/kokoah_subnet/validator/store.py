@@ -330,7 +330,9 @@ class Store:
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
-            if t is None and e0 <= 0:  # the switch day without its points: nothing to read it over
+            # the switch day is read over its own points only: the day before holds the perps value, the day itself
+            # the whole value, so the whole day at once would count the spot balance as made that day
+            if t is None and (e0 <= 0 or d1 == DEFAULT.whole_value_from):
                 continue
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole

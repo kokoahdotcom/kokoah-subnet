@@ -48,6 +48,8 @@ FILLS_READ: list[str] = []  # every address whose fill history was asked
 WHOLE: dict[str, float] = {}  # address -> the whole account's value (spot included), when not the perps value
 SPOT_GAIN: dict[str, float] = {}  # address -> a spot token's gain through the day (in the whole value and its profit)
 NO_PERPS: set[str] = set()  # addresses whose perps account held nothing all week (the exchange makes its windows up)
+PERPS_JUST_FUNDED: set[str] = set()  # ... until just now: only the live point shows the money
+PERPS_FUNDED_AT: dict[str, int] = {}  # address -> when its perps account was funded after an empty week
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 H = 3_600_000
@@ -284,9 +286,15 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
             "accountValueHistory": [[DAY_MS - 86_400_000, str(WHOLE.get(user, 24000.0))]],
             "pnlHistory": [[DAY_MS - 86_400_000, "0"]],
         }
-        if user in NO_PERPS:  # made up: zero points that reach past the day, the live one included
+        if user in NO_PERPS or user in PERPS_JUST_FUNDED:  # made up: zero points that reach past the day
             week = [[ts, "0.0"] for ts in [t for t, _ in week]]
             week_pnl = [[ts, "0.0"] for ts, _ in week]
+            if user in PERPS_JUST_FUNDED:
+                week[-1] = [week[-1][0], "5000.0"]
+        if user in PERPS_FUNDED_AT:  # nothing held from the week's far edge until the funding, recorded points after it
+            funded = PERPS_FUNDED_AT[user]
+            week = [[week[0][0], "0"]] + [[ts, v] for ts, v in week[1:] if int(str(ts)) >= funded]
+            week_pnl = [[week_pnl[0][0], "0"]] + [[ts, "0"] for ts, _ in week[1:]]
         return httpx.Response(
             200,
             json=[
@@ -309,6 +317,8 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     EQUITY.clear()
     WHOLE.clear()
     NO_PERPS.clear()
+    PERPS_JUST_FUNDED.clear()
+    PERPS_FUNDED_AT.clear()
     SPOT_GAIN.clear()
     LIVE.clear()
     STEP.clear()
@@ -416,16 +426,49 @@ async def test_a_perps_account_that_held_nothing_made_no_profit(
     request). The day is known at once, with no profit, the same for every validator; nothing made up is stored."""
     import kokoah_subnet.validator.store as store_module
 
-    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
-    WHOLE[addr_a] = 10_300.0
-    NO_PERPS.add(addr_a)
+    cfg, store, hl, chain, _, addr_b = _setup(tmp_path)
+    WHOLE[addr_b] = 10_300.0
+    NO_PERPS.add(addr_b)
     params = replace(DEFAULT, whole_value_from=DAY)
     monkeypatch.setattr(store_module, "DEFAULT", params)
     await collect_and_score(cfg, DAY, store, hl, chain, params)
     end = DAY_MS + 86_400_000
-    assert store.equity_points(addr_a, "perpWeek:pnl", 0, 2**62) == [(DAY_MS, 0.0), (end, 0.0)]
-    day, value, _ = store.equity_series(addr_a, 5)[-1]
+    assert store.equity_points(addr_b, "perpWeek:pnl", 0, 2**62) == [(DAY_MS, 0.0), (end, 0.0)]
+    day, value, _ = store.equity_series(addr_b, 5)[-1]
     assert day == DAY and value == pytest.approx(10_300.0)
+    # no perps profit: the day's return is only the fake's off-market fill ($2,000 moved in that way) taken off, over
+    # the whole value
+    assert store.dated_returns(addr_b, 5) == {DAY: pytest.approx(-2_000.0 / 10_300.0)}
+
+
+async def test_a_perps_account_just_funded_is_waited_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its perps window still made up but the live point showing money: the day waits for the exchange's record until
+    the deadline, as for the value's window."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    WHOLE[addr_a] = 10_300.0
+    PERPS_JUST_FUNDED.add(addr_a)
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    with pytest.raises(RuntimeError, match="does not show its perps account yet"):
+        await collect_and_score(cfg, DAY, store, hl, chain, params, now_ts=EARLY)
+
+
+async def test_a_perps_account_funded_after_an_empty_week_made_no_profit_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Funded during the day after an empty week: no profit before its first recorded point, a zero at the day's
+    start, the same as a validator that read the window while it was still made up."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    WHOLE[addr_a] = 10_300.0
+    PERPS_FUNDED_AT[addr_a] = DAY_MS + 10 * H
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    await collect_and_score(cfg, DAY, store, hl, chain, params)
+    assert (DAY_MS, 0.0) in store.equity_points(addr_a, "perpWeek:pnl", 0, 2**62)
 
 
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:

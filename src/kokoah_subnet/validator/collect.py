@@ -730,6 +730,12 @@ async def collect_and_score(
                 store.put_equity_points(
                     address, profit_window + ":pnl", portfolio_pnl_points(windows, profit_window), day
                 )
+                # a perps account funded after an empty spell made no profit before its first recorded point: a zero at
+                # the day's edges before it, as a validator that read the window while it was made up kept them
+                empty = portfolio_empty_until(windows, profit_window) if separate else None
+                if empty is not None:
+                    zeros = [(t, 0.0) for t in (start_ms, end_ms) if t <= empty]
+                    store.put_equity_points(address, profit_window + ":pnl", zeros, day)
         # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
         # the week when the week shows nothing held before it (an account funded after an empty spell)
         if not recorded:
@@ -769,7 +775,16 @@ async def collect_and_score(
             ]
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
             for h_day, value, flows in earlier:
-                store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"}, offmarket_moves=())
+                # a day whose money moved is unknown (no perps profit recorded for it) has no return
+                store.put_equity(
+                    address,
+                    h_day,
+                    value,
+                    flows or 0.0,
+                    raw={"source": "portfolio"},
+                    offmarket_moves=(),
+                    known=flows is not None,
+                )
             log.info("backfilled %d days of account value for %s", len(earlier), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
