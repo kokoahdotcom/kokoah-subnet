@@ -306,6 +306,14 @@ async def bound_builder_activity(
     return None
 
 
+def around(points: list[tuple[int, float]], start_ms: int, end_ms: int) -> list[tuple[int, float]]:
+    """The points inside [start_ms, end_ms] and the one on each side of it: all a day's return reads."""
+    inside = [i for i, (t, _) in enumerate(points) if start_ms <= t <= end_ms]
+    lo = (inside[0] if inside else next((i for i, (t, _) in enumerate(points) if t > end_ms), len(points))) - 1
+    hi = (inside[-1] if inside else lo) + 1
+    return points[max(0, lo) : hi + 1]
+
+
 async def collect_and_score(
     cfg: ValidatorConfig,
     day: str,
@@ -726,28 +734,28 @@ async def collect_and_score(
         # from zero at each window's first point, so a day's profit is read from one request only
         if recorded and not made_up:
             store.put_equity_points(address, value_window, portfolio_points(windows, value_window), day)
+            # every attempt that read the history replaces the day's points (one request's, never two)
             if no_profit:
-                store.put_equity_points(address, profit_key(day), [(start_ms, 0.0), (end_ms, 0.0)], day)
+                store.replace_equity_points(address, profit_key(day), [(start_ms, 0.0), (end_ms, 0.0)], day)
             elif not profit_made_up:
-                store.put_equity_points(address, profit_key(day), portfolio_pnl_points(windows, profit_window), day)
+                pts = portfolio_pnl_points(windows, profit_window)
                 # a perps account funded after an empty spell made no profit before its first recorded point: a zero
                 # at the day's edges before it (the window's profit is zero at its far edge)
                 empty = portfolio_empty_until(windows, profit_window) if separate else None
                 if empty is not None:
-                    zeros = [(t, 0.0) for t in (start_ms, end_ms) if t <= empty]
-                    store.put_equity_points(address, profit_key(day), zeros, day)
+                    pts = sorted(dict(pts + [(t, 0.0) for t in (start_ms, end_ms) if t <= empty]).items())
+                store.replace_equity_points(address, profit_key(day), around(pts, start_ms, end_ms), day)
                 # the days before kept without their own request's points (scored before they were kept so, or
-                # missed): the points of this request's week, and of its month further back, where they cover the day
-                for back, window_name in ((range(1, 7), profit_window), (range(7, 31), params.profit_month_window)):
-                    pts = portfolio_pnl_points(windows, window_name)
-                    for k in back:
-                        d0 = start_ms - k * 86_400_000
-                        key = profit_key(datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d"))
-                        if len(pts) < 2 or not pts[0][0] < d0 or not pts[-1][0] > d0 + 86_400_000:
-                            continue
-                        if not store.has_equity_points(address, key):
-                            near = [(t, v) for t, v in pts if d0 - 86_400_000 <= t <= d0 + 2 * 86_400_000]
-                            store.put_equity_points(address, key, near, day)
+                # missed): this request's week, where its points reach past both of the day's edges. Days further
+                # back keep the points they were scored with (the month's are about a day apart: too coarse)
+                for k in range(1, 7):
+                    d0 = start_ms - k * 86_400_000
+                    key = profit_key(datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d"))
+                    kept = around(pts, d0, d0 + 86_400_000)
+                    if len(kept) < 2 or not kept[0][0] < d0 or not kept[-1][0] > d0 + 86_400_000:
+                        continue
+                    if not store.has_equity_points(address, key):
+                        store.replace_equity_points(address, key, kept, day)
         # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
         # the week when the week shows nothing held before it (an account funded after an empty spell)
         if not recorded:
@@ -913,7 +921,8 @@ async def collect_and_score(
             if held_nothing
             else day_change(
                 store.equity_points(address, value_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-                store.equity_points(address, profit_key(day), start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+                store.equity_points(address, profit_key(day), start_ms - 2 * 86_400_000, end_ms + 86_400_000)
+                or store.equity_points(address, profit_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000),
                 start_ms,
                 end_ms,
                 origin,

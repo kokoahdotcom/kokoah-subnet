@@ -615,3 +615,16 @@ def test_a_day_s_profit_comes_from_one_request(tmp_path: Path) -> None:
     # the day's own request: flat all day
     s.put_equity_points("0xA", profit_key(day), [(t, 865.0) for t, _ in values], day)
     assert s.dated_returns("0xA", 5) == {day: 0.0}
+
+
+def test_a_day_whose_profit_does_not_count_counts_only_a_loss(tmp_path: Path) -> None:
+    """A thin or cut day kept its profit back when it was scored; read again over points from another request (a day
+    repaired after the update), its profit still never counts: only a loss would."""
+    s = Store(tmp_path / "v.sqlite")
+    day = "2026-11-14"
+    s.put_equity_points("0xA", "perpWeek", [(_ms(day, h), 20_000.0) for h in (0, 12, 24)], day)
+    s.put_equity_points("0xA", profit_key(day), [(_ms(day, h), 135.0 * h / 24) for h in (0, 12, 24)], day)
+    s.put_equity("0xA", "2026-11-13", 20_000.0, 0.0, offmarket_moves=())
+    # scored with a profit of 100 held back (a thin day); the points read later show 135
+    s.put_equity("0xA", day, 20_000.0, -100.0, offmarket_pnl=100.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {day: 0.0}

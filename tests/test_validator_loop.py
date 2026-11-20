@@ -50,6 +50,7 @@ SPOT_GAIN: dict[str, float] = {}  # address -> a spot token's gain through the d
 NO_PERPS: set[str] = set()  # addresses whose perps account held nothing all week (the exchange makes its windows up)
 PERPS_JUST_FUNDED: set[str] = set()  # ... until just now: only the live point shows the money
 PERPS_FUNDED_AT: dict[str, int] = {}  # address -> when its perps account was funded after an empty week
+PNL_SHIFT: dict[str, float] = {}  # address -> another request's profit baseline (its window's first point moved)
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 H = 3_600_000
@@ -262,7 +263,7 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 
         def pnl_at(ts: int) -> str:
             spread = (day_pnl - gift) * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000))
-            return str(spread + (gift if ts >= DAY_MS + GIFT_MS else 0.0))
+            return str(spread + (gift if ts >= DAY_MS + GIFT_MS else 0.0) + PNL_SHIFT.get(user, 0.0))
 
         # the 7-day window: a made-up point at the far edge, recorded points every two hours, the live point last
         times = [DAY_MS + h * 7_200_000 for h in range(-24, 18)]
@@ -319,6 +320,7 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     NO_PERPS.clear()
     PERPS_JUST_FUNDED.clear()
     PERPS_FUNDED_AT.clear()
+    PNL_SHIFT.clear()
     SPOT_GAIN.clear()
     LIVE.clear()
     STEP.clear()
@@ -480,6 +482,28 @@ async def test_the_days_before_get_their_own_request_s_profit_points(tmp_path: P
     before = store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62)
     day0 = DAY_MS - 86_400_000
     assert before and before[0][0] < day0 and before[-1][0] > DAY_MS  # the whole day, a point on each side
+
+
+async def test_a_day_scored_again_keeps_one_request_s_profit_points(tmp_path: Path) -> None:
+    """A day scored again (a retried attempt, a later request with its window's first point moved, so another profit
+    baseline) keeps that request's points in place of the first one's: never two baselines in one day."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    first = store.equity_points(addr_a, profit_key(DAY), 0, 2**62)
+    PNL_SHIFT[addr_a] = -135.0
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    second = store.equity_points(addr_a, profit_key(DAY), 0, 2**62)
+    assert [t for t, _ in second] == [t for t, _ in first]
+    assert all(v2 == pytest.approx(v1 - 135.0) for (_, v1), (_, v2) in zip(first, second, strict=True))
+
+
+async def test_the_days_before_keep_their_own_request_s_profit_points(tmp_path: Path) -> None:
+    """A day that has its own request's profit points keeps them: a later request never replaces them."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    own = [(DAY_MS - 86_400_000 - H, 7.0), (DAY_MS + H, 7.0)]
+    store.put_equity_points(addr_a, profit_key("2026-10-20"), own, "2026-10-20")
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62) == own
 
 
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:

@@ -288,8 +288,9 @@ points the value is a straight line; the day's two edges are interpolated from t
 live last point and the made-up point at its far edge are dropped, so every validator that asks while the day is
 inside the window reads the same points, and each validator keeps the points it read (`equity_points`). The profit
 history starts from zero at each window's first point, so one moment's profit reads differently from one request to the
-next: a day's profit points are kept from the one request made when the day was scored, never mixed with another's; a
-day kept before that (or missed) gets them from the next request whose week, or month further back, covers it whole. Fewer than 4
+next: a day's profit points are kept from the one request made when the day was scored (a later attempt at the day
+replaces them), never mixed with another's; a day kept before that (or missed) gets them from the next request whose
+week reaches past both of its edges, and one further back keeps the points it was scored with. Fewer than 4
 recorded points inside the day, or a history that does not reach back to the day's start, make `Ē_d` **unknown**, and
 unknown is ineligible (recorded as an error, raised by the health check). An account whose history begins during the
 day had nothing before its first point: its average counts zero before it, and its day starts from a zero value and a
