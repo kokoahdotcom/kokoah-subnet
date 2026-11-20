@@ -47,6 +47,7 @@ FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
 FILLS_READ: list[str] = []  # every address whose fill history was asked
 WHOLE: dict[str, float] = {}  # address -> the whole account's value (spot included), when not the perps value
 SPOT_GAIN: dict[str, float] = {}  # address -> a spot token's gain through the day (in the whole value and its profit)
+NO_PERPS: set[str] = set()  # addresses whose perps account held nothing all week (the exchange makes its windows up)
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 H = 3_600_000
@@ -283,6 +284,9 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
             "accountValueHistory": [[DAY_MS - 86_400_000, str(WHOLE.get(user, 24000.0))]],
             "pnlHistory": [[DAY_MS - 86_400_000, "0"]],
         }
+        if user in NO_PERPS:  # made up: zero points that reach past the day, the live one included
+            week = [[ts, "0.0"] for ts in [t for t, _ in week]]
+            week_pnl = [[ts, "0.0"] for ts, _ in week]
         return httpx.Response(
             200,
             json=[
@@ -304,6 +308,7 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _FakeChain, str, str]:
     EQUITY.clear()
     WHOLE.clear()
+    NO_PERPS.clear()
     SPOT_GAIN.clear()
     LIVE.clear()
     STEP.clear()
@@ -382,6 +387,45 @@ async def test_whole_value_from_its_day(tmp_path: Path, monkeypatch: pytest.Monk
     (r,) = store.returns(addr_a, 5)
     assert r == pytest.approx(min(t.twr, t.profit / t.capital))
     assert -0.1 < r < -0.09  # the loss of 1,000 over about 10,300: the spot gain would have made it about -0.068
+    # the day before the switch is backfilled on the perps account's value, as a validator that scored it kept it
+    assert store.equity_series(addr_a, 5)[0][:2] == ("2026-10-20", 24000.0)
+
+
+async def test_the_switch_day_starts_from_the_whole_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The day before the switch was scored on the perps account's value (here 4,000): the switch day's money moved is
+    counted from the whole value at its start, not from that, so the jump to the whole value is no deposit."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    EQUITY[addr_a], WHOLE[addr_a] = 4_000.0, 10_300.0
+    store.put_equity(addr_a, "2026-10-20", 4_000.0, 0.0, offmarket_moves=())  # scored on the perps value
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    await collect_and_score(cfg, DAY, store, hl, chain, params)
+    day, value, flows = store.equity_series(addr_a, 5)[-1]
+    assert day == DAY and value == pytest.approx(10_300.0)
+    # as if the day before had been measured on the whole value (the fake's off-market gift is all that moved); the
+    # perps value as the base would have counted the jump from 4,000 to 10,300 as 6,300 moved in on top
+    assert flows == pytest.approx(1_000.0)
+
+
+async def test_a_perps_account_that_held_nothing_made_no_profit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A unified account trading nothing in perps all week: the exchange makes its perps windows up (zeros timed by the
+    request). The day is known at once, with no profit, the same for every validator; nothing made up is stored."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    WHOLE[addr_a] = 10_300.0
+    NO_PERPS.add(addr_a)
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    await collect_and_score(cfg, DAY, store, hl, chain, params)
+    end = DAY_MS + 86_400_000
+    assert store.equity_points(addr_a, "perpWeek:pnl", 0, 2**62) == [(DAY_MS, 0.0), (end, 0.0)]
+    day, value, _ = store.equity_series(addr_a, 5)[-1]
+    assert day == DAY and value == pytest.approx(10_300.0)
 
 
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:

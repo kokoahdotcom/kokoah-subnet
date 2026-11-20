@@ -315,7 +315,13 @@ class Store:
         pairs = [
             (d1, e0, e1, f1, o1, m1)
             for (d0, e0, _, _, k0, _), (d1, e1, f1, o1, k1, m1) in zip(series, series[1:], strict=False)
-            if k0 and k1 and e0 > 0 and _next_day(d0) == d1 and (after is None or d1 > after)
+            # the first day measured by the whole value (spec 6.7) needs no positive value the day before: the day
+            # before was measured by the perps account's, which may be nothing, and its own points carry the day
+            if k0
+            and k1
+            and (e0 > 0 or d1 == DEFAULT.whole_value_from)
+            and _next_day(d0) == d1
+            and (after is None or d1 > after)
         ]
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
@@ -324,6 +330,8 @@ class Store:
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
+            if t is None and e0 <= 0:  # the switch day without its points: nothing to read it over
+                continue
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)

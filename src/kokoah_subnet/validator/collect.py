@@ -714,9 +714,22 @@ async def collect_and_score(
         held_nothing = made_up and portfolio_held_nothing(windows, value_window, start_ms, end_ms)
         if made_up and portfolio_live_holds(windows, value_window) and not past_deadline:
             raise RuntimeError(f"the recorded history of {address} does not show its money yet")
+        # the profit's own window (spec 6.7: the perps account's, apart from the value's) is made up the same way for
+        # a perps account that held nothing: none of its points is stored. Held nothing all week: no profit, known at
+        # once (a zero at the day's edges, the same for every validator). Just funded: waited for until the deadline
+        separate = profit_window != value_window
+        profit_made_up = separate and recorded and portfolio_made_up(windows, profit_window)
+        no_profit = profit_made_up and portfolio_held_nothing(windows, profit_window, start_ms, end_ms)
+        if profit_made_up and not no_profit and portfolio_live_holds(windows, profit_window) and not past_deadline:
+            raise RuntimeError(f"the recorded profit of {address} does not show its perps account yet")
         if recorded and not made_up:
             store.put_equity_points(address, value_window, portfolio_points(windows, value_window), day)
-            store.put_equity_points(address, profit_window + ":pnl", portfolio_pnl_points(windows, profit_window), day)
+            if no_profit:
+                store.put_equity_points(address, profit_window + ":pnl", [(start_ms, 0.0), (end_ms, 0.0)], day)
+            elif not profit_made_up:
+                store.put_equity_points(
+                    address, profit_window + ":pnl", portfolio_pnl_points(windows, profit_window), day
+                )
         # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
         # the week when the week shows nothing held before it (an account funded after an empty spell)
         if not recorded:
@@ -743,7 +756,17 @@ async def collect_and_score(
             store.put_error(day, hk, address, "average equity", avg.note)
         if recorded and not store.equity_series(address, 1):
             # first time this address is scored: the exchange's own history gives the returns from day one
-            history = daily_equity_from_portfolio(windows, *params.month_windows_for(day))
+            # each day from the windows it is measured by (spec 6.7: the whole value from `whole_value_from`), so a
+            # validator that starts later keeps the same values as one that scored those days
+            by_windows = {
+                w: {h: (v, f) for h, v, f in daily_equity_from_portfolio(windows, *w)}
+                for w in {params.month_windows_for(day), params.month_windows_for("0000-00-00")}
+            }
+            history = [
+                (h_day, *row)
+                for h_day in sorted(set().union(*by_windows.values()))
+                if (row := by_windows.get(params.month_windows_for(h_day), {}).get(h_day)) is not None
+            ]
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
             for h_day, value, flows in earlier:
                 store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"}, offmarket_moves=())

@@ -279,8 +279,10 @@ account's whole value, spot included, recorded about every two hours), never fro
 account the collateral sits in spot and the perps account's value says little, so the whole value is what the
 account holds. Spot tokens count at the exchange's own price: its record does not tell them apart, and pay follows the
 fees paid, so a value raised with a token earns nothing more, and a token's price never counts as a return (§7). The
-days before 2026-11-22 were measured on the perps account's value (window `perpWeek`); every validator measures the
-whole value from that day on, whenever it updated. Between recorded
+days before 2026-11-27 were measured on the perps account's value (window `perpWeek`); every validator measures the
+whole value from that day on, whenever it updated, and that day's return starts from the whole value at its start (the
+day before was measured on the perps value). A perps account that held nothing all week (its window made up by the
+exchange) made no profit. Between recorded
 points the value is a straight line; the day's two edges are interpolated from the points around them. The window's
 live last point and the made-up point at its far edge are dropped, so every validator that asks while the day is
 inside the window reads the same points, and each validator keeps the points it read (`equity_points`). Fewer than 4
@@ -325,7 +327,7 @@ not escape is kept: the pay history and any mirror penalty (which follows the ad
 controls, §3). The entry test's record starts again with a new link or a new registration (§7a): a fresh identity
 waits 30 days again.
 
-An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of capital, its own
+An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of account value, its own
 registration and its own qualification.
 
 ## 10. Revenue and buyback

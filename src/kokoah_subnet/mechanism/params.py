@@ -55,8 +55,8 @@ class Params:
     # from `whole_value_from` on (spec 6.7): the account's whole value as the exchange records it, spot included (in a
     # unified account the collateral sits in spot and the perps value tells little); the profit stays the perps
     # account's, so a spot token's price never counts as a trading return. Every validator switches on that day,
-    # whenever it updated
-    whole_value_from: str = "2026-11-22"
+    # whenever it updated (announced seven days ahead, as every parameter change)
+    whole_value_from: str = "2026-11-27"
     value_window: str = "week"
     value_origin_window: str = "allTime"
     profit_window: str = "perpWeek"

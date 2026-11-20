@@ -541,3 +541,31 @@ def test_epochs_recorded_before_the_earned_table_are_backfilled(tmp_path: Path) 
         _backfill_earned(c, False)
         _backfill_earned(c, False)  # run again: the same totals
     assert s.earned_by_day() == {"hkA": {"2026-11-12": 100.0, "2026-11-13": 75.0}}
+
+
+def test_the_first_whole_value_day_is_read_over_its_own_points(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec 6.7: the day before the switch was measured on the perps account's value, which a unified account may have
+    at nothing; the switch day's return comes from its own whole-value points and the perps profit, over the whole
+    value. Days before stay on the perps windows."""
+    from dataclasses import replace
+
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism import DEFAULT
+
+    params = replace(DEFAULT, whole_value_from="2026-11-14")
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    s = Store(tmp_path / "v.sqlite")
+    # the perps window: the 13th as scored before the switch, then nothing in perps (collateral moved to spot)
+    _record(s, "0xA", "2026-11-13", [(0, 10_000.0, 0.0), (24, 10_100.0, 100.0)])
+    # the whole value's window from the 14th: about 10,300, a profit of 103 in the perps account's record
+    s.put_equity_points(
+        "0xA", "week", [(_ms("2026-11-14", h), 10_300.0 + h * 103 / 24) for h in (0, 12, 24)], "2026-11-14"
+    )
+    s.put_equity_points(
+        "0xA", "perpWeek:pnl", [(_ms("2026-11-14", h), 100.0 + h * 103 / 24) for h in (0, 12, 24)], "2026-11-14"
+    )
+    s.put_equity("0xA", "2026-11-12", 10_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 0.0, 0.0, offmarket_moves=())  # the perps value at the day's end: nothing
+    s.put_equity("0xA", "2026-11-14", 10_403.0, 0.0, offmarket_moves=())
+    returns = s.dated_returns("0xA", 5)
+    assert returns["2026-11-14"] == pytest.approx(103 / 10_300.0)

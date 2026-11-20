@@ -337,7 +337,9 @@ def daily_equity_from_portfolio(
     of the `value_window` gives the value; flows are the change in value not explained by the day's profit, read from
     the `profit_window` (the same one when None)."""
     chosen = _window(windows, value_window)
-    gains = _window(windows, profit_window or value_window)
+    gains = _window(windows, profit_window) if profit_window else chosen
+    if not chosen and value_window == "perpMonth" and not profit_window:
+        chosen = gains = _window(windows, "month")  # no perps window: the whole account's, as before
     if not chosen or not gains:
         return []
     values = {}
