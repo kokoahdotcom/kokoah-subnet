@@ -200,6 +200,24 @@ class Store:
                     )
                 )
 
+    def profit_held_back(self, address: str, day: str) -> bool:
+        """Whether the address's day was scored with its profit not counted (a thin or cut day: only a loss counts),
+        from the note scoring wrote then, whatever the day's profit came to."""
+        with self._engine.connect() as c:
+            return (
+                c.execute(
+                    select(S.errors.c.day)
+                    .where(
+                        S.errors.c.day == day,
+                        S.errors.c.address == address.lower(),
+                        S.errors.c.level == "note",
+                        S.errors.c.message.like("%profit%not counted%"),
+                    )
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
     def has_equity_points(self, address: str, window: str) -> bool:
         """Whether any point is kept under `window` for the address."""
         with self._engine.connect() as c:

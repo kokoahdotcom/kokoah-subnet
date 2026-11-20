@@ -506,6 +506,16 @@ async def test_the_days_before_keep_their_own_request_s_profit_points(tmp_path: 
     assert store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62) == own
 
 
+async def test_a_day_scored_with_its_profit_not_counted_is_never_repaired(tmp_path: Path) -> None:
+    """A thin or cut day keeps the points it was scored with: a later request's points could count a profit that day
+    must not count, even one scored as a loss (nothing held back)."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    store.put_note("2026-10-20", HK_A, addr_a, "marks", "the day's profit not counted (a loss is): thin market")
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62) == []
+    assert store.profit_held_back(addr_a, "2026-10-20") and not store.profit_held_back(addr_a, DAY)
+
+
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)

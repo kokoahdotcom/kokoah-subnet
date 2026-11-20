@@ -742,19 +742,21 @@ async def collect_and_score(
                 # a perps account funded after an empty spell made no profit before its first recorded point: a zero
                 # at the day's edges before it (the window's profit is zero at its far edge)
                 empty = portfolio_empty_until(windows, profit_window) if separate else None
-                if empty is not None:
-                    pts = sorted(dict(pts + [(t, 0.0) for t in (start_ms, end_ms) if t <= empty]).items())
+                if empty is not None:  # a recorded point at the same moment wins
+                    pts = sorted(dict([(t, 0.0) for t in (start_ms, end_ms) if t <= empty] + pts).items())
                 store.replace_equity_points(address, profit_key(day), around(pts, start_ms, end_ms), day)
                 # the days before kept without their own request's points (scored before they were kept so, or
                 # missed): this request's week, where its points reach past both of the day's edges. Days further
-                # back keep the points they were scored with (the month's are about a day apart: too coarse)
-                for k in range(1, 7):
+                # back keep the points they were scored with (the month's are about a day apart: too coarse), and so
+                # does a day scored with its profit not counted (thin or cut), whose profit no other request may count
+                for k in range(1, 6):
                     d0 = start_ms - k * 86_400_000
                     key = profit_key(datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d"))
                     kept = around(pts, d0, d0 + 86_400_000)
                     if len(kept) < 2 or not kept[0][0] < d0 or not kept[-1][0] > d0 + 86_400_000:
                         continue
-                    if not store.has_equity_points(address, key):
+                    repaired_day = datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d")
+                    if not store.has_equity_points(address, key) and not store.profit_held_back(address, repaired_day):
                         store.replace_equity_points(address, key, kept, day)
         # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
         # the week when the week shows nothing held before it (an account funded after an empty spell)
