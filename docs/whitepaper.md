@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.2, November 2026. Mechanism specification v6.7.
+Whitepaper, version 3.3, November 2026. Mechanism specification v6.7.
 
 ### Summary
 
@@ -122,13 +122,13 @@ exchange's public data and the chain feed the validators; the validators' weight
 Once a day, after the UTC day closes, every validator reads which hotkey each account is linked to, reads each linked
 account's own fills together with the exchange's daily file of fills routed under the Kokoah builder code, confirms
 each fill's order carried the builder code, works out from the exchange's recorded account values whether each
-account held at least $10,000 on average through the day, challenges every agent's sealed machine, reads stake and
+account held at least $5,000 on average through the day, challenges every agent's sealed machine, reads stake and
 the pool rate from the chain, and scores the day. The weights it sets every tempo pay each miner their share.
 Everything it fetched and decided goes into its record and its daily artifact.
 
 ```mermaid
 flowchart TD
-  E{Eligible today?<br/>average account value at least $10,000<br/>and qualified by three trades worth $1,000} -->|no| Z[No reward today<br/>earlier credit fades]
+  E{Eligible today?<br/>average account value at least $5,000<br/>and qualified by three trades worth $1,000} -->|no| Z[No reward today<br/>earlier credit fades]
   E -->|yes| F[Builder fees paid today<br/>smoothed: 30% today, 70% the running figure]
   F --> VP[Volume reward: 80% of the pool<br/>in proportion to fees]
   E -->|yes| S{Proven record?<br/>statistical test on 30 to 90 days since joining,<br/>activity, skill above the luck floor}
@@ -152,7 +152,7 @@ account by hand, and private code is never readable outside the machine (section
 
 **Traders.** Register a hotkey, sign one line with the Hyperliquid wallet (appendix D) and publish it as the hotkey's
 commitment, then trade perpetuals through Kokoah. No software to run, no keys to share, no reporting. To earn, a
-trader keeps an account averaging at least $10,000 over the day and, once at the start, completes three trades worth
+trader keeps an account averaging at least $5,000 over the day and, once at the start, completes three trades worth
 $1,000 together. The skill record counts only the days after the day the link is accepted; history from before it
 never counts. A trader can move to a new account once per 60 days and keep their pay history and smoothed skill; the
 fee credit, the qualification and the skill record's day count start again.
@@ -173,11 +173,11 @@ participants from a community outside Bittensor.
 Every number below is a parameter of specification v6.7; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
-$10,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
+$5,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
 at one moment. And the account has qualified: a new identity's first three trades, worth $1,000 together, qualify
 it; the trade that completes both earns credit, the two before it do not. On a day that falls short, the day's trades
 earn no credit and the earlier credit fades as it would on a quiet day. There is no permanent exclusion: the first
-day back at $10,000 earns again.
+day back at $5,000 earns again.
 
 **Fee credit.** A miner's credit for the day is the builder fee paid on its fills, 0.045% of notional on every order,
 maker and taker alike. The credit is smoothed: 30% of today's fees count today, 21% tomorrow, 15% the day after, and
@@ -225,7 +225,7 @@ are removed from its credit; above 50%, both accounts are reported and leave the
 
 **Parameters.** Builder fee 0.045% (credit is the fee each fill paid); smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 30 to 90
 days since joining; record weight 0.8 at 30 days to 1 at 90; luck floor 0.25; participation full at $1M over 30 days;
-agent bonus 10% of the skill weight; gates 10 round trips, 7 days, $500; eligibility $10,000 average account value a
+agent bonus 10% of the skill weight; gates 10 round trips, 7 days, $500; eligibility $5,000 average account value a
 day and three qualifying trades worth $1,000; mirror thresholds 25% and 50%; migration once per 60 days; emission
 split miners 41%, validators 41%, owner 18% (locked). Changes follow section 10.
 
@@ -416,7 +416,8 @@ emission (41% of 7,200 alpha, 2,952 alpha).
 Eligibility, each day: `Ē_i,d = (1/24 h) × ∫ E_i(t) dt` over the day, from the exchange's recorded account values
 joined by straight lines (at least 4 recorded points in the day; otherwise unknown, and unknown is not eligible), and
 qualification: the first 3 trades with at least $1,000 of eligible notional together, the first two uncredited. A
-miner with `Ē_i,d < $10,000` or not yet qualified has `Φ_i,d = 0` and takes no part in either pool.
+miner with `Ē_i,d < E_min` (the day's floor: $5,000, $10,000 before 2026-11-27) or not yet qualified has `Φ_i,d = 0`
+and takes no part in either pool.
 
 ```
 Φ_i,d     = Σ_f b_f                                       fee credit of the day (eligible trades only)
@@ -431,8 +432,8 @@ of the block that accepted the link and the hotkey's registration block),
 `r_d = max(−1, min(TWR_d, P_d / C_d))`: the day's time-weighted return over the exchange's recorded points (each
 step's profit over the money there for it: a gain's step counts money moved in during it, a loss's step only what
 was there at its start; off-market fills count as money moved in at their time), and at most the day's profit `P_d`
-over its time-weighted capital `C_d`, every base and `C_d` at least the $10,000 eligibility floor; a past day the
-points don't cover is read whole, `(E_d − E_d−1 − F_d) / max(E_d−1 + max(F_d, 0), $10,000)`. Capped to
+over its time-weighted capital `C_d`, every base and `C_d` at least the day's eligibility floor `E_min`; a past day the
+points don't cover is read whole, `(E_d − E_d−1 − F_d) / max(E_d−1 + max(F_d, 0), E_min)`. Capped to
 `r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
