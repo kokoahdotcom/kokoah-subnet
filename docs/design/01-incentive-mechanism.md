@@ -18,8 +18,8 @@ among them. Kokoah uses the fees to buy back and burn the subnet's token.
 
 Two simple conditions, checked every day:
 
-- **Real capital.** The account must hold at least $5,000 on average over the day, measured from the exchange's
-  own record of the account through the whole day.
+- **Real capital.** The account must hold at least $5,000 on average over the day (from 27 November 2026;
+  $10,000 before), measured from the exchange's own record of the account through the whole day.
 - **A real start.** A new miner first makes three trades worth $1,000 together. The first two only count toward
   this; the trade that completes it, and every trade after, earn. You can qualify the day you register.
 

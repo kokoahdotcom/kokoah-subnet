@@ -6,6 +6,7 @@ Frozen and validated, so a scoring run cannot drift from the published values by
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 SPEC_VERSION = "6.7"
 
@@ -128,6 +129,10 @@ class Params:
     def min_equity_for(self, day: str) -> float:
         """The equity floor of `day`: its eligibility and the least capital its return is measured over."""
         return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
+
+    def day_of(self, day_index: int) -> str:
+        """The UTC day (YYYY-MM-DD) `day_index` days after `day_zero`."""
+        return (date.fromisoformat(self.day_zero) + timedelta(days=day_index)).isoformat()
 
     def windows_for(self, day: str) -> tuple[str, str, str]:
         """The exchange's portfolio windows read for `day`: (value, history origin, profit)."""

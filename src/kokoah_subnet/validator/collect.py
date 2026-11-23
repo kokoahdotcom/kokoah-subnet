@@ -1179,7 +1179,6 @@ async def collect_and_score(
         positions=store.position_series(addresses, day_strings(day, params.quality_days)),
         owner_group_of=owner_group_of,
         penalized_until=store.penalties(day_index(cfg, day, params), before_day=day),
-        min_equity_usd=params.min_equity_for(day),
     )
     result = score_day(inputs, params)
     reports: list[tuple[str, int, str, str]] = []

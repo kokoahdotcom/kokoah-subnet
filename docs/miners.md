@@ -32,7 +32,8 @@ examples below use it.
   shows the current amount before you confirm.
 - **A Hyperliquid account controlled by an ordinary wallet** (one private key, such as MetaMask or a hardware
   wallet). Smart-contract wallets cannot sign the link message.
-- **An average account value of at least $5,000** on the days you want to be paid (section 6).
+- **An average account value of at least $5,000** on the days you want to be paid (from 27 November 2026;
+  $10,000 before; section 6).
 - **Your trades routed through Kokoah**, so that every order carries Kokoah's builder code.
 
 ## 2. Install the tools

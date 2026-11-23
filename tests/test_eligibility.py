@@ -2,6 +2,7 @@
 and identity changes that must never carry credit or qualification to a fresh identity."""
 
 import random
+from datetime import date
 
 import pytest
 
@@ -152,7 +153,7 @@ def test_equity_below_the_floor_pays_nothing_and_credit_only_decays() -> None:
     other = MinerInputs("hk2", B, avg_equity_usd=50_000.0, registered_block=200)
     states = {**state, "hk2": MinerState(phi_hat=100.0, fee_hat=280.0, qualified=True, address=B, registered_block=200)}
     fills = day_fills(5, 10, 10_000.0) + day_fills(5, 10, 10_000.0, user=B)
-    low = run(5, fills, [miner(DEFAULT.min_equity_usd - 0.01), other], states)
+    low = run(5, fills, [miner(9_999.99), other], states)
     r, r2 = low.records
     assert not r.eligible and r.ineligible_reason == "average equity below the minimum"
     assert r.pay_alpha == 0.0 and r.volume_pay_alpha == 0.0 and r.credited.fills == 0
@@ -160,7 +161,7 @@ def test_equity_below_the_floor_pays_nothing_and_credit_only_decays() -> None:
     assert low.states["hk"].phi_hat == pytest.approx(70.0) and low.states["hk"].fee_hat == pytest.approx(196.0)
     assert r2.pay_alpha == pytest.approx(DEFAULT.miner_pool_alpha)  # the ineligible miner dilutes nobody
     # exactly at the floor counts
-    assert run(5, fills, [miner(DEFAULT.min_equity_usd), other], states).records[0].eligible
+    assert run(5, fills, [miner(10_000.0), other], states).records[0].eligible
 
 
 def test_the_floor_is_the_scored_day_s() -> None:
@@ -169,12 +170,10 @@ def test_the_floor_is_the_scored_day_s() -> None:
         DEFAULT.min_equity_for("2026-11-26") == 10_000.0 and DEFAULT.min_equity_for(DEFAULT.min_equity_from) == 5_000.0
     )
     state = {"hk": MinerState(qualified=True, address=A, registered_block=100)}
-    fills = day_fills(3, 4, 10_000.0)
-    for floor, eligible in ((10_000.0, False), (5_000.0, True)):
-        inputs = DayInputs(
-            day_index=3, price_usd=1.0, fills=fills, miners=[miner(7_000.0)], states=state, min_equity_usd=floor
-        )
-        r = score_day(inputs, DEFAULT).records[0]
+    switch = (date.fromisoformat(DEFAULT.min_equity_from) - date.fromisoformat(DEFAULT.day_zero)).days
+    assert DEFAULT.day_of(switch) == DEFAULT.min_equity_from and DEFAULT.day_of(switch - 1) == "2026-11-26"
+    for day, eligible in ((switch - 1, False), (switch, True)):
+        r = run(day, day_fills(day, 4, 10_000.0), [miner(7_000.0)], state).records[0]
         assert r.eligible is eligible and (eligible or r.ineligible_reason == "average equity below the minimum")
 
 

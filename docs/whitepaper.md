@@ -173,7 +173,7 @@ participants from a community outside Bittensor.
 Every number below is a parameter of specification v6.7; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
-$5,000, measured from the exchange's own recorded history of the account through the whole day, not from a balance
+$5,000 (from 27 November 2026; $10,000 before), measured from the exchange's own recorded history of the account through the whole day, not from a balance
 at one moment. And the account has qualified: a new identity's first three trades, worth $1,000 together, qualify
 it; the trade that completes both earns credit, the two before it do not. On a day that falls short, the day's trades
 earn no credit and the earlier credit fades as it would on a quiet day. There is no permanent exclusion: the first

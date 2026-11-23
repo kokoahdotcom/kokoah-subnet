@@ -77,7 +77,6 @@ class DayInputs:
     owner_group_of: Mapping[str, str] = field(default_factory=dict)
     pool_alpha: float | None = None
     penalized_until: Mapping[str, int] = field(default_factory=dict)  # address -> day index: a report follows it
-    min_equity_usd: float | None = None  # the day's equity floor (`Params.min_equity_for`); None: the current one
 
 
 @dataclass(frozen=True)
@@ -183,7 +182,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
     position_share = mirror_position_share(inputs.positions, params, inputs.owner_group_of)
 
-    floor = params.min_equity_usd if inputs.min_equity_usd is None else inputs.min_equity_usd
+    floor = params.min_equity_for(params.day_of(inputs.day_index))  # the scored day's own floor
     work: list[_Work] = []
     for m in inputs.miners:
         state = inputs.states.get(m.hotkey, MinerState())
