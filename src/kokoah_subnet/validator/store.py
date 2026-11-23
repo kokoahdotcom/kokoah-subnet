@@ -43,6 +43,13 @@ def _growth(returns: Sequence[float]) -> tuple[float | None, float | None]:
     return level - 1, drop
 
 
+def profit_key(day: str) -> str:
+    """The key the profit points read when `day` was scored are kept under. The exchange's profit history starts from
+    zero at each window's first point, so one moment reads differently from one request to the next: each day's profit
+    is read from one request's points, never from two (the same day's differences for every validator)."""
+    return f"pnl@{day}"
+
+
 class Store:
     """`Store(url)` for any SQLAlchemy URL, or `Store(Path)` for a SQLite file. The validator creates and migrates
     the schema; readers (the interface, the health check) open it with `create=False`, which needs no rights to
@@ -193,6 +200,53 @@ class Store:
                     )
                 )
 
+    def profit_held_back(self, address: str, day: str) -> bool:
+        """Whether the address's day was scored with its profit not counted (a thin or cut day: only a loss counts),
+        from the note scoring wrote then, whatever the day's profit came to."""
+        with self._engine.connect() as c:
+            return (
+                c.execute(
+                    select(S.errors.c.day)
+                    .where(
+                        S.errors.c.day == day,
+                        S.errors.c.address == address.lower(),
+                        S.errors.c.level == "note",
+                        S.errors.c.message.like("%profit%not counted%"),
+                    )
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
+    def has_equity_points(self, address: str, window: str) -> bool:
+        """Whether any point is kept under `window` for the address."""
+        with self._engine.connect() as c:
+            return (
+                c.execute(
+                    select(S.equity_points.c.time_ms)
+                    .where(S.equity_points.c.address == address.lower(), S.equity_points.c.source_window == window)
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
+    def replace_equity_points(self, address: str, window: str, points: Iterable[tuple[int, float]], day: str) -> int:
+        """Keep exactly `points` under `window` for the address, in place of what was kept (one transaction): a day's
+        profit points are one request's (`profit_key`), so a later attempt at the same day replaces an earlier one's."""
+        a = address.lower()
+        pts = {int(t): float(v) for t, v in points}
+        with self._engine.begin() as c:
+            c.execute(
+                delete(S.equity_points).where(S.equity_points.c.address == a, S.equity_points.c.source_window == window)
+            )
+            for t in sorted(pts):
+                c.execute(
+                    insert(S.equity_points).values(
+                        address=a, source_window=window, time_ms=t, value=pts[t], first_seen_day=day
+                    )
+                )
+        return len(pts)
+
     def put_equity_points(self, address: str, window: str, points: Iterable[tuple[int, float]], day: str) -> int:
         """Keep the exchange's recorded account-value points (new ones only: a recorded point never changes)."""
         a = address.lower()
@@ -315,7 +369,13 @@ class Store:
         pairs = [
             (d1, e0, e1, f1, o1, m1)
             for (d0, e0, _, _, k0, _), (d1, e1, f1, o1, k1, m1) in zip(series, series[1:], strict=False)
-            if k0 and k1 and e0 > 0 and _next_day(d0) == d1 and (after is None or d1 > after)
+            # the first day measured by the whole value (spec 6.7) needs no positive value the day before: the day
+            # before was measured by the perps account's, which may be nothing, and its own points carry the day
+            if k0
+            and k1
+            and (e0 > 0 or d1 == DEFAULT.whole_value_from)
+            and _next_day(d0) == d1
+            and (after is None or d1 > after)
         ]
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
@@ -324,6 +384,10 @@ class Store:
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
+            # the switch day is read over its own points only: the day before holds the perps value, the day itself
+            # the whole value, so the whole day at once would count the spot balance as made that day
+            if t is None and (e0 <= 0 or d1 == DEFAULT.whole_value_from):
+                continue
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)
@@ -336,7 +400,10 @@ class Store:
             # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
             # capital at work, so one made on a few dollars before a deposit is not counted as made on all of it; on a
             # day whose profit does not count (`offmarket_pnl` beyond the off-market fills), only a loss counts
-            made = t.profit - (o1 - sum(v for _, v in moves[d1]))
+            # (on such a day only a loss counts, whatever request its points come from: a day repaired from a later
+            # request than the one it was scored with has another profit than the one held back then)
+            held = o1 - sum(v for _, v in moves[d1])
+            made = min(0.0, t.profit) if held > 1e-9 else t.profit
             r = t.twr
             if t.capital > 0:
                 r = min(r, made / t.capital)
@@ -354,10 +421,11 @@ class Store:
         a = address.lower()
         start = _day_ms(min(days)) - 2 * 86_400_000
         end = _day_ms(max(days)) + 2 * 86_400_000
-        window = DEFAULT.equity_window
-        values = self.equity_points(a, window, start, end)
-        profits = self.equity_points(a, window + ":pnl", start, end)
-        if not values or not profits:
+        # each day's value from the window it was scored with (spec 6.7: the whole value from `whole_value_from`
+        # on); the profit is the perps account's either way
+        windows = {DEFAULT.windows_for(d)[0] for d in days}
+        values_by = {w: self.equity_points(a, w, start, end) for w in windows}
+        if not any(values_by.values()):
             return {}
         with self._engine.connect() as c:
             origins = {
@@ -368,7 +436,22 @@ class Store:
                     )
                 ).all()
             }
-        v_times, p_times = [t for t, _ in values], [t for t, _ in profits]
+        times_by = {w: [t for t, _ in pts] for w, pts in values_by.items()}
+        # every day's own profit points (`profit_key`) and the points kept before them, in one read
+        legacy = DEFAULT.profit_window + ":pnl"
+        keyed: dict[str, list[tuple[int, float]]] = {}
+        with self._engine.connect() as c:
+            for key, t_ms, v in c.execute(
+                select(S.equity_points.c.source_window, S.equity_points.c.time_ms, S.equity_points.c.value)
+                .where(
+                    S.equity_points.c.address == a,
+                    S.equity_points.c.source_window.in_([profit_key(d) for d in days] + [legacy]),
+                    S.equity_points.c.time_ms >= start,
+                    S.equity_points.c.time_ms < end,
+                )
+                .order_by(S.equity_points.c.time_ms)
+            ).all():
+                keyed.setdefault(str(key), []).append((int(t_ms), float(v)))
 
         def near(points: list[tuple[int, float]], times: list[int], lo: int, hi: int) -> list[tuple[int, float]]:
             # the points of [lo, hi] and one on each side: all a day's edges and steps read
@@ -378,9 +461,15 @@ class Store:
         for d, fills in days.items():
             d0 = _day_ms(d)
             d1 = d0 + 86_400_000
+            w = DEFAULT.windows_for(d)[0]
+            # the day's profit from the one request made when it was scored (`profit_key`); a day kept before that, from
+            # the points kept then
+            profits = keyed.get(profit_key(d)) or keyed.get(legacy) or []
+            if not profits:
+                continue
             t = day_twr(
-                near(values, v_times, d0, d1),
-                near(profits, p_times, d0, d1),
+                near(values_by[w], times_by[w], d0, d1),
+                near(profits, [p for p, _ in profits], d0, d1),
                 d0,
                 d1,
                 origins.get(d),

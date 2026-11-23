@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.6)
+# Kokoah subnet incentive mechanism: complete specification (v6.7)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -50,7 +50,7 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
 | `fee` | builder fee rate per fill (credit is the fee each fill paid) | 0.00045 (0.045%) |
 | `c_m` | maker fee credit (taker is 1.0); kept as a parameter, set to 1 since the builder fee is charged on maker fills too | 1.0 |
 | `α` | daily smoothing weight of today's value, for credit, fees and skill | 0.3 |
-| `E_d`, `flows_d` | end-of-day account value of the bound address (unrealized included); net deposits that day | |
+| `E_d`, `flows_d` | end-of-day account value of the bound address: its whole value as the exchange records it, spot included, unrealized included (§9a); net money moved in that day | |
 | `p_d` | conversion rate for day `d`: the mean pool rate (TAO per alpha) at 20 blocks anchored to the scored day (the day's start block snapped to a tempo boundary, then one block per 1/20 of the day; identical for every validator) times the day's mean TAO/USD, the mean close of the exchange's hourly TAO-perpetual candles | |
 | `g'_i` | skill score in [0, 1] (§7) | |
 | `s_i`, `v_i`, `w_i` | skill above the luck floor, volume participation, skill weight (§7a) | |
@@ -189,7 +189,9 @@ C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
-`offmarket_i` is the money moved in through off-market fills (§3, item 2) during the step, by the fills' times;
+The recorded profit is the perps account's (the `perpWeek` window's profit history), and the value is the account's
+whole value (§9a), so every other change in value is money moved, never a return: a spot token's price as much as a
+deposit. `offmarket_i` is the money moved in through off-market fills (§3, item 2) during the step, by the fills' times;
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
 the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
 start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
@@ -201,7 +203,8 @@ the account at $10,000 or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
 `r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), $10,000))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
-never loses more than everything (−100%).
+never loses more than everything (−100%). The first day measured by the whole value (§9a) is never read whole: the day
+before holds the perps account's value, so without its own points it has no return.
 A day has a return only when its account value and the previous day's are both known; the windows below count known returns, so a day without one (an account value that could not be read,
 or a day the exchange's record did not cover) is skipped and the window reaches one day further back.
 
@@ -247,7 +250,8 @@ The day is published per miner (`joined_day`). Then:
   of many old accounts could bind the one with the luckiest past and be paid at once. A new link (a migration, an
   unlink and a new link, a hotkey swap's re-binding) or a new registration starts a new record; publishing the same
   link again does not. A validator that starts fresh dates an unchanged link from its latest publish (§14).
-- **History.** The exchange keeps day-by-day account values for about a month (the `perpMonth` window); further
+- **History.** The exchange keeps day-by-day account values for about a month (the `month` window, with the perps
+  account's profit from `perpMonth`); further
   back its records are one to seven days apart. The backfill on an address's first scored day therefore covers about
   30 days: it gives the first day its return and the record page its history, not the skill test.
 
@@ -271,11 +275,22 @@ A miner is **eligible** on day `d` when both hold; otherwise it is paid nothing 
 Ē_d = (1 / T) × ∫_{start of d}^{end of d} E(t) dt          T = 24 h
 ```
 
-`E(t)` comes from the exchange's own recorded history of the account (the `portfolio` endpoint, window
-`perpWeek`: the perps account value, recorded about every two hours), never from a single snapshot. Between recorded
+`E(t)` comes from the exchange's own recorded history of the account (the `portfolio` endpoint, window `week`: the
+account's whole value, spot included, recorded about every two hours), never from a single snapshot. In a unified
+account the collateral sits in spot and the perps account's value says little, so the whole value is what the
+account holds. Spot tokens count at the exchange's own price: its record does not tell them apart, and pay follows the
+fees paid, so a value raised with a token earns nothing more, and a token's price never counts as a return (§7). The
+days before 2026-11-27 were measured on the perps account's value (window `perpWeek`); every validator measures the
+whole value from that day on, whenever it updated, and that day's return starts from the whole value at its start (the
+day before was measured on the perps value). A perps account that held nothing all week (its window made up by the
+exchange) made no profit. Between recorded
 points the value is a straight line; the day's two edges are interpolated from the points around them. The window's
 live last point and the made-up point at its far edge are dropped, so every validator that asks while the day is
-inside the window reads the same points, and each validator keeps the points it read (`equity_points`). Fewer than 4
+inside the window reads the same points, and each validator keeps the points it read (`equity_points`). The profit
+history starts from zero at each window's first point, so one moment's profit reads differently from one request to the
+next: a day's profit points are kept from the one request made when the day was scored (a later attempt at the day
+replaces them), never mixed with another's; a day kept before that (or missed) gets them from the next request whose
+week reaches past both of its edges, and one further back keeps the points it was scored with. Fewer than 4
 recorded points inside the day, or a history that does not reach back to the day's start, make `Ē_d` **unknown**, and
 unknown is ineligible (recorded as an error, raised by the health check). An account whose history begins during the
 day had nothing before its first point: its average counts zero before it, and its day starts from a zero value and a
@@ -317,7 +332,7 @@ not escape is kept: the pay history and any mirror penalty (which follows the ad
 controls, §3). The entry test's record starts again with a new link or a new registration (§7a): a fresh identity
 waits 30 days again.
 
-An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of capital, its own
+An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of account value, its own
 registration and its own qualification.
 
 ## 10. Revenue and buyback
@@ -347,7 +362,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
-| eligibility | the day's average account value ≥ $10,000 (recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
+| eligibility | the day's average account value ≥ $10,000 (the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |
@@ -412,7 +427,8 @@ before the hotkey's current registration block never counts again.
   never pay. The bindings are read when a day is scored and the day's file is scored as a whole, so a binding
   accepted before a day is scored covers that whole day, including its earlier fills (they also count toward
   qualification). The account's history from before joining does not count for skill: on the first day an address
-  is scored, the exchange's portfolio history (perps window) backfills daily account values, which give that day its
+  is scored, the exchange's portfolio history (the month windows, each day by its own rule: §9a) backfills daily
+  account values; a day without a perps profit point (or after one) has no known money moved and no return. They give that day its
   return and the record page its history, but the entry test and the skill score read only the days after the
   binding was accepted (§7a).
 

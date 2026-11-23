@@ -1,7 +1,7 @@
 """The whole validator pass against fakes: a cached builder file, a fake info endpoint, a fake chain."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +25,7 @@ from kokoah_subnet.validator.collect import (
 from kokoah_subnet.validator.hyperliquid import HyperliquidInfo, day_bounds_ms
 from kokoah_subnet.validator.loop import other_subnet, run_config, start_day_for, step
 from kokoah_subnet.validator.serve import create_app
-from kokoah_subnet.validator.store import Store
+from kokoah_subnet.validator.store import Store, profit_key
 
 HK_A, HK_B, OWNER, BURN, VAL = "hkA", "hkB", "hkOwner", "hkBurn", "hkValidator"
 EQUITY: dict[str, float] = {}  # address -> recorded account value in the fake history (default $25,000)
@@ -45,6 +45,12 @@ TX_LOOKUPS: list[str] = []  # every txDetails hash asked
 SUBS: dict[str, list[str]] = {}  # address -> its sub-accounts
 FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
 FILLS_READ: list[str] = []  # every address whose fill history was asked
+WHOLE: dict[str, float] = {}  # address -> the whole account's value (spot included), when not the perps value
+SPOT_GAIN: dict[str, float] = {}  # address -> a spot token's gain through the day (in the whole value and its profit)
+NO_PERPS: set[str] = set()  # addresses whose perps account held nothing all week (the exchange makes its windows up)
+PERPS_JUST_FUNDED: set[str] = set()  # ... until just now: only the live point shows the money
+PERPS_FUNDED_AT: dict[str, int] = {}  # address -> when its perps account was funded after an empty week
+PNL_SHIFT: dict[str, float] = {}  # address -> another request's profit baseline (its window's first point moved)
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
 H = 3_600_000
@@ -257,7 +263,7 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 
         def pnl_at(ts: int) -> str:
             spread = (day_pnl - gift) * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000))
-            return str(spread + (gift if ts >= DAY_MS + GIFT_MS else 0.0))
+            return str(spread + (gift if ts >= DAY_MS + GIFT_MS else 0.0) + PNL_SHIFT.get(user, 0.0))
 
         # the 7-day window: a made-up point at the far edge, recorded points every two hours, the live point last
         times = [DAY_MS + h * 7_200_000 for h in range(-24, 18)]
@@ -266,9 +272,36 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         week_pnl = [[DAY_MS - 7 * 86_400_000 + 123, "0"]] + [[ts, pnl_at(ts)] for ts in times]
         week_pnl += [[DAY_MS + 86_400_000 + 3_600_000 + 456, "777"]]
         all_time = {"accountValueHistory": [[DAY_MS - 90 * 86_400_000, "1000"]], "pnlHistory": []}
+        # the whole account's windows (spot included): its own value, and a spot token's gain on top of the profit
+        spot = SPOT_GAIN.get(user, 0.0)
+
+        def through(ts: int) -> float:
+            return spot * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000))
+
+        def whole_at(ts: int) -> str:
+            return str((WHOLE[user] if user in WHOLE else float(value_at(ts))) + through(ts))
+
+        whole = [week[0]] + [[ts, whole_at(ts)] for ts in times] + [week[-1]]
+        whole_pnl = [week_pnl[0]] + [[ts, str(float(pnl_at(ts)) + through(ts))] for ts in times] + [week_pnl[-1]]
+        month = {
+            "accountValueHistory": [[DAY_MS - 86_400_000, str(WHOLE.get(user, 24000.0))]],
+            "pnlHistory": [[DAY_MS - 86_400_000, "0"]],
+        }
+        if user in NO_PERPS or user in PERPS_JUST_FUNDED:  # made up: zero points that reach past the day
+            week = [[ts, "0.0"] for ts in [t for t, _ in week]]
+            week_pnl = [[ts, "0.0"] for ts, _ in week]
+            if user in PERPS_JUST_FUNDED:
+                week[-1] = [week[-1][0], "5000.0"]
+        if user in PERPS_FUNDED_AT:  # nothing held from the week's far edge until the funding, recorded points after it
+            funded = PERPS_FUNDED_AT[user]
+            week = [[week[0][0], "0"]] + [[ts, v] for ts, v in week[1:] if int(str(ts)) >= funded]
+            week_pnl = [[week_pnl[0][0], "0"]] + [[ts, "0"] for ts, _ in week[1:]]
         return httpx.Response(
             200,
             json=[
+                ["month", month],
+                ["week", {"accountValueHistory": whole, "pnlHistory": whole_pnl}],
+                ["allTime", all_time],
                 ["perpMonth", hist],
                 ["perpWeek", {"accountValueHistory": week, "pnlHistory": week_pnl}],
                 ["perpAllTime", all_time],
@@ -283,6 +316,12 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
 
 def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _FakeChain, str, str]:
     EQUITY.clear()
+    WHOLE.clear()
+    NO_PERPS.clear()
+    PERPS_JUST_FUNDED.clear()
+    PERPS_FUNDED_AT.clear()
+    PNL_SHIFT.clear()
+    SPOT_GAIN.clear()
     LIVE.clear()
     STEP.clear()
     PNL_DAY.clear()
@@ -323,6 +362,160 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     return cfg, store, hl, _FakeChain(commitments), a.address.lower(), b.address.lower()
 
 
+async def test_whole_value_from_its_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """From spec 6.7's day on, an account's value is its whole value: a unified account keeps its collateral in spot,
+    so its perps value says little. Eligible on $10,300 though its perps value is $4,000; a spot token's gain is money
+    moved, never profit: the day's return is the perps account's profit over the whole value."""
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism.eligibility import day_twr
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    EQUITY[addr_a] = 4_000.0  # the perps account's value
+    WHOLE[addr_a] = 10_300.0  # the whole account's, spot included
+    SPOT_GAIN[addr_a] = 300.0  # a spot token's price rises through the day
+    # before the day: the perps value, below the floor
+    before = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert not {r.hotkey: r for r in before.records}[HK_A].eligible
+    # from the day on: the whole value
+    (tmp_path / "whole").mkdir()
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / "whole")
+    EQUITY[addr_a], WHOLE[addr_a], SPOT_GAIN[addr_a] = 4_000.0, 10_300.0, 300.0
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    result = await collect_and_score(cfg, DAY, store, hl, chain, params)
+    record = {r.hotkey: r for r in result.records}[HK_A]
+    assert record.eligible
+    end = DAY_MS + 86_400_000
+    values = store.equity_points(addr_a, "week", DAY_MS - H, end + H)
+    profits = store.equity_points(addr_a, profit_key(DAY), DAY_MS - H, end + H)
+    assert values and profits and not store.equity_points(addr_a, "perpWeek", 0, 2**62)
+    # the day's value is the whole account's at its end; the spot token's gain is money moved, not profit
+    last_day, last_value, _ = store.equity_series(addr_a, 5)[-1]
+    assert last_day == DAY and last_value == pytest.approx(10_600.0)
+    moves = store._equity_rows(addr_a, 1)[-1][5]
+    assert moves is not None
+    t = day_twr(values, profits, DAY_MS, end, None, moves)
+    assert t is not None and t.profit == pytest.approx(-1000.0)  # the perps account's profit alone
+    (r,) = store.returns(addr_a, 5)
+    assert r == pytest.approx(min(t.twr, t.profit / t.capital))
+    assert -0.1 < r < -0.09  # the loss of 1,000 over about 10,300: the spot gain would have made it about -0.068
+    # the day before the switch is backfilled on the perps account's value, as a validator that scored it kept it
+    assert store.equity_series(addr_a, 5)[0][:2] == ("2026-10-20", 24000.0)
+
+
+async def test_the_switch_day_starts_from_the_whole_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The day before the switch was scored on the perps account's value (here 4,000): the switch day's money moved is
+    counted from the whole value at its start, not from that, so the jump to the whole value is no deposit."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    EQUITY[addr_a], WHOLE[addr_a] = 4_000.0, 10_300.0
+    store.put_equity(addr_a, "2026-10-20", 4_000.0, 0.0, offmarket_moves=())  # scored on the perps value
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    await collect_and_score(cfg, DAY, store, hl, chain, params)
+    day, value, flows = store.equity_series(addr_a, 5)[-1]
+    assert day == DAY and value == pytest.approx(10_300.0)
+    # as if the day before had been measured on the whole value (the fake's off-market gift is all that moved); the
+    # perps value as the base would have counted the jump from 4,000 to 10,300 as 6,300 moved in on top
+    assert flows == pytest.approx(1_000.0)
+
+
+async def test_a_perps_account_that_held_nothing_made_no_profit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A unified account trading nothing in perps all week: the exchange makes its perps windows up (zeros timed by the
+    request). The day is known at once, with no profit, the same for every validator; nothing made up is stored."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, _, addr_b = _setup(tmp_path)
+    WHOLE[addr_b] = 10_300.0
+    NO_PERPS.add(addr_b)
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    await collect_and_score(cfg, DAY, store, hl, chain, params)
+    end = DAY_MS + 86_400_000
+    assert store.equity_points(addr_b, profit_key(DAY), 0, 2**62) == [(DAY_MS, 0.0), (end, 0.0)]
+    day, value, _ = store.equity_series(addr_b, 5)[-1]
+    assert day == DAY and value == pytest.approx(10_300.0)
+    # no perps profit: the day's return is only the fake's off-market fill ($2,000 moved in that way) taken off, over
+    # the whole value
+    assert store.dated_returns(addr_b, 5) == {DAY: pytest.approx(-2_000.0 / 10_300.0)}
+
+
+async def test_a_perps_account_just_funded_is_waited_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its perps window still made up but the live point showing money: the day waits for the exchange's record until
+    the deadline, as for the value's window."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    WHOLE[addr_a] = 10_300.0
+    PERPS_JUST_FUNDED.add(addr_a)
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    with pytest.raises(RuntimeError, match="does not show its perps account yet"):
+        await collect_and_score(cfg, DAY, store, hl, chain, params, now_ts=EARLY)
+
+
+async def test_a_perps_account_funded_after_an_empty_week_made_no_profit_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Funded during the day after an empty week: no profit before its first recorded point, a zero at the day's
+    start, the same as a validator that read the window while it was still made up."""
+    import kokoah_subnet.validator.store as store_module
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    WHOLE[addr_a] = 10_300.0
+    PERPS_FUNDED_AT[addr_a] = DAY_MS + 10 * H
+    params = replace(DEFAULT, whole_value_from=DAY)
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    await collect_and_score(cfg, DAY, store, hl, chain, params)
+    assert (DAY_MS, 0.0) in store.equity_points(addr_a, profit_key(DAY), 0, 2**62)
+
+
+async def test_the_days_before_get_their_own_request_s_profit_points(tmp_path: Path) -> None:
+    """A day kept before each day had its own request's profit points (or one missed) gets them from the next request
+    whose week covers it whole."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.equity_points(addr_a, profit_key(DAY), 0, 2**62)
+    before = store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62)
+    day0 = DAY_MS - 86_400_000
+    assert before and before[0][0] < day0 and before[-1][0] > DAY_MS  # the whole day, a point on each side
+
+
+async def test_a_day_scored_again_keeps_one_request_s_profit_points(tmp_path: Path) -> None:
+    """A day scored again (a retried attempt, a later request with its window's first point moved, so another profit
+    baseline) keeps that request's points in place of the first one's: never two baselines in one day."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    first = store.equity_points(addr_a, profit_key(DAY), 0, 2**62)
+    PNL_SHIFT[addr_a] = -135.0
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    second = store.equity_points(addr_a, profit_key(DAY), 0, 2**62)
+    assert [t for t, _ in second] == [t for t, _ in first]
+    assert all(v2 == pytest.approx(v1 - 135.0) for (_, v1), (_, v2) in zip(first, second, strict=True))
+
+
+async def test_the_days_before_keep_their_own_request_s_profit_points(tmp_path: Path) -> None:
+    """A day that has its own request's profit points keeps them: a later request never replaces them."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    own = [(DAY_MS - 86_400_000 - H, 7.0), (DAY_MS + H, 7.0)]
+    store.put_equity_points(addr_a, profit_key("2026-10-20"), own, "2026-10-20")
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62) == own
+
+
+async def test_a_day_scored_with_its_profit_not_counted_is_never_repaired(tmp_path: Path) -> None:
+    """A thin or cut day keeps the points it was scored with: a later request's points could count a profit that day
+    must not count, even one scored as a loss (nothing held back)."""
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    store.put_note("2026-10-20", HK_A, addr_a, "marks", "the day's profit not counted (a loss is): thin market")
+    await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert store.equity_points(addr_a, profit_key("2026-10-20"), 0, 2**62) == []
+    assert store.profit_held_back(addr_a, "2026-10-20") and not store.profit_held_back(addr_a, DAY)
+
+
 async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
@@ -346,7 +539,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert moves is not None and [t for t, _ in moves] == [DAY_MS + GIFT_MS] and moves[0][1] == pytest.approx(2000.0)
     end = DAY_MS + 86_400_000
     values = store.equity_points(addr_a, DEFAULT.equity_window, DAY_MS - H, end + H)
-    profits = store.equity_points(addr_a, DEFAULT.equity_window + ":pnl", DAY_MS - H, end + H)
+    profits = store.equity_points(addr_a, profit_key(DAY), DAY_MS - H, end + H)
     t = day_twr(values, profits, DAY_MS, end, None, moves)
     assert t is not None and t.profit == pytest.approx(-1000.0)
     assert store.returns(addr_a, 5) == [pytest.approx(min(t.twr, t.profit / t.capital))]
@@ -1331,7 +1524,7 @@ async def test_an_account_that_held_nothing_all_week_does_not_hold_the_day(tmp_p
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=now)
     ra, rb = (next(r for r in result.records if r.hotkey == hk) for hk in (HK_A, HK_B))
     assert not ra.eligible and ra.avg_equity_usd == 0.0 and ra.ineligible_reason == "average equity below the minimum"
-    for window in ("perpWeek", "perpWeek:pnl"):
+    for window in ("perpWeek", "perpWeek:pnl", profit_key(DAY)):
         assert store.equity_points(addr_a, window, 0, 2**62) == []
     assert store.equity_points(rb.address, "perpWeek", 0, 2**62)  # a real history is stored as before
     assert rb.eligible and rb.pay_alpha > 0
@@ -1410,7 +1603,7 @@ async def test_an_account_funded_but_not_yet_recorded_is_waited_for(tmp_path: Pa
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(not_recorded))
     with pytest.raises(RuntimeError, match="does not show its money yet"):
         await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT, now_ts=asked / 1000)
-    for window in ("perpWeek", "perpWeek:pnl"):
+    for window in ("perpWeek", "perpWeek:pnl", profit_key(DAY)):
         assert store.equity_points(addr_a, window, 0, 2**62) == []
     points[-1][1] = (
         "0.0"  # nothing on the live point either, but the week no longer covers the day: nothing to wait for

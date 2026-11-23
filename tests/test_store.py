@@ -6,7 +6,7 @@ import pytest
 
 from kokoah_subnet.binding import AcceptedBinding
 from kokoah_subnet.mechanism import MinerState
-from kokoah_subnet.validator.store import Store
+from kokoah_subnet.validator.store import Store, profit_key
 
 
 def test_equity_returns_skip_gaps_and_remove_flows(tmp_path: Path) -> None:
@@ -46,7 +46,7 @@ def _record(s: Store, address: str, day: str, points: list[tuple[float, float, f
     from kokoah_subnet.mechanism import DEFAULT
 
     s.put_equity_points(address, DEFAULT.equity_window, [(_ms(day, h), v) for h, v, _ in points], day)
-    s.put_equity_points(address, DEFAULT.equity_window + ":pnl", [(_ms(day, h), p) for h, _, p in points], day)
+    s.put_equity_points(address, profit_key(day), [(_ms(day, h), p) for h, _, p in points], day)
 
 
 def test_a_deposit_day_s_return_is_over_the_capital_at_work(tmp_path: Path) -> None:
@@ -541,3 +541,90 @@ def test_epochs_recorded_before_the_earned_table_are_backfilled(tmp_path: Path) 
         _backfill_earned(c, False)
         _backfill_earned(c, False)  # run again: the same totals
     assert s.earned_by_day() == {"hkA": {"2026-11-12": 100.0, "2026-11-13": 75.0}}
+
+
+def test_the_first_whole_value_day_is_read_over_its_own_points(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec 6.7: the day before the switch was measured on the perps account's value, which a unified account may have
+    at nothing; the switch day's return comes from its own whole-value points and the perps profit, over the whole
+    value. Days before stay on the perps windows."""
+    from dataclasses import replace
+
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism import DEFAULT
+
+    params = replace(DEFAULT, whole_value_from="2026-11-14")
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    s = Store(tmp_path / "v.sqlite")
+    # the perps window: the 13th as scored before the switch, then nothing in perps (collateral moved to spot)
+    _record(s, "0xA", "2026-11-13", [(0, 10_000.0, 0.0), (24, 10_100.0, 100.0)])
+    # the whole value's window from the 14th: about 10,300, a profit of 103 in the perps account's record
+    s.put_equity_points(
+        "0xA", "week", [(_ms("2026-11-14", h), 10_300.0 + h * 103 / 24) for h in (0, 12, 24)], "2026-11-14"
+    )
+    s.put_equity_points(
+        "0xA",
+        profit_key("2026-11-14"),
+        [(_ms("2026-11-14", h), 100.0 + h * 103 / 24) for h in (0, 12, 24)],
+        "2026-11-14",
+    )
+    s.put_equity("0xA", "2026-11-12", 10_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 0.0, 0.0, offmarket_moves=())  # the perps value at the day's end: nothing
+    s.put_equity("0xA", "2026-11-14", 10_403.0, 0.0, offmarket_moves=())
+    returns = s.dated_returns("0xA", 5)
+    assert returns["2026-11-14"] == pytest.approx(103 / 10_300.0)
+
+
+def test_the_switch_day_has_no_return_without_its_points(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A switch day stored without the exchange's points around it (an address first scored long after): the day
+    before holds the perps value, the day itself the whole value, so the whole day at once would count the spot
+    balance as made that day. It has no return."""
+    from dataclasses import replace
+
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism import DEFAULT
+
+    monkeypatch.setattr(store_module, "DEFAULT", replace(DEFAULT, whole_value_from="2026-11-14"))
+    s = Store(tmp_path / "v.sqlite")
+    s.put_equity("0xA", "2026-11-12", 20_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 20_000.0, 0.0, offmarket_moves=())  # perps $20,000 (and $50,000 in spot)
+    s.put_equity("0xA", "2026-11-14", 70_000.0, 0.0, offmarket_moves=())  # the whole value
+    s.put_equity("0xA", "2026-11-15", 70_000.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": 0.0, "2026-11-15": 0.0}
+
+
+def test_a_day_s_profit_comes_from_one_request(tmp_path: Path) -> None:
+    """The exchange's profit history starts from zero at each window's first point, so one moment reads differently
+    from one request to the next. Points kept from two requests (the old way) show a step that was never made; the
+    day's own request's points (`profit_key`) give the day's true profit, and are read first."""
+    s = Store(tmp_path / "v.sqlite")
+    day = "2026-11-14"
+    values = [(_ms(day, h), 20_000.0) for h in (0, 6, 12, 18, 24)]
+    s.put_equity_points("0xA", "perpWeek", values, day)
+    # the old way: the day's first points from one request, the rest from the next (its baseline 135 lower)
+    old = [
+        (_ms(day, 0), 1_000.0),
+        (_ms(day, 6), 1_000.0),
+        (_ms(day, 12), 865.0),
+        (_ms(day, 18), 865.0),
+        (_ms(day, 24), 865.0),
+    ]
+    s.put_equity_points("0xA", "perpWeek:pnl", old, day)
+    s.put_equity("0xA", "2026-11-13", 20_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", day, 20_000.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {day: pytest.approx(-135 / 20_000)}  # a loss never made
+    # the day's own request: flat all day
+    s.put_equity_points("0xA", profit_key(day), [(t, 865.0) for t, _ in values], day)
+    assert s.dated_returns("0xA", 5) == {day: 0.0}
+
+
+def test_a_day_whose_profit_does_not_count_counts_only_a_loss(tmp_path: Path) -> None:
+    """A thin or cut day kept its profit back when it was scored; read again over points from another request (a day
+    repaired after the update), its profit still never counts: only a loss would."""
+    s = Store(tmp_path / "v.sqlite")
+    day = "2026-11-14"
+    s.put_equity_points("0xA", "perpWeek", [(_ms(day, h), 20_000.0) for h in (0, 12, 24)], day)
+    s.put_equity_points("0xA", profit_key(day), [(_ms(day, h), 135.0 * h / 24) for h in (0, 12, 24)], day)
+    s.put_equity("0xA", "2026-11-13", 20_000.0, 0.0, offmarket_moves=())
+    # scored with a profit of 100 held back (a thin day); the points read later show 135
+    s.put_equity("0xA", day, 20_000.0, -100.0, offmarket_pnl=100.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {day: 0.0}

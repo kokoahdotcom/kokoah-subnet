@@ -77,7 +77,7 @@ from .hyperliquid import (
     transfer_partners,
 )
 from .run import result_json
-from .store import Store
+from .store import Store, profit_key
 
 log = logging.getLogger("kokoah_subnet.validator")
 BLOCK_SECONDS = 12
@@ -304,6 +304,14 @@ async def bound_builder_activity(
         if any(f.time_ms < end_ms and f.builder_fee > 0 for f in fills):
             return f"{address} paid builder fees that day"
     return None
+
+
+def around(points: list[tuple[int, float]], start_ms: int, end_ms: int) -> list[tuple[int, float]]:
+    """The points inside [start_ms, end_ms] and the one on each side of it: all a day's return reads."""
+    inside = [i for i, (t, _) in enumerate(points) if start_ms <= t <= end_ms]
+    lo = (inside[0] if inside else next((i for i, (t, _) in enumerate(points) if t > end_ms), len(points))) - 1
+    hi = (inside[-1] if inside else lo) + 1
+    return points[max(0, lo) : hi + 1]
 
 
 async def collect_and_score(
@@ -707,15 +715,49 @@ async def collect_and_score(
         # by the request, so they differ from one validator to the next: none of them is stored, and once the account
         # is recorded its days read only the exchange's recorded points. Held nothing all week: its average is zero
         # and its day has no change, known at once. Just funded: the record is waited for until the deadline
-        made_up = recorded and portfolio_made_up(windows, params.equity_window)
-        held_nothing = made_up and portfolio_held_nothing(windows, params.equity_window, start_ms, end_ms)
-        if made_up and portfolio_live_holds(windows, params.equity_window) and not past_deadline:
+        # the windows read for this day: the account's value (from spec 6.7 its whole value, spot included) and the
+        # perps account's profit
+        value_window, origin_window, profit_window = params.windows_for(day)
+        made_up = recorded and portfolio_made_up(windows, value_window)
+        held_nothing = made_up and portfolio_held_nothing(windows, value_window, start_ms, end_ms)
+        if made_up and portfolio_live_holds(windows, value_window) and not past_deadline:
             raise RuntimeError(f"the recorded history of {address} does not show its money yet")
+        # the profit's own window (spec 6.7: the perps account's, apart from the value's) is made up the same way for
+        # a perps account that held nothing: none of its points is stored. Held nothing all week: no profit, known at
+        # once (a zero at the day's edges, the same for every validator). Just funded: waited for until the deadline
+        separate = profit_window != value_window
+        profit_made_up = separate and recorded and portfolio_made_up(windows, profit_window)
+        no_profit = profit_made_up and portfolio_held_nothing(windows, profit_window, start_ms, end_ms)
+        if profit_made_up and not no_profit and portfolio_live_holds(windows, profit_window) and not past_deadline:
+            raise RuntimeError(f"the recorded profit of {address} does not show its perps account yet")
+        # the profit points: this request's, kept for this day (`profit_key`): the exchange's profit history starts
+        # from zero at each window's first point, so a day's profit is read from one request only
         if recorded and not made_up:
-            store.put_equity_points(address, params.equity_window, portfolio_points(windows, params.equity_window), day)
-            store.put_equity_points(
-                address, params.equity_window + ":pnl", portfolio_pnl_points(windows, params.equity_window), day
-            )
+            store.put_equity_points(address, value_window, portfolio_points(windows, value_window), day)
+            # every attempt that read the history replaces the day's points (one request's, never two)
+            if no_profit:
+                store.replace_equity_points(address, profit_key(day), [(start_ms, 0.0), (end_ms, 0.0)], day)
+            elif not profit_made_up:
+                pts = portfolio_pnl_points(windows, profit_window)
+                # a perps account funded after an empty spell made no profit before its first recorded point: a zero
+                # at the day's edges before it (the window's profit is zero at its far edge)
+                empty = portfolio_empty_until(windows, profit_window) if separate else None
+                if empty is not None:  # a recorded point at the same moment wins
+                    pts = sorted(dict([(t, 0.0) for t in (start_ms, end_ms) if t <= empty] + pts).items())
+                store.replace_equity_points(address, profit_key(day), around(pts, start_ms, end_ms), day)
+                # the days before kept without their own request's points (scored before they were kept so, or
+                # missed): this request's week, where its points reach past both of the day's edges. Days further
+                # back keep the points they were scored with (the month's are about a day apart: too coarse), and so
+                # does a day scored with its profit not counted (thin or cut), whose profit no other request may count
+                for k in range(1, 6):
+                    d0 = start_ms - k * 86_400_000
+                    key = profit_key(datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d"))
+                    kept = around(pts, d0, d0 + 86_400_000)
+                    if len(kept) < 2 or not kept[0][0] < d0 or not kept[-1][0] > d0 + 86_400_000:
+                        continue
+                    repaired_day = datetime.fromtimestamp(d0 / 1000, tz=UTC).strftime("%Y-%m-%d")
+                    if not store.has_equity_points(address, key) and not store.profit_held_back(address, repaired_day):
+                        store.replace_equity_points(address, key, kept, day)
         # when the recorded history begins: the all-time window's first point, or later, the first recorded point of
         # the week when the week shows nothing held before it (an account funded after an empty spell)
         if not recorded:
@@ -724,11 +766,11 @@ async def collect_and_score(
             origin = None
         else:
             starts = (
-                portfolio_origin(windows, params.equity_origin_window),
-                portfolio_empty_until(windows, params.equity_window),
+                portfolio_origin(windows, origin_window),
+                portfolio_empty_until(windows, value_window),
             )
             origin = max((t for t in starts if t is not None), default=None)
-        stored = store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
+        stored = store.equity_points(address, value_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000)
         history_known = recorded or any(t >= end_ms for t, _ in stored)
         if held_nothing:
             avg = EquityAverage(0.0, 0, "the perps account held nothing all week")
@@ -736,16 +778,35 @@ async def collect_and_score(
             avg = daily_average_equity(stored, start_ms, end_ms, origin, params.equity_min_points)
         else:
             avg = EquityAverage(None, 0, "recorded history unavailable")
-        store.put_equity_daily(address, day, avg.value, avg.points, origin, params.equity_window, avg.note)
+        store.put_equity_daily(address, day, avg.value, avg.points, origin, value_window, avg.note)
         avg_equity[hk] = (avg.value, avg.points)
         if avg.value is None:
             store.put_error(day, hk, address, "average equity", avg.note)
         if recorded and not store.equity_series(address, 1):
             # first time this address is scored: the exchange's own history gives the returns from day one
-            history = daily_equity_from_portfolio(windows)
+            # each day from the windows it is measured by (spec 6.7: the whole value from `whole_value_from`), so a
+            # validator that starts later keeps the same values as one that scored those days
+            by_windows = {
+                w: {h: (v, f) for h, v, f in daily_equity_from_portfolio(windows, *w)}
+                for w in {params.month_windows_for(day), params.month_windows_for("0000-00-00")}
+            }
+            history = [
+                (h_day, *row)
+                for h_day in sorted(set().union(*by_windows.values()))
+                if (row := by_windows.get(params.month_windows_for(h_day), {}).get(h_day)) is not None
+            ]
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
             for h_day, value, flows in earlier:
-                store.put_equity(address, h_day, value, flows, raw={"source": "portfolio"}, offmarket_moves=())
+                # a day whose money moved is unknown (no perps profit recorded for it) has no return
+                store.put_equity(
+                    address,
+                    h_day,
+                    value,
+                    flows or 0.0,
+                    raw={"source": "portfolio"},
+                    offmarket_moves=(),
+                    known=flows is not None,
+                )
             log.info("backfilled %d days of account value for %s", len(earlier), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
         # of the day). A failed read fails the day (retried hourly) until the deadline; after it, only this address's
@@ -861,10 +922,9 @@ async def collect_and_score(
             DayChange(0.0, 0.0, 0.0)
             if held_nothing
             else day_change(
-                store.equity_points(address, params.equity_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
-                store.equity_points(
-                    address, params.equity_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000
-                ),
+                store.equity_points(address, value_window, start_ms - 2 * 86_400_000, end_ms + 86_400_000),
+                store.equity_points(address, profit_key(day), start_ms - 2 * 86_400_000, end_ms + 86_400_000)
+                or store.equity_points(address, profit_window + ":pnl", start_ms - 2 * 86_400_000, end_ms + 86_400_000),
                 start_ms,
                 end_ms,
                 origin,
@@ -914,6 +974,10 @@ async def collect_and_score(
             elif change.known and change.value_end is not None and change.profit is not None:
                 # the return is the exchange's recorded profit; any other change in value is money moved
                 previous = store.equity_value(address, store.day_before(day))
+                # the first day measured by the whole value: the day before was measured by the perps value, so the
+                # day starts from the new record's own value there
+                if store.day_before(day) < params.whole_value_from <= day and change.value_start is not None:
+                    previous = change.value_start
                 base = previous if previous is not None else change.value_start or 0.0
                 flows = (change.value_end - base) - change.profit
                 held_back = offmarket  # removed from the return like money moved in
