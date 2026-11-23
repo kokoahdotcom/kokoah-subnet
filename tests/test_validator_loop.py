@@ -550,6 +550,7 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     assert set(store.states()) == {HK_A, HK_B}
     published = json.loads(store.day(DAY) or "{}")
     assert published["builder_fills"] == 30 and len(published["builder_file_sha256"]) == 64
+    assert published["min_equity_usd"] == 10_000.0  # the day's floor: before `min_equity_from`
     assert published["bindings_refused"] == {} and published["errors"] == {}
     assert BURN not in published["weights"] and published["burn_alpha"] == 0.0  # the whole pool goes to miners
     await hl.close()

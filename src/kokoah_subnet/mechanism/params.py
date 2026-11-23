@@ -49,7 +49,9 @@ class Params:
     gate_active_days: int = 7
     gate_mean_equity_usd: float = 500.0
     # eligibility (section 9a): no emission on a day the account is below the floor or before qualifying
-    min_equity_usd: float = 10_000.0  # the day's time-weighted average account value
+    min_equity_usd: float = 5_000.0  # the day's time-weighted average account value, from `min_equity_from` on
+    min_equity_before_usd: float = 10_000.0  # the floor of the days before `min_equity_from`
+    min_equity_from: str = "2026-11-27"  # every validator switches on that day, with the whole value
     equity_window: str = "perpWeek"  # before `whole_value_from`: the history read for the value (perps account value)
     equity_origin_window: str = "perpAllTime"  # its first point marks when the account's history begins
     # from `whole_value_from` on (spec 6.7): the account's whole value as the exchange records it, spot included (in a
@@ -104,7 +106,11 @@ class Params:
             raise ValueError("entry_psr must be in (0.5, 1) and psr_min_days <= entry_min_days <= entry_days")
         if not 0 < self.record_start_weight <= 1:
             raise ValueError("record_start_weight must be in (0, 1]")
-        if self.min_equity_usd < 0 or self.qualify_trades < 1 or self.qualify_notional_usd < 0:
+        if (
+            min(self.min_equity_usd, self.min_equity_before_usd) < 0
+            or self.qualify_trades < 1
+            or self.qualify_notional_usd < 0
+        ):
             raise ValueError("eligibility thresholds must be non-negative and at least one trade")
         if self.equity_min_points < 2:
             raise ValueError("equity_min_points must be at least 2")
@@ -118,6 +124,10 @@ class Params:
     @property
     def miner_pool_alpha(self) -> float:
         return self.daily_emission_alpha * self.miner_slot
+
+    def min_equity_for(self, day: str) -> float:
+        """The equity floor of `day`: its eligibility and the least capital its return is measured over."""
+        return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
 
     def windows_for(self, day: str) -> tuple[str, str, str]:
         """The exchange's portfolio windows read for `day`: (value, history origin, profit)."""

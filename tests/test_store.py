@@ -49,6 +49,23 @@ def _record(s: Store, address: str, day: str, points: list[tuple[float, float, f
     s.put_equity_points(address, profit_key(day), [(_ms(day, h), p) for h, _, p in points], day)
 
 
+def test_the_return_floor_follows_the_day_s_eligibility_floor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """$1,000 that makes $100 the day before the floor drops: +1% over $10,000; losing $100 on the day it drops: −2%
+    over $5,000."""
+    from dataclasses import replace
+
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism import DEFAULT
+
+    monkeypatch.setattr(store_module, "DEFAULT", replace(DEFAULT, min_equity_from="2026-11-14"))
+    s = Store(tmp_path / "v.sqlite")
+    _record(s, "0xA", "2026-11-13", [(0, 1_000.0, 0.0), (24, 1_100.0, 100.0)])
+    s.put_equity("0xA", "2026-11-12", 1_000.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-13", 1_100.0, 0.0, offmarket_moves=())
+    s.put_equity("0xA", "2026-11-14", 1_000.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-13": pytest.approx(0.01), "2026-11-14": pytest.approx(-0.02)}
+
+
 def test_a_deposit_day_s_return_is_over_the_capital_at_work(tmp_path: Path) -> None:
     """An account holding a few dollars takes a deposit and loses a little that day: about −0.36%, not the −1,080% of
     the old base (yesterday's few dollars). A day the recorded points don't cover is read whole."""
