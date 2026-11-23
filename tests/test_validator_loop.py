@@ -36,7 +36,9 @@ EARNED = {"builderRewards": "100000"}
 ACCOUNTS: dict[str, Any] = {}  # the accounts of the latest setup (their keys sign the bindings)
 LIVE: dict[str, float] = {}  # address -> live account value (default $25,000)
 STEP: dict[str, tuple[int, float]] = {}  # address -> (time ms, new value): the recorded value changes then
-PNL_DAY: dict[str, float] = {}  # address -> recorded profit over the scored day (default $1,000, spread evenly)
+PNL_DAY: dict[str, float] = {}  # address -> recorded profit over the scored day (default $1,000): spread evenly,
+# except the off-market fill's $2,000 (an address without its own HISTORY), which shows from the fill on
+GIFT_MS, GIFT = 5_000_000, 2_000.0  # when in the day the off-market fill came (1 BTC at $98,000, the mark $100,000)
 LEDGER: dict[str, list[dict[str, Any]]] = {}  # address -> ledger records of the scored day
 EXPLORER_FAILS: set[str] = set()  # addresses whose explorer reads fail
 TX_LOOKUPS: list[str] = []  # every txDetails hash asked
@@ -45,6 +47,7 @@ FILLS_FAIL: set[str] = set()  # addresses whose fill history read fails
 FILLS_READ: list[str] = []  # every address whose fill history was asked
 DAY = "2026-10-21"
 DAY_MS = 1792540800000
+H = 3_600_000
 EARLY = DAY_MS / 1000 + 86_400 + 3600  # an hour after the day ended: before the deadline
 OVERDUE = DAY_MS / 1000 + 86_400 + DEFAULT.file_quiet_hours * 3600 + 60  # a missing file is overdue
 
@@ -203,7 +206,7 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
                         "px": "98000",
                         "sz": "1",
                         "side": "B",
-                        "time": DAY_MS + 5_000_000,
+                        "time": DAY_MS + GIFT_MS,
                         "crossed": True,
                         "fee": "44.1",
                         "closedPnl": "0",
@@ -250,8 +253,11 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         def value_at(ts: int) -> str:
             return str(step[1] if step and ts >= step[0] else base)
 
+        gift = 0.0 if user in HISTORY else GIFT
+
         def pnl_at(ts: int) -> str:
-            return str(day_pnl * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000)))
+            spread = (day_pnl - gift) * min(1.0, max(0.0, (ts - DAY_MS) / 86_400_000))
+            return str(spread + (gift if ts >= DAY_MS + GIFT_MS else 0.0))
 
         # the 7-day window: a made-up point at the far edge, recorded points every two hours, the live point last
         times = [DAY_MS + h * 7_200_000 for h in range(-24, 18)]
@@ -332,7 +338,19 @@ async def test_collect_and_score_a_day(tmp_path: Path) -> None:
     # stored: equity, positions, activity, bindings, states, the day's artifact with its file hash
     # the backfilled day, then today; the 2,000-dollar off-market gift (1 BTC bought 2% under the mark) is a flow
     assert store.equity_series(addr_a, 5) == [("2026-10-20", 24000.0, 0.0), (DAY, 25000.0, pytest.approx(2000.0))]
-    assert store.returns(addr_a, 5) == [pytest.approx((25000 - 24000 - 2000) / 24000)]
+    # the gift's time is kept: the day's return takes it off the step it came in, as money moved in, so the day made
+    # its loss of 1,000 (the fake's value stays at 25,000 while its record shows the loss: money moved in each step)
+    from kokoah_subnet.mechanism.eligibility import day_twr
+
+    moves = store._equity_rows(addr_a, 1)[-1][5]
+    assert moves is not None and [t for t, _ in moves] == [DAY_MS + GIFT_MS] and moves[0][1] == pytest.approx(2000.0)
+    end = DAY_MS + 86_400_000
+    values = store.equity_points(addr_a, DEFAULT.equity_window, DAY_MS - H, end + H)
+    profits = store.equity_points(addr_a, DEFAULT.equity_window + ":pnl", DAY_MS - H, end + H)
+    t = day_twr(values, profits, DAY_MS, end, None, moves)
+    assert t is not None and t.profit == pytest.approx(-1000.0)
+    assert store.returns(addr_a, 5) == [pytest.approx(min(t.twr, t.profit / t.capital))]
+    assert -0.04 < store.returns(addr_a, 5)[0] < -0.038
     assert store.position_series([addr_a], [DAY])[addr_a] == {"BTC": [50000.0]}
     assert store.activity_window(addr_a, 30, DAY) == (10, 1, 1_000_000.0)
     assert set(store.bindings()) == {HK_A, HK_B}
