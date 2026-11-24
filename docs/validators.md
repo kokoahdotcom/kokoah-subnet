@@ -115,7 +115,20 @@ in Docker with **automatic updates** (recommended: every validator then runs the
 being published) or with systemd, updated by hand. Both use the same files: settings in `/etc/kokoah-subnet`, data
 and the hotkey in `/var/lib/kokoah-subnet`, and the record of section 4.
 
-First, the user, the hotkey and the settings (both ways):
+**In one command, with automatic updates.** Stop a validator you started by hand, then, from the repository:
+
+```bash
+sudo deploy/validator/setup.sh --wallet validator --hotkey default    # your wallet's and hotkey's names
+```
+
+It does all of the steps below for the Docker setup: it makes the `kokoah-subnet` user, copies the hotkey and the
+coldkey's public file (never the coldkey) from `~/.bittensor/wallets` of the user running sudo (`--wallet-path` for
+another folder), starts the record of section 4 (keeping one that `scripts/db.sh` made before, with its passwords),
+writes the settings and `/opt/kokoah-subnet/docker/.env`, then runs `install.sh`. `--interface` also starts the
+public interface (section 8). Run again, it keeps what is there, and on a host of the systemd setup it uses that
+setup's hotkey copy, settings file and record.
+
+Step by step, first the user, the hotkey and the settings (both ways):
 
 ```bash
 sudo useradd --system --home-dir /var/lib/kokoah-subnet --create-home --shell /usr/sbin/nologin kokoah-subnet
@@ -341,9 +354,9 @@ sudo systemctl restart 'kokoah-subnet-validator@*' kokoah-subnet-api
 The scripts and unit files are copied again, so changes to them take effect too.
 
 **Moving from systemd to Docker.** Stop and disable the systemd services (your instance's name in place of `main`):
-`sudo systemctl disable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer`. Then follow
-the Docker part of section 6 (the `.env` file, then `install.sh` from the repository): the settings, the data and the
-record stay as they are. `install.sh` refuses to start while a systemd validator, interface or check runs, restarts
+`sudo systemctl disable --now kokoah-subnet-validator@main kokoah-subnet-api kokoah-subnet-check.timer`. Then run
+`sudo deploy/validator/setup.sh` from the repository, or the Docker part of section 6 by hand (the `.env` file, then
+`install.sh`): the settings, the data and the record stay as they are. `install.sh` refuses to start while a systemd validator, interface or check runs, restarts
 or is enabled, and prints the command that stops them. Run again later, it never installs a release older than the
 one recorded unless given `--allow-older`, and never one whose code cannot work with the record as it is now.
 
