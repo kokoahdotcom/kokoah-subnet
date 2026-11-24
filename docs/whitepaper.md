@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.3, November 2026. Mechanism specification v6.7.
+Whitepaper, version 3.3, November 2026. Mechanism specification v6.8.
 
 ### Summary
 
@@ -170,10 +170,10 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.7; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.8; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
-$5,000 (from 27 November 2026; $10,000 before), measured from the exchange's own recorded history of the account through the whole day, not from a balance
+$5,000 (from 24 November 2026; $10,000 before), measured from the exchange's own recorded history of the account through the whole day, not from a balance
 at one moment. And the account has qualified: a new identity's first three trades, worth $1,000 together, qualify
 it; the trade that completes both earns credit, the two before it do not. On a day that falls short, the day's trades
 earn no credit and the earlier credit fades as it would on a quiet day. There is no permanent exclusion: the first
@@ -416,7 +416,7 @@ emission (41% of 7,200 alpha, 2,952 alpha).
 Eligibility, each day: `Ē_i,d = (1/24 h) × ∫ E_i(t) dt` over the day, from the exchange's recorded account values
 joined by straight lines (at least 4 recorded points in the day; otherwise unknown, and unknown is not eligible), and
 qualification: the first 3 trades with at least $1,000 of eligible notional together, the first two uncredited. A
-miner with `Ē_i,d < E_min` (the day's floor: $5,000, $10,000 before 2026-11-27) or not yet qualified has `Φ_i,d = 0`
+miner with `Ē_i,d < E_min` (the day's floor: $5,000, $10,000 before 2026-11-24) or not yet qualified has `Φ_i,d = 0`
 and takes no part in either pool.
 
 ```

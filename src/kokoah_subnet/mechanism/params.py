@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-SPEC_VERSION = "6.7"
+SPEC_VERSION = "6.8"
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ class Params:
     # eligibility (section 9a): no emission on a day the account is below the floor or before qualifying
     min_equity_usd: float = 5_000.0  # the day's time-weighted average account value, from `min_equity_from` on
     min_equity_before_usd: float = 10_000.0  # the floor of the days before `min_equity_from`
-    min_equity_from: str = "2026-11-27"  # every validator switches on that day, with the whole value
+    min_equity_from: str = "2026-11-24"  # every validator switches on that day, whenever it updated (spec 6.8)
     equity_window: str = "perpWeek"  # before `whole_value_from`: the history read for the value (perps account value)
     equity_origin_window: str = "perpAllTime"  # its first point marks when the account's history begins
     # from `whole_value_from` on (spec 6.7): the account's whole value as the exchange records it, spot included (in a

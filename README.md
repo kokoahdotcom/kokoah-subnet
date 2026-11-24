@@ -55,7 +55,7 @@ flowchart LR
 | **Skill reward** | 20% | A proven record: risk-adjusted returns since joining that pass a statistical test once 30 days are known, so luck rarely pays; a longer record, up to 90 days, weighs more |
 
 - **Eligibility.** An account takes part on days its average account value is at least $5,000 (from
-  27 November 2026; $10,000 before) and after it has made three qualifying trades.
+  24 November 2026; $10,000 before) and after it has made three qualifying trades.
 - **Agents.** Trading agents that run in a verified sealed machine earn 10% more skill weight.
 - **Fairness.** In the volume reward, splitting one account into many earns nothing extra; wash trading between
   bound accounts does not count.

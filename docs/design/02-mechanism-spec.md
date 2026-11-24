@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.7)
+# Kokoah subnet incentive mechanism: complete specification (v6.8)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -269,7 +269,7 @@ recorded one). A miner failing a gate is not in the skill pool that day (the vol
 
 A miner is **eligible** on day `d` when both hold; otherwise it is paid nothing that day.
 
-**Equity floor.** The day's average account value of the bound address is at least `E_min`: $5,000 from the UTC day 2026-11-27,
+**Equity floor.** The day's average account value of the bound address is at least `E_min`: $5,000 from the UTC day 2026-11-24,
 $10,000 on the days before (every validator applies each day's own floor, whenever it updated):
 
 ```
@@ -363,7 +363,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
-| eligibility | the day's average account value ≥ $5,000 ($10,000 before 2026-11-27; the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
+| eligibility | the day's average account value ≥ $5,000 ($10,000 before 2026-11-24; the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |

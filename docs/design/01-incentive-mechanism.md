@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.7)
+# Incentive mechanism in plain words (v6.8)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -18,7 +18,7 @@ among them. Kokoah uses the fees to buy back and burn the subnet's token.
 
 Two simple conditions, checked every day:
 
-- **Real capital.** The account must hold at least $5,000 on average over the day (from 27 November 2026;
+- **Real capital.** The account must hold at least $5,000 on average over the day (from 24 November 2026;
   $10,000 before), measured from the exchange's own record of the account through the whole day.
 - **A real start.** A new miner first makes three trades worth $1,000 together. The first two only count toward
   this; the trade that completes it, and every trade after, earn. You can qualify the day you register.

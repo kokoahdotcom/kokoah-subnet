@@ -32,7 +32,7 @@ examples below use it.
   shows the current amount before you confirm.
 - **A Hyperliquid account controlled by an ordinary wallet** (one private key, such as MetaMask or a hardware
   wallet). Smart-contract wallets cannot sign the link message.
-- **An average account value of at least $5,000** on the days you want to be paid (from 27 November 2026;
+- **An average account value of at least $5,000** on the days you want to be paid (from 24 November 2026;
   $10,000 before; section 6).
 - **Your trades routed through Kokoah**, so that every order carries Kokoah's builder code.
 
@@ -147,8 +147,8 @@ is no waiting period, and qualification lasts for as long as your identity does 
 **Account value (every day).** The day's **average account value must be at least $5,000**. It is measured from
 Hyperliquid's own record of your account's whole value, spot included (in a unified account your USDC sits in spot),
 recorded about every two hours, averaged over the whole UTC day, never from a single snapshot; days before 27 November
-2026 were measured on the perpetuals account alone, against a $10,000 floor. Spot tokens count at Hyperliquid's price, but their price changes
-never count as trading returns. Falling below costs that day only: there is no penalty, and pay resumes on
+2026 were measured on the perpetuals account alone, and days before 24 November 2026 against a $10,000 floor. Spot
+tokens count at Hyperliquid's price, but their price changes never count as trading returns. Falling below costs that day only: there is no penalty, and pay resumes on
 the next day at or above the floor. On an ineligible day nothing is added to your credit and you take no share of
 the pool, so you dilute nobody.
 
