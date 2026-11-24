@@ -9,7 +9,8 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 FAKE_DOCKER = """#!/usr/bin/env bash
 # answers as if the container were running; records every command and the SQL sent on stdin. Its volume and
 # container are reported only with FAKE_RECORD_EXISTS: by default the env file comes first, as on a new host. A login
-# from the host works unless FAKE_BAD_LOGIN; FAKE_NO_DOCKER: the daemon refuses this user
+# from the host works unless FAKE_BAD_LOGIN; FAKE_NO_DOCKER: the daemon refuses this user; FAKE_ROLE_EXISTS: the
+# read-only role is there already
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 case "$1" in
   info) [ -z "${FAKE_NO_DOCKER:-}" ]; exit $? ;;
@@ -17,7 +18,8 @@ case "$1" in
   volume|container) if [ "$2" = inspect ]; then [ -n "${FAKE_RECORD_EXISTS:-}" ]; exit $?; fi ;;
   inspect) echo postgres:test ;;
   run) case " $* " in *" psql "*) [ -n "${FAKE_BAD_LOGIN:-}" ] || echo 1 ;; esac ;;
-  exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; fi ;;
+  exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; elif [ -n "${FAKE_ROLE_EXISTS:-}" ]; then
+          case " $* " in *pg_roles*) echo 1 ;; esac; fi ;;
 esac
 """
 
@@ -77,9 +79,46 @@ def test_an_env_file_that_does_not_log_in_changes_nothing(tmp_path: Path) -> Non
         assert run.returncode == 1 and says in run.stderr
     sent = (tmp_path / "docker.log").read_text()
     assert "ALTER ROLE" not in sent and "stale" not in sent and "r2" not in sent
-    assert "run --rm --network host -e PGPASSWORD postgres:test psql -h 127.0.0.1 -p 48110 -U kokoah" in sent
+    assert (
+        "run --rm --network host --userns host -e PGPASSWORD postgres:test psql -h 127.0.0.1 -p 48110 -U kokoah" in sent
+    )
     ok = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "check"], env=env, capture_output=True, text=True)
     assert ok.returncode == 0 and "-U kokoah_reader" in (tmp_path / "docker.log").read_text()
+
+
+def test_a_read_only_role_that_exists_keeps_its_password(tmp_path: Path) -> None:
+    """An env file without the read-only role's lines (made before the role existed, or not this database's): start
+    adds new ones only when the role is new; a role that exists keeps its password, and the file is left as it was."""
+    admin = "KOKOAH_SUBNET_DB_PASSWORD=p\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://kokoah:p@127.0.0.1:48110/kokoah_subnet\n"
+    env = _db_env(tmp_path)
+    (tmp_path / "db.env").write_text(admin)
+    for extra, says in (
+        ({"FAKE_ROLE_EXISTS": "1"}, "exists, but its password is not in"),
+        ({"FAKE_BAD_LOGIN": "1"}, ""),
+    ):
+        run = subprocess.run(
+            ["bash", str(SCRIPTS / "db.sh"), "start"], env={**env, **extra}, capture_output=True, text=True
+        )
+        assert run.returncode == 1 and says in run.stderr and (tmp_path / "db.env").read_text() == admin
+    assert "ALTER ROLE" not in (tmp_path / "docker.log").read_text()
+    for args in (["check"], ["url", "reader"]):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, capture_output=True, text=True)
+        assert run.returncode == 1 and "run scripts/db.sh start first" in run.stderr
+    # a new role: its lines are written, then its password set
+    run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "start"], env=env, capture_output=True, text=True)
+    written = (tmp_path / "db.env").read_text()
+    assert run.returncode == 0 and written.startswith(admin) and "KOKOAH_SUBNET_DB_READER_URL=" in written
+    reader = next(
+        line.split("=", 1)[1] for line in written.splitlines() if line.startswith("KOKOAH_SUBNET_DB_READER_PASSWORD=")
+    )
+    assert f"PASSWORD '{reader}'" in (tmp_path / "docker.log").read_text()
+
+
+def test_check_never_makes_an_env_file(tmp_path: Path) -> None:
+    run = subprocess.run(
+        ["bash", str(SCRIPTS / "db.sh"), "check"], env=_db_env(tmp_path), capture_output=True, text=True
+    )
+    assert run.returncode == 1 and "no " in run.stderr and not (tmp_path / "db.env").exists()
 
 
 def test_no_new_passwords_while_docker_does_not_answer(tmp_path: Path) -> None:

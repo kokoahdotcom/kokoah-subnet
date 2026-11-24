@@ -105,6 +105,16 @@ copy "$pub" "$dest/coldkeypub.txt"
 # scripts/db.sh made as the user or with sudo), else a new database. db.sh never makes new passwords for a database
 # that exists, and a file that does not log in changes nothing
 install -d -m 755 /etc/kokoah-subnet
+# a db.env of the systemd setup from before the read-only role: that role's password is in db-reader.env (which the
+# interface and the health check use), so it is added from there and the role keeps it
+if [ -f /etc/kokoah-subnet/db.env ] && ! grep -q '^KOKOAH_SUBNET_DB_READER_URL=' /etc/kokoah-subnet/db.env \
+    && grep -q '^KOKOAH_SUBNET_DB_READER_URL=' /etc/kokoah-subnet/db-reader.env 2>/dev/null; then
+    reader_url=$(grep '^KOKOAH_SUBNET_DB_READER_URL=' /etc/kokoah-subnet/db-reader.env | tail -1)
+    reader_pw=$(sed -n 's#^KOKOAH_SUBNET_DB_READER_URL=[^:]*://[^:]*:\([^@]*\)@.*#\1#p' <<< "$reader_url")
+    [ -z "$(tail -c 1 /etc/kokoah-subnet/db.env)" ] || echo >> /etc/kokoah-subnet/db.env
+    [ -z "$reader_pw" ] || printf 'KOKOAH_SUBNET_DB_READER_PASSWORD=%s\n%s\n' "$reader_pw" "$reader_url" \
+        >> /etc/kokoah-subnet/db.env
+fi
 db_env=
 for candidate in /etc/kokoah-subnet/db.env "$home/.local/share/kokoah/subnet-db.env" \
     /root/.local/share/kokoah/subnet-db.env; do
@@ -114,8 +124,8 @@ done
 if [ -z "$db_env" ]; then
     for candidate in /etc/kokoah-subnet/db.env "$home/.local/share/kokoah/subnet-db.env" \
         /root/.local/share/kokoah/subnet-db.env; do
-        [ ! -f "$candidate" ] || fail "no passwords file logs in to the record's database: put the one that holds its" \
-            "passwords at /etc/kokoah-subnet/db.env, then run this again"
+        [ ! -f "$candidate" ] || fail "no passwords file works with the record's database (the reasons are above): put" \
+            "the one that holds its passwords at /etc/kokoah-subnet/db.env, then run this again"
     done
     db_env=/etc/kokoah-subnet/db.env
     KOKOAH_SUBNET_DB_ENV=$db_env "$repo/scripts/db.sh" start
