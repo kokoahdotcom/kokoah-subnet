@@ -6,6 +6,7 @@
 #   scripts/db.sh status     container state
 #   scripts/db.sh psql       open psql on the database
 #   scripts/db.sh url        print the connection URL (from the env file); `url reader` the read-only one
+#   scripts/db.sh check      both logins of the env file work, as the validator and the interface make them
 #   scripts/db.sh backup F [DB]   pg_dump (custom format) of the database (default kokoah_subnet) to file F
 #   scripts/db.sh create-db DB    create another database in the same container (same user), if missing
 #   scripts/db.sh owner-role ROLE DB   a login role that owns database DB and its tables, and nothing else: for a
@@ -34,23 +35,52 @@ BURNER="kokoah_burner"
 new_password() { head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32; }
 
 ensure_env() {
+  # an existing record keeps its passwords: new ones would lock the validator out and reset the read-only role's. So
+  # new ones are made only when Docker answers and knows neither the record's volume nor its container
+  if [ ! -f "$ENV_FILE" ]; then
+    docker info >/dev/null 2>&1 \
+      || { echo "Docker does not answer this user: run it with sudo, or from a user in the docker group" >&2; exit 1; }
+    if docker volume inspect "$VOLUME" >/dev/null 2>&1 || docker container inspect "$NAME" >/dev/null 2>&1; then
+      echo "the record's database exists, but its passwords are not in $ENV_FILE: set KOKOAH_SUBNET_DB_ENV to the" \
+        "file that holds them (deploy/validator/setup.sh keeps them in /etc/kokoah-subnet/db.env)" >&2
+      exit 1
+    fi
+  fi
   mkdir -p "$(dirname "$ENV_FILE")"
   umask 077
   if [ ! -f "$ENV_FILE" ]; then
     pw="$(new_password)"
     printf 'KOKOAH_SUBNET_DB_PASSWORD=%s\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://%s:%s@127.0.0.1:%s/%s\n' "$pw" "$USER" "$pw" "$PORT" "$DB" > "$ENV_FILE"
   fi
+  # a file without the read-only role's lines gets them once `start` knows the role is new (ensure_reader): a role
+  # that exists keeps its password, and a file that is not this database's is never changed
+  READER_LINES=""
   if ! grep -q '^KOKOAH_SUBNET_DB_READER_URL=' "$ENV_FILE"; then
     pw="$(new_password)"
-    printf 'KOKOAH_SUBNET_DB_READER_PASSWORD=%s\nKOKOAH_SUBNET_DB_READER_URL=postgresql+psycopg://%s:%s@127.0.0.1:%s/%s\n' "$pw" "$READER" "$pw" "$PORT" "$DB" >> "$ENV_FILE"
+    READER_LINES="$(printf 'KOKOAH_SUBNET_DB_READER_PASSWORD=%s\nKOKOAH_SUBNET_DB_READER_URL=postgresql+psycopg://%s:%s@127.0.0.1:%s/%s' "$pw" "$READER" "$pw" "$PORT" "$DB")"
   fi
   # shellcheck disable=SC1090
   . "$ENV_FILE"
+  if [ -n "$READER_LINES" ]; then
+    KOKOAH_SUBNET_DB_READER_PASSWORD="$pw"
+    KOKOAH_SUBNET_DB_READER_URL="postgresql+psycopg://$READER:$pw@127.0.0.1:$PORT/$DB"
+  fi
 }
 
 # the read-only role: reads the validator's tables in $DB and nothing else (no other database in the container, such as
 # the agent service's, accepts it), can change nothing (the password goes in on stdin, never as an argument)
 ensure_reader() {
+  if [ -n "$READER_LINES" ]; then
+    # a failed or unclear answer is never taken as "new": only a count of 0 lets new lines in
+    exists="$(docker exec "$NAME" psql -U "$USER" -d "$DB" -tAc "SELECT count(*) FROM pg_roles WHERE rolname = '$READER'")" \
+      || { echo "could not read whether the read-only role $READER exists" >&2; exit 1; }
+    if [ "$exists" != 0 ]; then
+      echo "the read-only role $READER exists, but its password is not in $ENV_FILE: add its" \
+        "KOKOAH_SUBNET_DB_READER_PASSWORD and KOKOAH_SUBNET_DB_READER_URL lines from the file that holds them" >&2
+      exit 1
+    fi
+    printf '%s\n' "$READER_LINES" >> "$ENV_FILE"
+  fi
   docker exec -i "$NAME" psql -U "$USER" -d "$DB" -v ON_ERROR_STOP=1 -q >/dev/null <<SQL
 DO \$\$ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$READER') THEN CREATE ROLE $READER LOGIN; END IF;
@@ -75,11 +105,28 @@ ALTER DEFAULT PRIVILEGES FOR ROLE $USER IN SCHEMA public GRANT SELECT ON TABLES 
 SQL
 }
 
+# a login as the validator makes it: from the host, over the published port (the container's own connections to
+# 127.0.0.1 need no password), with the database's own image; the password goes in the environment, never as an argument
+can_login() {
+  local image
+  image="$(docker inspect --format '{{.Config.Image}}' "$NAME" 2>/dev/null)" || return 1
+  PGPASSWORD="$2" docker run --rm --network host --userns host -e PGPASSWORD "$image" \
+    psql -h 127.0.0.1 -p "$PORT" -U "$1" -d "$DB" -tAc 'SELECT 1' 2>/dev/null | grep -qx 1
+}
+
+# before the read-only role is touched: an env file that is not this database's changes nothing
+admin_logs_in() {
+  can_login "$USER" "${KOKOAH_SUBNET_DB_PASSWORD:-}" && return 0
+  echo "the password in $ENV_FILE does not log in to $NAME: that file is not this database's" >&2
+  exit 1
+}
+
 case "${1:-status}" in
   start)
     ensure_env
-    if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then ensure_reader; echo "$NAME is already running" >&2; exit 0; fi
-    if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then docker start "$NAME" >/dev/null; else
+    if docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+      :  # already running: still waited for below, as it may be recovering
+    elif docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then docker start "$NAME" >/dev/null; else
       docker image inspect "$IMAGE" >/dev/null 2>&1 || { anon="$(mktemp -d)"; DOCKER_CONFIG="$anon" docker pull "$IMAGE" >&2; rm -rf "$anon"; }
       docker volume create "$VOLUME" >/dev/null
       docker run -d --name "$NAME" --restart unless-stopped \
@@ -89,14 +136,30 @@ case "${1:-status}" in
     fi
     for _ in $(seq 1 60); do
       # over TCP: the image's first-start init server listens only on its socket, so this waits for the real one
-      if docker exec "$NAME" pg_isready -h 127.0.0.1 -U "$USER" -d "$DB" >/dev/null 2>&1; then ensure_reader; echo "ready on 127.0.0.1:$PORT (URLs in $ENV_FILE)" >&2; exit 0; fi
+      if docker exec "$NAME" pg_isready -h 127.0.0.1 -U "$USER" -d "$DB" >/dev/null 2>&1; then
+        admin_logs_in; ensure_reader; echo "ready on 127.0.0.1:$PORT (URLs in $ENV_FILE)" >&2; exit 0
+      fi
       sleep 1
     done
     echo "the database did not answer within 60 s" >&2; exit 1 ;;
   stop) docker stop "$NAME" >/dev/null 2>&1 && echo "stopped $NAME" >&2 || echo "$NAME was not running" >&2 ;;
   status) docker ps -a --filter "name=^$NAME$" --format '{{.Names}} {{.Status}}' ;;
   psql) docker exec -it "$NAME" psql -U "$USER" -d "$DB" ;;
-  url) ensure_env; if [ "${2:-}" = reader ]; then echo "$KOKOAH_SUBNET_DB_READER_URL"; else echo "$KOKOAH_SUBNET_DB_URL"; fi ;;
+  check)
+    # both logins of the env file work (the validator's and the read-only role's); never makes a file
+    [ -f "$ENV_FILE" ] || { echo "no $ENV_FILE" >&2; exit 1; }
+    ensure_env
+    [ -z "$READER_LINES" ] || { echo "no read-only role in $ENV_FILE: run scripts/db.sh start first" >&2; exit 1; }
+    can_login "$USER" "${KOKOAH_SUBNET_DB_PASSWORD:-}" \
+      || { echo "$USER's password in $ENV_FILE does not log in" >&2; exit 1; }
+    can_login "$READER" "$KOKOAH_SUBNET_DB_READER_PASSWORD" \
+      || { echo "$READER's password in $ENV_FILE does not log in" >&2; exit 1; }
+    echo "both logins in $ENV_FILE work" >&2 ;;
+  url)
+    ensure_env
+    [ "${2:-}" != reader ] || [ -z "$READER_LINES" ] \
+      || { echo "no read-only role in $ENV_FILE: run scripts/db.sh start first" >&2; exit 1; }
+    if [ "${2:-}" = reader ]; then echo "$KOKOAH_SUBNET_DB_READER_URL"; else echo "$KOKOAH_SUBNET_DB_URL"; fi ;;
   backup)
     # written beside the target and renamed once complete, so a failed dump never replaces or poses as a good one
     out="${2:?output file}"; tmp="$out.tmp.$$"

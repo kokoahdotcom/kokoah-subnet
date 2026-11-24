@@ -7,30 +7,130 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 FAKE_DOCKER = """#!/usr/bin/env bash
-# answers as if the container were running; records every command and the SQL sent on stdin
+# answers as if the container were running; records every command and the SQL sent on stdin. Its volume and
+# container are reported only with FAKE_RECORD_EXISTS: by default the env file comes first, as on a new host. A login
+# from the host works unless FAKE_BAD_LOGIN; FAKE_NO_DOCKER: the daemon refuses this user; FAKE_ROLE_EXISTS: the
+# read-only role is there already
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 case "$1" in
+  info) [ -z "${FAKE_NO_DOCKER:-}" ]; exit $? ;;
   ps) echo kokoah-subnet-postgres ;;
-  exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; fi ;;
+  volume|container) if [ "$2" = inspect ]; then [ -n "${FAKE_RECORD_EXISTS:-}" ]; exit $?; fi ;;
+  inspect) echo postgres:test ;;
+  run) case " $* " in *" psql "*) [ -n "${FAKE_BAD_LOGIN:-}" ] || echo 1 ;; esac ;;
+  exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; elif [ -n "${FAKE_ROLE_EXISTS:-}" ]; then
+          case " $* " in *pg_roles*) echo 1 ;; esac
+        else case " $* " in *pg_roles*) echo "${FAKE_ROLE_COUNT-0}" ;; esac; fi ;;
 esac
 """
 
 
-def _run_db(tmp_path: Path, *args: str) -> str:
+def _db_env(tmp_path: Path) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     docker = bin_dir / "docker"
     docker.write_text(FAKE_DOCKER)
     docker.chmod(0o755)
-    log = tmp_path / "docker.log"
-    env = {
+    return {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "HOME": str(tmp_path),
         "KOKOAH_SUBNET_DB_ENV": str(tmp_path / "db.env"),
-        "FAKE_LOG": str(log),
+        "FAKE_LOG": str(tmp_path / "docker.log"),
     }
+
+
+def _run_db(tmp_path: Path, *args: str) -> str:
+    env = _db_env(tmp_path)
     subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, check=True, capture_output=True, text=True)
-    return log.read_text()
+    return (tmp_path / "docker.log").read_text()
+
+
+def test_an_existing_record_never_gets_new_passwords(tmp_path: Path) -> None:
+    """A record whose env file is elsewhere (made with sudo, or kept in /etc by the one-command setup): new passwords
+    would lock the validator out and reset the read-only role's, so db.sh stops and says where they must come from."""
+    env = {**_db_env(tmp_path), "FAKE_RECORD_EXISTS": "1"}
+    for args in (["start"], ["url"], ["owner-role", "kokoah_agents", "kokoah_subnet_agents"]):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, capture_output=True, text=True)
+        assert run.returncode == 1 and "passwords are not in" in run.stderr and "KOKOAH_SUBNET_DB_ENV" in run.stderr
+        assert not (tmp_path / "db.env").exists()
+    assert "ALTER ROLE" not in (tmp_path / "docker.log").read_text()
+    # with its env file, the same record starts as before
+    (tmp_path / "db.env").write_text(
+        "KOKOAH_SUBNET_DB_PASSWORD=p\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://kokoah:p@127.0.0.1:48110/kokoah_subnet\n"
+        "KOKOAH_SUBNET_DB_READER_PASSWORD=r\n"
+        "KOKOAH_SUBNET_DB_READER_URL=postgresql+psycopg://kokoah_reader:r@127.0.0.1:48110/kokoah_subnet\n"
+    )
+    run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "start"], env=env, capture_output=True, text=True)
+    assert run.returncode == 0 and "PASSWORD 'r'" in (tmp_path / "docker.log").read_text()
+
+
+def test_an_env_file_that_does_not_log_in_changes_nothing(tmp_path: Path) -> None:
+    """A stale env file (its passwords never applied): start stops before the read-only role's password is set, and
+    check names the failing login. The login is made from the host, as the validator makes it, with the password in
+    the environment only."""
+    env = _db_env(tmp_path)
+    (tmp_path / "db.env").write_text(
+        "KOKOAH_SUBNET_DB_PASSWORD=stale\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://kokoah:stale@127.0.0.1:48110/kokoah_subnet\n"
+        "KOKOAH_SUBNET_DB_READER_PASSWORD=r2\n"
+        "KOKOAH_SUBNET_DB_READER_URL=postgresql+psycopg://kokoah_reader:r2@127.0.0.1:48110/kokoah_subnet\n"
+    )
+    bad = {**env, "FAKE_BAD_LOGIN": "1"}
+    for args, says in ((["start"], "is not this database's"), (["check"], "does not log in")):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=bad, capture_output=True, text=True)
+        assert run.returncode == 1 and says in run.stderr
+    sent = (tmp_path / "docker.log").read_text()
+    assert "ALTER ROLE" not in sent and "stale" not in sent and "r2" not in sent
+    assert (
+        "run --rm --network host --userns host -e PGPASSWORD postgres:test psql -h 127.0.0.1 -p 48110 -U kokoah" in sent
+    )
+    ok = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "check"], env=env, capture_output=True, text=True)
+    assert ok.returncode == 0 and "-U kokoah_reader" in (tmp_path / "docker.log").read_text()
+
+
+def test_a_read_only_role_that_exists_keeps_its_password(tmp_path: Path) -> None:
+    """An env file without the read-only role's lines (made before the role existed, or not this database's): start
+    adds new ones only when the role is new; a role that exists keeps its password, and the file is left as it was."""
+    admin = "KOKOAH_SUBNET_DB_PASSWORD=p\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://kokoah:p@127.0.0.1:48110/kokoah_subnet\n"
+    env = _db_env(tmp_path)
+    (tmp_path / "db.env").write_text(admin)
+    for extra, says in (
+        ({"FAKE_ROLE_EXISTS": "1"}, "exists, but its password is not in"),
+        ({"FAKE_ROLE_COUNT": ""}, "exists, but its password is not in"),  # an unclear answer is never "new"
+        ({"FAKE_BAD_LOGIN": "1"}, ""),
+    ):
+        run = subprocess.run(
+            ["bash", str(SCRIPTS / "db.sh"), "start"], env={**env, **extra}, capture_output=True, text=True
+        )
+        assert run.returncode == 1 and says in run.stderr and (tmp_path / "db.env").read_text() == admin
+    assert "ALTER ROLE" not in (tmp_path / "docker.log").read_text()
+    for args in (["check"], ["url", "reader"]):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, capture_output=True, text=True)
+        assert run.returncode == 1 and "run scripts/db.sh start first" in run.stderr
+    # a new role: its lines are written, then its password set
+    run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "start"], env=env, capture_output=True, text=True)
+    written = (tmp_path / "db.env").read_text()
+    assert run.returncode == 0 and written.startswith(admin) and "KOKOAH_SUBNET_DB_READER_URL=" in written
+    reader = next(
+        line.split("=", 1)[1] for line in written.splitlines() if line.startswith("KOKOAH_SUBNET_DB_READER_PASSWORD=")
+    )
+    assert f"PASSWORD '{reader}'" in (tmp_path / "docker.log").read_text()
+
+
+def test_check_never_makes_an_env_file(tmp_path: Path) -> None:
+    run = subprocess.run(
+        ["bash", str(SCRIPTS / "db.sh"), "check"], env=_db_env(tmp_path), capture_output=True, text=True
+    )
+    assert run.returncode == 1 and "no " in run.stderr and not (tmp_path / "db.env").exists()
+
+
+def test_no_new_passwords_while_docker_does_not_answer(tmp_path: Path) -> None:
+    """A user Docker refuses can't tell whether the record exists: no env file is made (it would hold passwords no
+    database has, and a later start would reset the read-only role's)."""
+    env = {**_db_env(tmp_path), "FAKE_NO_DOCKER": "1"}
+    for args in (["start"], ["url"]):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, capture_output=True, text=True)
+        assert run.returncode == 1 and "Docker does not answer" in run.stderr
+    assert not (tmp_path / "db.env").exists()
 
 
 def test_the_read_only_role_reads_the_validator_database_only(tmp_path: Path) -> None:
