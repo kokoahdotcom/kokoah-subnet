@@ -19,7 +19,8 @@ case "$1" in
   inspect) echo postgres:test ;;
   run) case " $* " in *" psql "*) [ -n "${FAKE_BAD_LOGIN:-}" ] || echo 1 ;; esac ;;
   exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; elif [ -n "${FAKE_ROLE_EXISTS:-}" ]; then
-          case " $* " in *pg_roles*) echo 1 ;; esac; fi ;;
+          case " $* " in *pg_roles*) echo 1 ;; esac
+        else case " $* " in *pg_roles*) echo "${FAKE_ROLE_COUNT-0}" ;; esac; fi ;;
 esac
 """
 
@@ -94,6 +95,7 @@ def test_a_read_only_role_that_exists_keeps_its_password(tmp_path: Path) -> None
     (tmp_path / "db.env").write_text(admin)
     for extra, says in (
         ({"FAKE_ROLE_EXISTS": "1"}, "exists, but its password is not in"),
+        ({"FAKE_ROLE_COUNT": ""}, "exists, but its password is not in"),  # an unclear answer is never "new"
         ({"FAKE_BAD_LOGIN": "1"}, ""),
     ):
         run = subprocess.run(

@@ -71,8 +71,10 @@ ensure_env() {
 # the agent service's, accepts it), can change nothing (the password goes in on stdin, never as an argument)
 ensure_reader() {
   if [ -n "$READER_LINES" ]; then
-    if docker exec "$NAME" psql -U "$USER" -d "$DB" -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$READER'" \
-      | grep -qx 1; then
+    # a failed or unclear answer is never taken as "new": only a count of 0 lets new lines in
+    exists="$(docker exec "$NAME" psql -U "$USER" -d "$DB" -tAc "SELECT count(*) FROM pg_roles WHERE rolname = '$READER'")" \
+      || { echo "could not read whether the read-only role $READER exists" >&2; exit 1; }
+    if [ "$exists" != 0 ]; then
       echo "the read-only role $READER exists, but its password is not in $ENV_FILE: add its" \
         "KOKOAH_SUBNET_DB_READER_PASSWORD and KOKOAH_SUBNET_DB_READER_URL lines from the file that holds them" >&2
       exit 1
