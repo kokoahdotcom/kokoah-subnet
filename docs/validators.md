@@ -123,15 +123,16 @@ sudo deploy/validator/setup.sh --wallet validator --hotkey default    # your wal
 
 It does all of the steps below for the Docker setup: it makes the `kokoah-subnet` user, copies the hotkey and the
 coldkey's public file (never the coldkey) from `~/.bittensor/wallets` of the user running sudo (`--wallet-path` for
-another folder), starts the record of section 4 (keeping one that `scripts/db.sh` made before, with its passwords,
-and checking that they log in), writes the settings and `/opt/kokoah-subnet/docker/.env`, installs the daily backup
+another folder), starts the record of section 4 (keeping one that `scripts/db.sh` made before, as you or with sudo,
+with its passwords, and checking that both logins work as the validator makes them), writes the settings and `/opt/kokoah-subnet/docker/.env`, installs the daily backup
 (section 9, with systemd), then runs `install.sh`. `--interface` also starts the public interface (section 8). Run
 again, it keeps what is there and adds `--interface` if asked; it refuses another wallet or hotkey than the kept
 settings run (change `/etc/kokoah-subnet/validator-main.env` for that). On a host of the systemd setup it uses that
 setup's hotkey copy, settings file and record. The record's URLs are then in `/etc/kokoah-subnet/db.env`: give that
 file to `scripts/db.sh` and `scripts/dashboard.sh` (`sudo KOKOAH_SUBNET_DB_ENV=/etc/kokoah-subnet/db.env
-scripts/db.sh psql`). `db.sh` never makes new passwords for a record that exists: without the file it stops and
-says so.
+scripts/db.sh psql`; `scripts/db.sh check` tests both logins). `db.sh` never makes new passwords for a record that
+exists, nor while Docker refuses the user: it stops and says so, and a passwords file that does not log in changes
+nothing.
 
 Step by step, first the user, the hotkey and the settings (both ways):
 

@@ -8,11 +8,15 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 FAKE_DOCKER = """#!/usr/bin/env bash
 # answers as if the container were running; records every command and the SQL sent on stdin. Its volume and
-# container are reported only with FAKE_RECORD_EXISTS: by default the env file comes first, as on a new host
+# container are reported only with FAKE_RECORD_EXISTS: by default the env file comes first, as on a new host. A login
+# from the host works unless FAKE_BAD_LOGIN; FAKE_NO_DOCKER: the daemon refuses this user
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 case "$1" in
+  info) [ -z "${FAKE_NO_DOCKER:-}" ]; exit $? ;;
   ps) echo kokoah-subnet-postgres ;;
   volume|container) if [ "$2" = inspect ]; then [ -n "${FAKE_RECORD_EXISTS:-}" ]; exit $?; fi ;;
+  inspect) echo postgres:test ;;
+  run) case " $* " in *" psql "*) [ -n "${FAKE_BAD_LOGIN:-}" ] || echo 1 ;; esac ;;
   exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; fi ;;
 esac
 """
@@ -55,6 +59,37 @@ def test_an_existing_record_never_gets_new_passwords(tmp_path: Path) -> None:
     )
     run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "start"], env=env, capture_output=True, text=True)
     assert run.returncode == 0 and "PASSWORD 'r'" in (tmp_path / "docker.log").read_text()
+
+
+def test_an_env_file_that_does_not_log_in_changes_nothing(tmp_path: Path) -> None:
+    """A stale env file (its passwords never applied): start stops before the read-only role's password is set, and
+    check names the failing login. The login is made from the host, as the validator makes it, with the password in
+    the environment only."""
+    env = _db_env(tmp_path)
+    (tmp_path / "db.env").write_text(
+        "KOKOAH_SUBNET_DB_PASSWORD=stale\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://kokoah:stale@127.0.0.1:48110/kokoah_subnet\n"
+        "KOKOAH_SUBNET_DB_READER_PASSWORD=r2\n"
+        "KOKOAH_SUBNET_DB_READER_URL=postgresql+psycopg://kokoah_reader:r2@127.0.0.1:48110/kokoah_subnet\n"
+    )
+    bad = {**env, "FAKE_BAD_LOGIN": "1"}
+    for args, says in ((["start"], "is not this database's"), (["check"], "does not log in")):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=bad, capture_output=True, text=True)
+        assert run.returncode == 1 and says in run.stderr
+    sent = (tmp_path / "docker.log").read_text()
+    assert "ALTER ROLE" not in sent and "stale" not in sent and "r2" not in sent
+    assert "run --rm --network host -e PGPASSWORD postgres:test psql -h 127.0.0.1 -p 48110 -U kokoah" in sent
+    ok = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "check"], env=env, capture_output=True, text=True)
+    assert ok.returncode == 0 and "-U kokoah_reader" in (tmp_path / "docker.log").read_text()
+
+
+def test_no_new_passwords_while_docker_does_not_answer(tmp_path: Path) -> None:
+    """A user Docker refuses can't tell whether the record exists: no env file is made (it would hold passwords no
+    database has, and a later start would reset the read-only role's)."""
+    env = {**_db_env(tmp_path), "FAKE_NO_DOCKER": "1"}
+    for args in (["start"], ["url"]):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, capture_output=True, text=True)
+        assert run.returncode == 1 and "Docker does not answer" in run.stderr
+    assert not (tmp_path / "db.env").exists()
 
 
 def test_the_read_only_role_reads_the_validator_database_only(tmp_path: Path) -> None:

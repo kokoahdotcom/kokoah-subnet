@@ -76,7 +76,8 @@ fi
 # one validator writes the record: any other validator must be stopped first; a validator in a container is the
 # Docker setup's own (install.sh checks the systemd services once more)
 others=$({ pgrep -f 'kokoah-subnet validator run' 2>/dev/null || true; } | while read -r pid; do
-    grep -qE 'docker|containerd|libpod' "/proc/$pid/cgroup" 2>/dev/null || echo "$pid"
+    cgroup=$(cat "/proc/$pid/cgroup" 2>/dev/null) || continue  # gone meanwhile
+    grep -qE 'docker|containerd|libpod' <<< "$cgroup" || echo "$pid"
 done | tr '\n' ' ')
 [ -z "${others// }" ] || fail "stop the validator that runs outside Docker first (process $others; a systemd one:" \
     "sudo systemctl disable --now 'kokoah-subnet-validator@*'), then run this again"
@@ -100,31 +101,30 @@ copy() {  # $1 read as root, $2 written as the service user; a file already ther
 copy "$key" "$dest/hotkeys/$hotkey"
 copy "$pub" "$dest/coldkeypub.txt"
 
-# the record: an earlier scripts/db.sh's database and passwords when there are some (made as the user or with sudo),
-# else a new one; db.sh refuses to make new passwords for a database that exists
+# the record: the first passwords file that logs in to an existing database (this setup's, then one an earlier
+# scripts/db.sh made as the user or with sudo), else a new database. db.sh never makes new passwords for a database
+# that exists, and a file that does not log in changes nothing
 install -d -m 755 /etc/kokoah-subnet
-db_env=/etc/kokoah-subnet/db.env
-if [ ! -f "$db_env" ]; then
-    for earlier in "$home/.local/share/kokoah/subnet-db.env" /root/.local/share/kokoah/subnet-db.env; do
-        if [ -f "$earlier" ]; then db_env=$earlier; break; fi
+db_env=
+for candidate in /etc/kokoah-subnet/db.env "$home/.local/share/kokoah/subnet-db.env" \
+    /root/.local/share/kokoah/subnet-db.env; do
+    [ -f "$candidate" ] || continue
+    if KOKOAH_SUBNET_DB_ENV=$candidate "$repo/scripts/db.sh" start; then db_env=$candidate; break; fi
+done
+if [ -z "$db_env" ]; then
+    for candidate in /etc/kokoah-subnet/db.env "$home/.local/share/kokoah/subnet-db.env" \
+        /root/.local/share/kokoah/subnet-db.env; do
+        [ ! -f "$candidate" ] || fail "no passwords file logs in to the record's database: put the one that holds its" \
+            "passwords at /etc/kokoah-subnet/db.env, then run this again"
     done
+    db_env=/etc/kokoah-subnet/db.env
+    KOKOAH_SUBNET_DB_ENV=$db_env "$repo/scripts/db.sh" start
 fi
-KOKOAH_SUBNET_DB_ENV=$db_env "$repo/scripts/db.sh" start
+KOKOAH_SUBNET_DB_ENV=$db_env "$repo/scripts/db.sh" check
 [ "$db_env" = /etc/kokoah-subnet/db.env ] || install -m 640 "$db_env" /etc/kokoah-subnet/db.env
 chgrp kokoah-subnet /etc/kokoah-subnet/db.env && chmod 640 /etc/kokoah-subnet/db.env
 grep '^KOKOAH_SUBNET_DB_READER_URL=' /etc/kokoah-subnet/db.env \
     | install -g kokoah-subnet -m 640 /dev/stdin /etc/kokoah-subnet/db-reader.env
-# both logins must work before anything uses them (over TCP: the container's own socket needs no password)
-url_password() { sed -n "s#^$1=[^:]*://[^:]*:\([^@]*\)@.*#\1#p" /etc/kokoah-subnet/db.env | tail -1; }
-logs_in() {
-    PGPASSWORD=$2 docker exec -e PGPASSWORD kokoah-subnet-postgres \
-        psql -h 127.0.0.1 -U "$1" -d kokoah_subnet -tAc 'SELECT 1' 2>/dev/null | grep -qx 1
-}
-for login in KOKOAH_SUBNET_DB_URL:kokoah KOKOAH_SUBNET_DB_READER_URL:kokoah_reader; do
-    logs_in "${login#*:}" "$(url_password "${login%%:*}")" \
-        || fail "${login#*:}'s password in /etc/kokoah-subnet/db.env does not log in to the record: put the file" \
-            "that holds the database's real passwords there, then run this again"
-done
 
 # the validator's settings, written once (an edited file is kept)
 if [ ! -f "$settings" ]; then
@@ -141,6 +141,7 @@ if [ ! -f "$envf" ]; then
 fi
 if [ "$interface" = 1 ] && ! grep -q '^COMPOSE_PROFILES=.*interface' "$envf"; then
     ! grep -q '^COMPOSE_PROFILES=' "$envf" || fail "add interface to the COMPOSE_PROFILES line of $envf"
+    [ -z "$(tail -c 1 "$envf")" ] || echo >> "$envf"  # a last line without its newline stays whole
     echo 'COMPOSE_PROFILES=interface' >> "$envf"
 fi
 
