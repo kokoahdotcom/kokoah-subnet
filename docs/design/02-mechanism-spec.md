@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.7)
+# Kokoah subnet incentive mechanism: complete specification (v6.8)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -183,9 +183,9 @@ between points, as in §3):
 
 ```
 Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i
-B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  $10,000)
+B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  E_min)
 TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1
-C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  $10,000)
+C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  E_min)
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
@@ -195,13 +195,13 @@ deposit. `offmarket_i` is the money moved in through off-market fills (§3, item
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
 the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
 start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
-loss, and a step never loses more than everything. Every base and the day's capital are at least the $10,000
-eligibility floor (§9a), so money kept out of the account at the recorded points never makes a small balance carry
-the day (an account under $10,000 has its returns measured over $10,000). A gain is at most the day's profit over its time-weighted capital
+loss, and a step never loses more than everything. Every base and the day's capital are at least the day's
+eligibility floor `E_min` (§9a), so money kept out of the account at the recorded points never makes a small balance carry
+the day (an account under the floor has its returns measured over the floor). A gain is at most the day's profit over its time-weighted capital
 `C_d`, so one made on a few dollars before a deposit is not counted as made on all of it. A day without money moved,
-the account at $10,000 or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
+the account at `E_min` or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
-`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), $10,000))` with `F_d = flows_d + offmarket_d`; one whose
+`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), E_min))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
 never loses more than everything (−100%). The first day measured by the whole value (§9a) is never read whole: the day
 before holds the perps account's value, so without its own points it has no return.
@@ -269,7 +269,8 @@ recorded one). A miner failing a gate is not in the skill pool that day (the vol
 
 A miner is **eligible** on day `d` when both hold; otherwise it is paid nothing that day.
 
-**Equity floor.** The day's average account value of the bound address is at least `E_min = $10,000`:
+**Equity floor.** The day's average account value of the bound address is at least `E_min`: $5,000 from the UTC day 2026-11-24,
+$10,000 on the days before (every validator applies each day's own floor, whenever it updated):
 
 ```
 Ē_d = (1 / T) × ∫_{start of d}^{end of d} E(t) dt          T = 24 h
@@ -332,7 +333,7 @@ not escape is kept: the pay history and any mirror penalty (which follows the ad
 controls, §3). The entry test's record starts again with a new link or a new registration (§7a): a fresh identity
 waits 30 days again.
 
-An ineligible miner takes no part in either pool that day. Every account needs its own $10,000 of account value, its own
+An ineligible miner takes no part in either pool that day. Every account needs its own $5,000 of account value, its own
 registration and its own qualification.
 
 ## 10. Revenue and buyback
@@ -362,7 +363,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
-| eligibility | the day's average account value ≥ $10,000 (the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
+| eligibility | the day's average account value ≥ $5,000 ($10,000 before 2026-11-24; the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |

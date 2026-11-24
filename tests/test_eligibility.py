@@ -2,6 +2,7 @@
 and identity changes that must never carry credit or qualification to a fresh identity."""
 
 import random
+from datetime import date
 
 import pytest
 
@@ -161,6 +162,19 @@ def test_equity_below_the_floor_pays_nothing_and_credit_only_decays() -> None:
     assert r2.pay_alpha == pytest.approx(DEFAULT.miner_pool_alpha)  # the ineligible miner dilutes nobody
     # exactly at the floor counts
     assert run(5, fills, [miner(10_000.0), other], states).records[0].eligible
+
+
+def test_the_floor_is_the_scored_day_s() -> None:
+    """$7,000 on average: below the $10,000 floor of the days before `min_equity_from`, above the $5,000 from it on."""
+    assert (
+        DEFAULT.min_equity_for("2026-11-23") == 10_000.0 and DEFAULT.min_equity_for(DEFAULT.min_equity_from) == 5_000.0
+    )
+    state = {"hk": MinerState(qualified=True, address=A, registered_block=100)}
+    switch = (date.fromisoformat(DEFAULT.min_equity_from) - date.fromisoformat(DEFAULT.day_zero)).days
+    assert DEFAULT.day_of(switch) == DEFAULT.min_equity_from and DEFAULT.day_of(switch - 1) == "2026-11-23"
+    for day, eligible in ((switch - 1, False), (switch, True)):
+        r = run(day, day_fills(day, 4, 10_000.0), [miner(7_000.0)], state).records[0]
+        assert r.eligible is eligible and (eligible or r.ineligible_reason == "average equity below the minimum")
 
 
 def test_recovery_resumes_automatically_without_back_pay() -> None:

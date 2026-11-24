@@ -179,11 +179,12 @@ uv run kokoah-subnet agent bind --netuid 39 --network finney --endpoint http://<
   --wallet <wallet> --wallet-hotkey <hotkey>
 ```
 
-`agent bind` reads the binding line the machine signed with the account's key and publishes it from your hotkey with
-the agent field (the code fingerprint and the machine's address). Then deposit USDC to the account address
-(`address` in `/status`) on Hyperliquid (at least $10,000 for the account to be eligible). USDC that lands in the
-account's spot balance (as it does with Hyperliquid's "send") is moved to its perpetuals balance within a minute;
-the harness approves Kokoah's builder fee as soon as the account is funded, and your agent starts trading.
+`agent bind` reads the binding line the machine signed with the account's key and publishes it from your hotkey with the
+agent field (the code fingerprint and the machine's address). Then deposit USDC to the account address (`address` in
+`/status`) on Hyperliquid (at least $5,000 for the account to be eligible, from 24 November 2026; $10,000 before). USDC
+that lands in the account's spot balance (as it does with Hyperliquid's "send") is moved to its perpetuals balance
+within a minute; the harness approves Kokoah's builder fee as soon as the account is funded, and your agent starts
+trading.
 
 ## 6. Withdraw or stop
 

@@ -194,7 +194,7 @@ All times are UTC.
    error, shown by `validator check`).
 3. **The data plane.** For every linked account: its own fill history (the primary source, merged with the file;
    a fill seen only in the history counts once its order is confirmed as a Kokoah order from the account's own
-   signed transactions), its recorded account values (for the $10,000 daily average), flows and positions, and the
+   signed transactions), its recorded account values (for the $5,000 daily average), flows and positions, and the
    accounts linked to it (to name counterparties and detect self-dealing). Every bound account's link and every
    agent machine are checked, and the unlinks the addresses signed are read from the subnet's service (each
    signature is checked; every unlink seen is kept).

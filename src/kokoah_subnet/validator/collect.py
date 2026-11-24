@@ -1328,6 +1328,7 @@ async def collect_and_score(
         {
             "day": day,
             "spec_version": SPEC_VERSION,
+            "min_equity_usd": params.min_equity_for(day),
             "builder_file_sha256": digest,
             "builder_file_hash_matches_operator": hash_matches,
             "builder_fills": len(fills),

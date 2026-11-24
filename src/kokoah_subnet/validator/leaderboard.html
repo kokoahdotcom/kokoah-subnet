@@ -138,7 +138,7 @@ is what the chain actually paid each hotkey, read from the metagraph every epoch
       if (r.eligible === false) {
         if (r.qualified === false) flags.push('<span class="pill warn">qualifying ' + Math.min(r.qual_trades || 0, 3) + '/3</span>');
         else if (r.avg_equity_usd == null) flags.push('<span class="pill warn">equity unknown</span>');
-        else flags.push('<span class="pill warn">equity ' + fmt.usd(r.avg_equity_usd) + ' &lt; $10k</span>');
+        else flags.push('<span class="pill warn">equity ' + fmt.usd(r.avg_equity_usd) + ' &lt; $' + Math.round(((latest && latest.min_equity_usd) || 10000) / 1000) + 'k</span>');
       }
       if (!r.gates_pass) flags.push('<span class="pill warn">gates</span>');
       if (r.agent_verified) flags.push('<span class="pill good">agent</span>');

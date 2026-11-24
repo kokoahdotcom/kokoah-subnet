@@ -182,6 +182,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
     position_share = mirror_position_share(inputs.positions, params, inputs.owner_group_of)
 
+    floor = params.min_equity_for(params.day_of(inputs.day_index))  # the scored day's own floor
     work: list[_Work] = []
     for m in inputs.miners:
         state = inputs.states.get(m.hotkey, MinerState())
@@ -191,7 +192,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         own = bound_fills.get(m.address, [])
         fees = day_fees(own, params, m.exchange_rates_bps)  # everything traded today, recorded
         qual = qualify(own, state.qualified, state.qual_trades, state.qual_notional, params)
-        equity_ok = m.avg_equity_usd is not None and m.avg_equity_usd >= params.min_equity_usd
+        equity_ok = m.avg_equity_usd is not None and m.avg_equity_usd >= floor
         eligible = qual.qualified and equity_ok
         reason = None
         if not qual.qualified:
