@@ -34,6 +34,13 @@ BURNER="kokoah_burner"
 new_password() { head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32; }
 
 ensure_env() {
+  if [ ! -f "$ENV_FILE" ] \
+    && { docker volume inspect "$VOLUME" >/dev/null 2>&1 || docker container inspect "$NAME" >/dev/null 2>&1; }; then
+    # an existing record keeps its passwords: new ones would lock the validator out and reset the read-only role's
+    echo "the record's database exists, but its passwords are not in $ENV_FILE: set KOKOAH_SUBNET_DB_ENV to the file" \
+      "that holds them (deploy/validator/setup.sh keeps them in /etc/kokoah-subnet/db.env)" >&2
+    exit 1
+  fi
   mkdir -p "$(dirname "$ENV_FILE")"
   umask 077
   if [ ! -f "$ENV_FILE" ]; then

@@ -7,30 +7,54 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 
 FAKE_DOCKER = """#!/usr/bin/env bash
-# answers as if the container were running; records every command and the SQL sent on stdin
+# answers as if the container were running; records every command and the SQL sent on stdin. Its volume and
+# container are reported only with FAKE_RECORD_EXISTS: by default the env file comes first, as on a new host
 printf '%s\\n' "$*" >> "$FAKE_LOG"
 case "$1" in
   ps) echo kokoah-subnet-postgres ;;
+  volume|container) if [ "$2" = inspect ]; then [ -n "${FAKE_RECORD_EXISTS:-}" ]; exit $?; fi ;;
   exec) if [ "$2" = "-i" ]; then cat >> "$FAKE_LOG"; fi ;;
 esac
 """
 
 
-def _run_db(tmp_path: Path, *args: str) -> str:
+def _db_env(tmp_path: Path) -> dict[str, str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     docker = bin_dir / "docker"
     docker.write_text(FAKE_DOCKER)
     docker.chmod(0o755)
-    log = tmp_path / "docker.log"
-    env = {
+    return {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "HOME": str(tmp_path),
         "KOKOAH_SUBNET_DB_ENV": str(tmp_path / "db.env"),
-        "FAKE_LOG": str(log),
+        "FAKE_LOG": str(tmp_path / "docker.log"),
     }
+
+
+def _run_db(tmp_path: Path, *args: str) -> str:
+    env = _db_env(tmp_path)
     subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, check=True, capture_output=True, text=True)
-    return log.read_text()
+    return (tmp_path / "docker.log").read_text()
+
+
+def test_an_existing_record_never_gets_new_passwords(tmp_path: Path) -> None:
+    """A record whose env file is elsewhere (made with sudo, or kept in /etc by the one-command setup): new passwords
+    would lock the validator out and reset the read-only role's, so db.sh stops and says where they must come from."""
+    env = {**_db_env(tmp_path), "FAKE_RECORD_EXISTS": "1"}
+    for args in (["start"], ["url"], ["owner-role", "kokoah_agents", "kokoah_subnet_agents"]):
+        run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), *args], env=env, capture_output=True, text=True)
+        assert run.returncode == 1 and "passwords are not in" in run.stderr and "KOKOAH_SUBNET_DB_ENV" in run.stderr
+        assert not (tmp_path / "db.env").exists()
+    assert "ALTER ROLE" not in (tmp_path / "docker.log").read_text()
+    # with its env file, the same record starts as before
+    (tmp_path / "db.env").write_text(
+        "KOKOAH_SUBNET_DB_PASSWORD=p\nKOKOAH_SUBNET_DB_URL=postgresql+psycopg://kokoah:p@127.0.0.1:48110/kokoah_subnet\n"
+        "KOKOAH_SUBNET_DB_READER_PASSWORD=r\n"
+        "KOKOAH_SUBNET_DB_READER_URL=postgresql+psycopg://kokoah_reader:r@127.0.0.1:48110/kokoah_subnet\n"
+    )
+    run = subprocess.run(["bash", str(SCRIPTS / "db.sh"), "start"], env=env, capture_output=True, text=True)
+    assert run.returncode == 0 and "PASSWORD 'r'" in (tmp_path / "docker.log").read_text()
 
 
 def test_the_read_only_role_reads_the_validator_database_only(tmp_path: Path) -> None:
