@@ -27,6 +27,7 @@ from kokoah_subnet.mechanism import (
     Fill,
     Params,
     by_user,
+    counts,
     is_perp,
     parse_builder_csv,
     round_trips,
@@ -328,6 +329,7 @@ async def collect_and_score(
 ) -> DayResult:
     """Fetch everything for `day` (a completed UTC day), store it, score it, store the result."""
     start_ms, end_ms = day_bounds_ms(day)
+    spot = params.spot_counts(day)  # whether the day's spot fills count for the volume pool (spec 6.9)
     clock = now_ts if now_ts is not None else datetime.now(tz=UTC).timestamp()
     away_s = 2 * max(cfg.retry_missing_s, cfg.poll_s)
     past_deadline = clock >= retry_deadline(store, day, clock, end_ms, params, cfg.retry_grace_hours, away_s)
@@ -598,25 +600,27 @@ async def collect_and_score(
 
     async def listed(coin: str) -> bool | None:
         """Whether the exchange lists the coin (None when its list cannot be read): the same answer for every
-        validator. One read per exchange, shared by its coins."""
-        dex = coin.split(":", 1)[0] if ":" in coin else ""
+        validator. One read per exchange (and one for its spot pairs), shared by its coins."""
+        perp = is_perp(coin)
+        dex = (coin.split(":", 1)[0] if ":" in coin else "") if perp else "@spot"
         async with listing_locks.setdefault(dex, asyncio.Lock()):
             if dex not in listings:
                 try:
-                    listings[dex] = await hl.perp_names(dex)
+                    listings[dex] = await hl.perp_names(dex) if perp else await hl.spot_names()
                 except Exception:  # noqa: BLE001 - unknown, so the read is waited for as usual
                     listings[dex] = None
         names = listings[dex]
         return None if names is None else coin in names
 
     async def marks_for(coin: str) -> dict[int, float] | None:
-        """Minute marks for a perp coin over the day: one candle request per coin, shared by every address (the
-        first address to ask reads them, the others wait for that answer), so every address is clipped against the
-        same marks. The clip is an anti-wash rule, so a failed read is recorded and fails the day until the deadline;
-        after it, or at once for a coin the exchange does not list (it answers such a coin with an error, so it would
-        otherwise hold everyone's day), None: the coin's builder fills go uncounted and the day's return of an address
-        that traded the coin is unknown. A day older than the minute candles the exchange keeps is settled at once the
-        same way: its start is gone for good, and clipping only part of the day would let the rest through."""
+        """Minute marks for a coin (a perpetual, or a spot pair once spot counts) over the day: one candle request per
+        coin, shared by every address (the first address to ask reads them, the others wait for that answer), so every
+        address is clipped against the same marks. The clip is an anti-wash rule, so a failed read is recorded and
+        fails the day until the deadline; after it, or at once for a coin the exchange does not list (it answers such a
+        coin with an error, so it would otherwise hold everyone's day), None: the coin's builder fills go uncounted and
+        the day's return of an address that traded the coin is unknown. A day older than the minute candles the
+        exchange keeps is settled at once the same way: its start is gone for good, and clipping only part of the day
+        would let the rest through."""
         async with marks_locks.setdefault(coin, asyncio.Lock()):
             if coin not in marks_cache:
                 try:
@@ -870,7 +874,7 @@ async def collect_and_score(
         offmarket = 0.0
         moves: dict[int, float] = {}  # when it came: the day's return takes it off the step it fell in
         marked: list[Fill] = []
-        coins = {f.coin for f in own if is_perp(f.coin)} | {f.coin for f in public if is_perp(f.coin)}
+        coins = {f.coin for f in own if counts(f.coin, spot)} | {f.coin for f in public if is_perp(f.coin)}
         marks_by_coin = {coin: await marks_for(coin) for coin in coins}
         unmarked = {coin for coin, marks in marks_by_coin.items() if marks is None}
         for f in own:
@@ -1129,7 +1133,7 @@ async def collect_and_score(
             needs = (
                 f.counterparty not in bound if unread == "clusters" else f.source == "history" and not f.counterparty
             )
-            if needs and is_perp(f.coin):
+            if needs and counts(f.coin, spot):
                 uncounted.append((f, "unchecked_counterparty"))
             else:
                 keep.append(f)
@@ -1199,7 +1203,7 @@ async def collect_and_score(
         excluded: str | None
         if why:
             excluded = why
-        elif not is_perp(f.coin):
+        elif not counts(f.coin, spot):
             excluded = "spot"
         elif fill_hk is None:
             excluded = "unbound"
@@ -1273,7 +1277,7 @@ async def collect_and_score(
                 "qual_notional": r.qual_notional,
                 "qualified_at_ms": r.qualified_at_ms,
                 "credited_credit": r.credited.credit,
-                "credited_notional": r.credited.notional,
+                "credited_notional": r.credited_perp_notional,  # the skill pool's volume (perpetual)
                 "credited_fills": r.credited.fills,
                 "identity_reset": r.identity_reset,
                 "registered_block": registered_block.get(r.hotkey),

@@ -233,6 +233,10 @@ def _info_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=LEDGER.get(body["user"].lower(), []))
     if t == "userFees":
         return httpx.Response(200, json={"userCrossRate": "0.00045", "userAddRate": "0.00015"})
+    if t == "spotMeta":
+        return httpx.Response(
+            200, json={"universe": [{"name": "@1155", "tokens": [1, 0], "index": 1155}], "tokens": []}
+        )
     if t == "metaAndAssetCtxs":
         return httpx.Response(200, json=[{"universe": [{"name": "TAO"}]}, [{"markPx": "400"}]])
     if t == "candleSnapshot":
@@ -360,6 +364,45 @@ def _setup(tmp_path: Path) -> tuple[ValidatorConfig, Store, HyperliquidInfo, _Fa
     hl = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0, budget_per_minute=10**9)  # no waiting: pacing is tested apart
     hl._client = httpx.AsyncClient(transport=httpx.MockTransport(_info_handler))
     return cfg, store, hl, _FakeChain(commitments), a.address.lower(), b.address.lower()
+
+
+async def test_spot_fills_count_from_their_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec 6.9: a spot sell in the builder file is recorded as `spot` and earns nothing before `spot_from`; from it on
+    it earns credit like a perpetual fill, clipped against the spot pair's own minute candles, and its notional stays
+    out of the day's credited notional (the skill pool's volume)."""
+    from kokoah_subnet.validator import schema as S
+
+    async def scored(root: Path, params: Any) -> tuple[Any, Any, dict[str, Any]]:
+        cfg, store, hl, chain, addr_a, addr_b = _setup(root)
+        rows = _csv(addr_a, addr_b).splitlines()
+        rows += [
+            f"{DAY_MS + 3_600_000 + i * 60000},{addr_a},@1155,A,4000,1,True,,Ioc,False,0xcafe,0,,1.8" for i in range(2)
+        ]
+        rows += [f"{DAY_MS + 7_200_000},{addr_a},@1155,A,9000,1,True,,Ioc,False,0xcafe,0,,1.8"]  # off the pair's mark
+        (root / "fills" / "0xbuilder" / "20261021.csv.lz4").write_bytes(
+            lz4.frame.compress(("\n".join(rows) + "\n").encode())
+        )
+        result = await collect_and_score(cfg, DAY, store, hl, chain, params)
+        with store._engine.connect() as c:
+            fills = c.execute(S.fills.select().where(S.fills.c.coin == "@1155")).all()
+        day_row = next(m for m in store.miner_days(HK_A) if m["day"] == DAY)
+        await hl.close()
+        return {r.hotkey: r for r in result.records}[HK_A], fills, day_row
+
+    before, fills, row = await scored(tmp_path, DEFAULT)
+    assert len(fills) == 3 and {f.excluded for f in fills} == {"spot"}
+    assert before.credited.builder_fee == pytest.approx(before.credited.fills * 12.5)  # the perpetual fills alone
+    (tmp_path / "spot").mkdir()
+    params = replace(DEFAULT, spot_from=DAY)
+    after, fills, row = await scored(tmp_path / "spot", params)
+    assert sorted((f.px, f.excluded) for f in fills) == [(4000.0, None), (4000.0, None), (9000.0, "mark_clip")]
+    assert after.credited.fills == before.credited.fills + 3
+    assert after.credited.builder_fee == pytest.approx(before.credited.builder_fee + 3 * 1.8)  # every spot fee counts
+    assert after.credited.notional == pytest.approx(
+        before.credited.notional + 3 * 4000.0
+    )  # the clipped one at its mark
+    assert row["credited_notional"] == pytest.approx(before.credited.notional)  # the skill pool's volume: perpetual
+    assert after.credited_perp_notional == pytest.approx(before.credited.notional)
 
 
 async def test_whole_value_from_its_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -191,7 +191,7 @@ class HyperliquidInfo:
         return float(fees["userCrossRate"]) * 1e4, float(fees["userAddRate"]) * 1e4
 
     async def candles(self, coin: str, interval: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
-        """Candles for a perp coin (`candleSnapshot`): fields t (open time), T, o, h, l, c, v, n."""
+        """Candles for a perp coin or a spot pair (`candleSnapshot`): fields t (open time), T, o, h, l, c, v, n."""
         body = {
             "type": "candleSnapshot",
             "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
@@ -206,6 +206,11 @@ class HyperliquidInfo:
         with `dex`, its names written `dex:COIN`)."""
         body: dict[str, Any] = {"type": "meta", "dex": dex} if dex else {"type": "meta"}
         return {str(asset["name"]) for asset in (await self.post(body))["universe"]}
+
+    async def spot_names(self) -> set[str]:
+        """The names of the exchange's spot pairs as fills and candles write them ("PURR/USDC", "@107"), from
+        `spotMeta`."""
+        return {str(pair["name"]) for pair in (await self.post({"type": "spotMeta"}))["universe"]}
 
     async def portfolio(self, user: str) -> list[Any]:
         """The exchange's account-value and PnL history windows for an address (`portfolio`)."""

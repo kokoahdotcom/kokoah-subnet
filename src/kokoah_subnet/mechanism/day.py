@@ -23,7 +23,7 @@ from .exclusions import (
     mirror_action,
     mirror_position_share,
 )
-from .fills import Fill, by_user, is_perp
+from .fills import Fill, by_user, counts, is_perp
 from .gates import active_days, passes_gates, round_trips
 from .params import Params
 from .payout import Allocation, allocate, weights
@@ -87,6 +87,7 @@ class MinerRecord:
     address: str
     fees: DayFees  # everything traded today (recorded)
     credited: DayFees  # the part that earned credit (eligible trades only)
+    credited_perp_notional: float  # its perpetual notional, the skill pool's volume (spot earns in the volume pool)
     mirrored_share: float
     credit_factor: float
     reported: bool
@@ -146,6 +147,7 @@ class _Work:
     reset: str | None
     fees: DayFees
     credited: DayFees
+    credited_perp: float
     qual: Qualification
     eligible: bool
     reason: str | None
@@ -174,15 +176,17 @@ class _Work:
 
 def score_day(inputs: DayInputs, params: Params) -> DayResult:
     # exclusions on the day's fills
-    perps = [f for f in inputs.fills if is_perp(f.coin)]  # perpetuals only; spot fills count for nothing
-    fills = clip_to_mark(drop_cluster_matches(perps, inputs.cluster_of, inputs.transfer_pairs), params)
+    day = params.day_of(inputs.day_index)
+    # perpetual fills, and spot fills once spot counts (spec 6.9); a spot fill before then counts for nothing
+    counted = [f for f in inputs.fills if counts(f.coin, params.spot_counts(day))]
+    fills = clip_to_mark(drop_cluster_matches(counted, inputs.cluster_of, inputs.transfer_pairs), params)
     bound = {m.address for m in inputs.miners}
     bound_fills = {a: f for a, f in by_user(fills).items() if a in bound}
     against_bound = bound_counterparty_notional(bound_fills)  # measured before the fills are dropped
     bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
     position_share = mirror_position_share(inputs.positions, params, inputs.owner_group_of)
 
-    floor = params.min_equity_for(params.day_of(inputs.day_index))  # the scored day's own floor
+    floor = params.min_equity_for(day)  # the scored day's own floor
     work: list[_Work] = []
     for m in inputs.miners:
         state = inputs.states.get(m.hotkey, MinerState())
@@ -203,6 +207,8 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             reason = "average equity below the minimum"
         # only trades made while eligible earn credit; an ineligible day adds nothing and the smoothing decays
         credited = day_fees(qual.credited, params, m.exchange_rates_bps) if eligible else DayFees.zero()
+        # the skill pool's volume is perpetual volume: a spot fill earns in the volume pool only
+        credited_perp = sum(f.notional for f in qual.credited if is_perp(f.coin)) if eligible else 0.0
         gross = fees.notional + against_bound.get(m.address, 0.0)
         cp_share = against_bound.get(m.address, 0.0) / gross if gross > 0 else 0.0  # recorded: removed, not reported
         pos_share = position_share.get(m.address, 0.0)
@@ -227,7 +233,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         psr = entry_psr(m.returns, params)
         entry = psr is not None and psr >= params.entry_psr
         s = adjusted_skill(skill, params)
-        volume_window = m.credited_notional_prior_usd + credited.notional
+        volume_window = m.credited_notional_prior_usd + credited_perp
         v = volume_factor(volume_window, params)
         pool_reason = None
         if not eligible:
@@ -251,9 +257,9 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         )
         work.append(
             _Work(
-                m, state, reset, fees, credited, qual, eligible, reason, mirrored, action.credit_factor,
-                action.zero_multiplier, zeroed, parts, g, skill, gates, rt, ad, phi_hat, fee_hat, cp_share,
-                pos_share, psr, entry, s, volume_window, v, weight, pool_reason,
+                m, state, reset, fees, credited, credited_perp, qual, eligible, reason, mirrored,
+                action.credit_factor, action.zero_multiplier, zeroed, parts, g, skill, gates, rt, ad, phi_hat,
+                fee_hat, cp_share, pos_share, psr, entry, s, volume_window, v, weight, pool_reason,
             )
         )  # fmt: skip
 
@@ -273,6 +279,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
                 address=w.m.address,
                 fees=w.fees,
                 credited=w.credited,
+                credited_perp_notional=w.credited_perp,
                 mirrored_share=w.mirrored,
                 credit_factor=w.credit_factor,
                 reported=w.reported,

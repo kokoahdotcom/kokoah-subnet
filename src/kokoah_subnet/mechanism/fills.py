@@ -61,10 +61,16 @@ class Fill:
 
 
 def is_perp(coin: str) -> bool:
-    """Perpetual markets are plain tickers ("BTC", "kPEPE"); spot pairs are "PURR/USDC" or index names like "@107".
-    The subnet scores perpetuals only: the app's builder code also rides on spot orders, where the exchange
-    charges it on sells, and those fills are recorded but never counted."""
+    """Perpetual markets are plain tickers ("BTC", "kPEPE", a builder-deployed exchange's "xyz:NVDA"); spot pairs are
+    "PURR/USDC" or index names like "@107"."""
     return "/" not in coin and not coin.startswith("@")
+
+
+def counts(coin: str, spot: bool) -> bool:
+    """Whether a fill in `coin` counts for the volume pool: a perpetual always; a spot pair once spot counts
+    (`Params.spot_counts`: the app's builder code rides on spot sells, where the exchange charges it). The skill pool's
+    volume and activity gates read perpetual fills only."""
+    return spot or is_perp(coin)
 
 
 def _parse_time_ms(text: str) -> int:
