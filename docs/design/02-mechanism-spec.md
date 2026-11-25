@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.8)
+# Kokoah subnet incentive mechanism: complete specification (v6.9)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -58,11 +58,15 @@ goes to the buyback too; that happens outside the mechanism and never changes a 
 
 ## 3. What counts, and what never counts
 
-Only the bound address's Hyperliquid data is used: perpetual fills with the Kokoah builder code (credit), the
-address's daily account value and flows (skill); the hotkey's stake is recorded for information only (§8). Fills
-without the builder code count for nothing. **Perpetuals only:** the app's builder code also rides on spot orders, where the
-exchange charges it on sells; spot fills (pairs like `PURR/USDC` or index names like `@107`) are recorded but never
-counted. No other platform is ever read.
+Only the bound address's Hyperliquid data is used: fills with the Kokoah builder code (credit), the address's daily
+account value and flows (skill); the hotkey's stake is recorded for information only (§8). Fills without the
+builder code count for nothing. **Spot fills count from the UTC day 2026-11-27, for the volume pool only.** The app's
+builder code also rides on spot orders, where the exchange charges it on sells. From that day a spot fill (pairs like
+`PURR/USDC` or index names like `@107`, tokenized stocks among them) earns credit (§4) and counts toward the
+qualifying trades (§9a), under the same rules as a perpetual fill, its price clipped against the pair's own minute
+candles; before it, spot fills are recorded but never counted. The skill pool reads perpetual fills only: its volume
+factor (§7a) and the activity gates (§9) count perpetual fills, and a spot token's price never counts as a trading
+return (§7). Every validator applies each day's own rule, whenever it updated. No other platform is ever read.
 
 Data plane. Two public sources, for every bound address and day:
 
@@ -226,7 +230,7 @@ No drawdown anywhere. The scale is set so that a strong trader scores 1.
 
 ```
 s_i = max(0, (g'_i − 0.25) / 0.75)                         skill above the luck floor
-v_i = min(1, V_i,30d / $1,000,000)                         participation: credited Kokoah notional, 30 days
+v_i = min(1, V_i,30d / $1,000,000)                         participation: credited Kokoah perpetual notional, 30 days
 L_i = 0.8 + 0.2 × clip01((n_i − 30) / 60)                  the record: 0.8 at 30 days, 1 at 90 days and more
 w_i = s_i × v_i × L_i × (1.1 if a verified agent account, §16)   skill weight
 ```
@@ -262,7 +266,7 @@ Stakes are sampled and recorded for information; they do not affect pay.
 ## 9. Activity gates (for the skill pool and the leaderboard)
 
 Over the last 30 calendar days, today included: at least 10 completed round trips, at least 7 days with a
-builder-code fill, mean account value at least $500 (over the days whose end-of-day value is the exchange's
+builder-code fill (perpetual fills, §3), mean account value at least $500 (over the days whose end-of-day value is the exchange's
 recorded one). A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
 
 ## 9a. Eligibility: the equity floor and the qualifying trades
@@ -308,7 +312,7 @@ disqualification, and rewards resume on the next day at or above it.
 
 **Qualifying trades.** A new identity must first make `n_q = 3` qualifying trades with at least `N_q = $1,000` of
 eligible notional together. A trade is one execution: the eligible fills (§3, after the exclusions and the mark
-clip) of one coin and side at one millisecond, so an order that crosses several resting orders is one trade. Trades
+clip; perpetual, and spot from 2026-11-27) of one coin and side at one millisecond, so an order that crosses several resting orders is one trade. Trades
 are walked in time order; the counts carry from day to day; there is no waiting period. The first two trades earn
 no credit; the trade that completes both counts, and every later one, earn credit. Trades on a day below the
 equity floor still count toward qualification (they earn nothing that day). Qualification is kept for as long as
@@ -356,14 +360,14 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 
 | Parameter | Value |
 |---|---|
-| builder fee | 0.045% per fill; credit is the fee each fill paid |
+| builder fee | 0.045% per fill; credit is the fee each fill paid; spot fills (charged on sells) from 2026-11-27, for the volume pool only |
 | maker credit | 1.0 (the builder fee is charged on maker fills) |
 | smoothing `α` | 0.3, for credit, total fees and skill |
 | pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
-| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
-| activity gates | ≥ 10 round trips, ≥ 7 active days, mean equity ≥ $500 (30 days), for the skill pool |
-| eligibility | the day's average account value ≥ $5,000 ($10,000 before 2026-11-24; the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional, the first two uncredited |
+| skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah perpetual notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
+| activity gates | ≥ 10 round trips, ≥ 7 active days (perpetual fills), mean equity ≥ $500 (30 days), for the skill pool |
+| eligibility | the day's average account value ≥ $5,000 ($10,000 before 2026-11-24; the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional (spot too from 2026-11-27), the first two uncredited |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |
