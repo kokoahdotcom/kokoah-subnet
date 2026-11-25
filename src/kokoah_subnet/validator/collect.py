@@ -833,7 +833,7 @@ async def collect_and_score(
                 "fill history",
                 f"{len(gaps)} milliseconds with more fills than a page: the rest unread",
             )
-        merged = merge_sources(own, public, params.builder_fee_rate)
+        merged = merge_sources(own, public, params.builder_fee_rate, strict=spot)
         candidates = [f for f in merged if f.source == "history"]
         if candidates:
             # the history does not name the builder: each candidate's order must be one the address signed with

@@ -83,7 +83,11 @@ Data plane. Two public sources, for every bound address and day:
   counterparties where it has them.
 
 The two are merged per address on (coin, side, price, size, second), identical rows one to one. A fill in both is
-taken from the history with the file's counterparty and builder fee. A fill only in the file is kept as it is (it
+taken from the history with the file's counterparty and builder fee. From the UTC day 2026-11-27, where the history
+holds more fills of one such key than the file names (a twin placed without the builder, or with another builder),
+which of them carried Kokoah's builder cannot be told by the key: the file's rows are kept as they are and the
+history's of that key are dropped, so the fill counts once; and a spot pair the file writes otherwise than the history
+(`@107` or `PURR/USDC`, a name the other source never uses) is matched without its coin, under the same rule. A fill only in the file is kept as it is (it
 lies beyond the history's reach of 10,000 fills; its total fee then comes from the address's fee rates, `userFees`,
 times notional). A fill only in the history is a candidate when it paid a builder fee of at most the configured
 rate, and counts only once its **order is confirmed**: the address's own transactions on the exchange's explorer
