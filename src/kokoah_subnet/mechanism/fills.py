@@ -242,20 +242,34 @@ def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: flo
     primary source. A fill in both is taken from the history (exact time,
     total fee, trade id) with the file's counterparty and builder fee; a fill only in the file is kept as it is
     (beyond the history's 10,000-fill reach); a fill only in the history is kept as a candidate when it paid a
-    builder fee within the rate (`history_candidate`), to be confirmed by `confirm_builder`."""
+    builder fee within the rate (`history_candidate`), to be confirmed by `confirm_builder`. A spot pair may be
+    written one way in the file and another in the history ("@107" or "PURR/USDC"), so a spot fill left unmatched is
+    matched once more without its coin: one fill is never counted twice."""
     pool: dict[tuple[str, str, int, float, float, str], list[Fill]] = {}
+    loose: dict[tuple[str, int, float, float, str], list[Fill]] = {}
     for f in file_fills:
         pool.setdefault(f.match_key(), []).append(f)
+        if not is_perp(f.coin):
+            loose.setdefault(_coinless(f), []).append(f)
+    used: set[int] = set()  # the file fills already matched (by identity)
     out: list[Fill] = []
     for h in sorted(history, key=lambda x: (x.time_ms, x.tid or 0)):
-        matches = pool.get(h.match_key())
-        if matches:
-            fl = matches.pop(0)
+        fl = next((m for m in pool.get(h.match_key(), []) if id(m) not in used), None)
+        if fl is None and not is_perp(h.coin):
+            fl = next((m for m in loose.get(_coinless(h), []) if id(m) not in used), None)
+        if fl is not None:
+            used.add(id(fl))
             out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
         elif history_candidate(h, rate):
             out.append(h)
-    out.extend(f for fs in pool.values() for f in fs)
+    out.extend(f for f in file_fills if id(f) not in used)
     return sorted(out, key=lambda x: (x.time_ms, x.coin, x.side, x.px, x.sz))
+
+
+def _coinless(f: Fill) -> tuple[str, int, float, float, str]:
+    """A fill's match key without its coin (for spot pairs, whose names the two sources may write differently)."""
+    user, _, second, px, sz, side = f.match_key()
+    return user, second, px, sz, side
 
 
 def assign_counterparties(fills: Sequence[Fill], tid_owners: Mapping[int, set[str]]) -> list[Fill]:

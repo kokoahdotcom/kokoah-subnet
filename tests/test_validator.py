@@ -143,6 +143,59 @@ def test_linked_reads_put_sub_accounts_first_then_the_largest_transfers() -> Non
     assert linked_reads(set(), {}, 25) == ([], 0)
 
 
+async def test_spot_sends_link_from_the_day_spot_counts() -> None:
+    """A spot send between users (`spotTransfer`) is a transfer link on the days spot fills count, valued in USD; the
+    days before, it links no one (every validator builds the same clusters for every day)."""
+    from kokoah_subnet.validator.hyperliquid import transfer_partners
+
+    me = "0x" + "aa" * 20
+    updates = [
+        {"time": 1, "delta": {"type": "spotTransfer", "user": me, "destination": "0xhelper", "token": "EQNVDA",
+                              "amount": "10", "usdcValue": "1800"}},
+        {"time": 2, "delta": {"type": "spotTransfer", "user": "0xpayer", "destination": me, "token": "USDC",
+                              "amount": "250", "usdcValue": "250"}},
+        {"time": 3, "delta": {"type": "send", "user": me, "destination": "0xusdc", "token": "USDC", "amount": "5"}},
+    ]  # fmt: skip
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=updates)
+
+    client = HyperliquidInfo(rate_limit_s=0.0, backoff_s=0.0)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert await transfer_partners(client, me, 0, 10) == {"0xusdc": 5.0}
+    assert await transfer_partners(client, me, 0, 10, spot=True) == {
+        "0xhelper": 1800.0,
+        "0xpayer": 250.0,
+        "0xusdc": 5.0,
+    }
+    await client.close()
+
+
+def test_a_spot_fill_written_another_way_in_the_file_is_one_fill() -> None:
+    """The file may name a spot pair otherwise than the history ("PURR/USDC" or "@107"): matched without its coin,
+    the fill is taken once, from the history with the file's counterparty; perpetual fills still match on their coin."""
+    from kokoah_subnet.mechanism.fills import Fill, merge_sources
+
+    user = "0x" + "aa" * 20
+    t = 1_700_000_000_123
+    history = [
+        Fill(t, user, "@107", "A", 20.0, 5.0, True, 0.045, tid=1, cloid="0xc1", source="history"),
+        Fill(t, user, "BTC", "A", 20.0, 5.0, True, 0.045, tid=2, cloid="0xc2", source="history"),
+    ]
+    file = [
+        Fill(t // 1000 * 1000, user, "PURR/USDC", "A", 20.0, 5.0, True, 0.045, counterparty="0xcafe"),
+        Fill(t // 1000 * 1000, user, "ETH", "A", 20.0, 5.0, True, 0.045, counterparty="0xbeef"),
+    ]
+    merged = merge_sources(file, history, 0.00045)
+    spot = [f for f in merged if f.coin in ("@107", "PURR/USDC")]
+    assert len(spot) == 1 and spot[0].source == "both" and spot[0].coin == "@107" and spot[0].counterparty == "0xcafe"
+    # a perpetual never matches another coin: BTC (history candidate) and ETH (file) stay two fills
+    assert sorted((f.coin, f.source) for f in merged if f.coin in ("BTC", "ETH")) == [
+        ("BTC", "history"),
+        ("ETH", "file"),
+    ]
+
+
 async def test_transfer_partners_are_ranked_by_usd_never_by_a_token_count() -> None:
     """A billion units of a worthless token sent (`usdcValue` 0) moved no USD, so it cannot outrank a real transfer
     partner in the linked reads."""

@@ -905,8 +905,9 @@ async def collect_and_score(
                 f"the day's profit not counted (a loss is): its own trades made over {params.thin_market_share:.0%} "
                 f"of the day's volume in {', '.join(thin)}",
             )  # fmt: skip
-        # without a coin's marks the money moved in through its off-market fills is unknown, so is the day's return
-        return_known = history_read and not any(f.coin in unmarked for f in public)
+        # without a perpetual's marks the money moved in through its off-market fills is unknown, so is the day's
+        # return (a spot pair's never reaches the return: the profit is the perps account's)
+        return_known = history_read and not any(f.coin in unmarked and is_perp(f.coin) for f in public)
         if unmarked:
             store.put_note(
                 day,
@@ -1052,7 +1053,7 @@ async def collect_and_score(
                 raise RuntimeError(f"sub-accounts of {address} unavailable: {exc}") from exc
             unchecked[address] = "clusters"
         try:
-            partners = await transfer_partners(hl, address, start_ms - params.gate_days * 86_400_000, end_ms)
+            partners = await transfer_partners(hl, address, start_ms - params.gate_days * 86_400_000, end_ms, spot=spot)
         except Exception as exc:  # noqa: BLE001
             store.put_error(day, hk, address, "clusters", f"transfer partners: {exc}")
             if not past_deadline:

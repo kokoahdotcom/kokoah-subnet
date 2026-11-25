@@ -259,9 +259,13 @@ def transfer_usd(delta: Mapping[str, Any]) -> float:
     return num("amount") if str(delta.get("token", "")).upper().startswith("USDC") else 0.0
 
 
-async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> dict[str, float]:
+async def transfer_partners(
+    client: HyperliquidInfo, user: str, start_ms: int, end_ms: int, spot: bool = False
+) -> dict[str, float]:
     """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase,
-    with the USD moved between them both ways (`transfer_usd`)."""
+    with the USD moved between them both ways (`transfer_usd`). With `spot` (the days spot fills count, spec 6.9),
+    spot sends between users (`spotTransfer`) link too: a token or spot USDC sent to a helper links them as a
+    transfer of USDC does."""
     updates = await client.post(
         {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
     )
@@ -269,7 +273,8 @@ async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, e
     partners: dict[str, float] = {}
     for u in updates:
         delta = u.get("delta", {})
-        if delta.get("type") in ("internalTransfer", "subAccountTransfer", "send", "receive"):
+        kinds = ("internalTransfer", "subAccountTransfer", "send", "receive") + (("spotTransfer",) if spot else ())
+        if delta.get("type") in kinds:
             moved = transfer_usd(delta)
             for key in ("destination", "user", "fromUser", "toUser"):
                 other = str(delta.get(key, "")).lower()

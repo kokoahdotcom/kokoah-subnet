@@ -405,6 +405,38 @@ async def test_spot_fills_count_from_their_day(tmp_path: Path, monkeypatch: pyte
     assert after.credited_perp_notional == pytest.approx(before.credited.notional)
 
 
+async def test_spot_candles_unread_leave_the_return_known(tmp_path: Path) -> None:
+    """A spot pair's minute candles cannot be read past the deadline: its fills go uncounted, and the day's return
+    stays known (a spot pair never reaches the return, which is the perps account's profit)."""
+    from kokoah_subnet.validator import schema as S
+
+    cfg, store, hl, chain, addr_a, addr_b = _setup(tmp_path)
+    HISTORY[addr_a] = [
+        {
+            "coin": "@1155", "px": "4000", "sz": "1", "side": "A", "time": DAY_MS + 3_600_000 + i * 60_000,
+            "crossed": True, "fee": "4.6", "builderFee": "1.8", "closedPnl": "0", "tid": 500 + i,
+            "cloid": f"0xc{i}", "hash": f"0xtx{500 + i}",
+        }
+        for i in range(2)
+    ]  # fmt: skip
+
+    def spot_down(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body["type"] == "candleSnapshot" and body["req"]["coin"] == "@1155":
+            return httpx.Response(500, json={"error": "down"})
+        return _info_handler(request)
+
+    hl._client = httpx.AsyncClient(transport=httpx.MockTransport(spot_down))
+    end = DAY_MS + 86_400_000
+    await collect_and_score(cfg, DAY, store, hl, chain, replace(DEFAULT, spot_from=DAY), now_ts=end / 1000 + 13 * 3600)
+    with store._engine.connect() as c:
+        spot = c.execute(S.fills.select().where(S.fills.c.coin == "@1155")).all()
+        known = {r.address: r.return_known for r in c.execute(S.equity.select().where(S.equity.c.day == DAY)).all()}
+    assert len(spot) == 2 and {f.excluded for f in spot} == {"no_mark"}
+    assert known[addr_a]
+    await hl.close()
+
+
 async def test_whole_value_from_its_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """From spec 6.7's day on, an account's value is its whole value: a unified account keeps its collateral in spot,
     so its perps value says little. Eligible on $10,300 though its perps value is $4,000; a spot token's gain is money

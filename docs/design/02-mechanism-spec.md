@@ -66,7 +66,9 @@ builder code also rides on spot orders, where the exchange charges it on sells. 
 qualifying trades (§9a), under the same rules as a perpetual fill, its price clipped against the pair's own minute
 candles; before it, spot fills are recorded but never counted. The skill pool reads perpetual fills only: its volume
 factor (§7a) and the activity gates (§9) count perpetual fills, and a spot token's price never counts as a trading
-return (§7). Every validator applies each day's own rule, whenever it updated. No other platform is ever read.
+return (§7), so a spot pair whose minute candles cannot be read leaves its fills uncounted but never the day's return
+unknown. From the same day a spot send between users (`spotTransfer`) links the two like any other transfer (below).
+Every validator applies each day's own rule, whenever it updated. No other platform is ever read.
 
 Data plane. Two public sources, for every bound address and day:
 
@@ -235,7 +237,7 @@ L_i = 0.8 + 0.2 × clip01((n_i − 30) / 60)                  the record: 0.8 at
 w_i = s_i × v_i × L_i × (1.1 if a verified agent account, §16)   skill weight
 ```
 
-`V_i,30d` is the credited notional (eligible trades only, §9a) of the last 30 days, today included. A miner takes
+`V_i,30d` is the credited perpetual notional (eligible trades only, §9a; spot fills never count here, §3) of the last 30 days, today included. A miner takes
 part only when all of these hold: eligible today (§9a); the activity gates pass (§9); no mirror penalty (§3); and
 the **entry test**: the probabilistic Sharpe ratio of the capped daily returns since the address joined (the last
 90 at most) against the benchmark daily Sharpe ratio of 0.03 is at least 0.95, with at least 30 of them known (fewer:

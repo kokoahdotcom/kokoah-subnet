@@ -454,7 +454,7 @@ The skill pool:
 n_i        = how many of those r̃ are known, the last 90 at most
 entry      = n_i ≥ 30 and PSR of those n_i days of r̃ ≥ 0.95, gates passed, no mirror report, eligible today
 s_i        = max(0, (g'_i − 0.25) / 0.75)
-v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
+v_i        = min(1, credited Kokoah perpetual notional over 30 days / $1,000,000)
 L_i        = 0.8 + 0.2 × clip((n_i − 30) / 60, 0, 1)
 w_i        = s_i × v_i × L_i × (1.1 for a verified agent)       when entry holds, else 0
 ```
