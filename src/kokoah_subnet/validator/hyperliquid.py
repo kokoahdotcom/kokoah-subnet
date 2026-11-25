@@ -191,7 +191,7 @@ class HyperliquidInfo:
         return float(fees["userCrossRate"]) * 1e4, float(fees["userAddRate"]) * 1e4
 
     async def candles(self, coin: str, interval: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
-        """Candles for a perp coin (`candleSnapshot`): fields t (open time), T, o, h, l, c, v, n."""
+        """Candles for a perp coin or a spot pair (`candleSnapshot`): fields t (open time), T, o, h, l, c, v, n."""
         body = {
             "type": "candleSnapshot",
             "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
@@ -206,6 +206,11 @@ class HyperliquidInfo:
         with `dex`, its names written `dex:COIN`)."""
         body: dict[str, Any] = {"type": "meta", "dex": dex} if dex else {"type": "meta"}
         return {str(asset["name"]) for asset in (await self.post(body))["universe"]}
+
+    async def spot_names(self) -> set[str]:
+        """The names of the exchange's spot pairs as fills and candles write them ("PURR/USDC", "@107"), from
+        `spotMeta`."""
+        return {str(pair["name"]) for pair in (await self.post({"type": "spotMeta"}))["universe"]}
 
     async def portfolio(self, user: str) -> list[Any]:
         """The exchange's account-value and PnL history windows for an address (`portfolio`)."""
@@ -254,9 +259,13 @@ def transfer_usd(delta: Mapping[str, Any]) -> float:
     return num("amount") if str(delta.get("token", "")).upper().startswith("USDC") else 0.0
 
 
-async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, end_ms: int) -> dict[str, float]:
+async def transfer_partners(
+    client: HyperliquidInfo, user: str, start_ms: int, end_ms: int, spot: bool = False
+) -> dict[str, float]:
     """Addresses this address sent funds to or received funds from in the window (ledger transfers), lowercase,
-    with the USD moved between them both ways (`transfer_usd`)."""
+    with the USD moved between them both ways (`transfer_usd`). With `spot` (the days spot fills count, spec 6.9),
+    spot sends between users (`spotTransfer`) link too: a token or spot USDC sent to a helper links them as a
+    transfer of USDC does."""
     updates = await client.post(
         {"type": "userNonFundingLedgerUpdates", "user": user, "startTime": start_ms, "endTime": end_ms}
     )
@@ -264,7 +273,8 @@ async def transfer_partners(client: HyperliquidInfo, user: str, start_ms: int, e
     partners: dict[str, float] = {}
     for u in updates:
         delta = u.get("delta", {})
-        if delta.get("type") in ("internalTransfer", "subAccountTransfer", "send", "receive"):
+        kinds = ("internalTransfer", "subAccountTransfer", "send", "receive") + (("spotTransfer",) if spot else ())
+        if delta.get("type") in kinds:
             moved = transfer_usd(delta)
             for key in ("destination", "user", "fromUser", "toUser"):
                 other = str(delta.get(key, "")).lower()

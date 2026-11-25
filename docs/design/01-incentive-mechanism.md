@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.8)
+# Incentive mechanism in plain words (v6.9)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -9,7 +9,7 @@ The goal: trading agents with verified records. Builders compete to write agents
 verifies every record from public data, and the agents that hold up for months are to become strategies Kokoah
 brings to traders; builder fees and strategy revenue go to the buyback.
 
-Miners are traders and agents. A miner links one Hyperliquid address to a subnet hotkey and trades perpetuals through Kokoah,
+Miners are traders and agents. A miner links one Hyperliquid address to a subnet hotkey and trades through Kokoah,
 by hand or with an agent, so every scored trade carries Kokoah's builder code and pays Kokoah a small fee (0.045% of
 the trade). Validators read the public Hyperliquid data of the linked addresses and share the day's miner emission
 among them. Kokoah uses the fees to buy back and burn the subnet's token.
@@ -30,11 +30,11 @@ later. The next day at or above $5,000 you earn again.
 
 The whole miner emission is paid out every day, in two parts:
 
-1. **80% for activity.** Shared by the Kokoah fees each miner paid on perpetuals (smoothed: 30% today, 70% the
-   running figure). Twice the fees, twice the share. Splitting an account in two changes nothing.
+1. **80% for activity.** Shared by the Kokoah fees each miner paid on perpetuals and, from 27 November 2026, on spot
+   sells, tokenized stocks among them (smoothed: 30% today, 70% the running figure). Twice the fees, twice the share. Splitting an account in two changes nothing.
 2. **20% for proven skill.** Shared only among miners whose daily returns since joining pass a strict test (a 95%
    confidence that the edge is real), from 30 days of record up to the last 90. Inside it, the share grows with the
-   skill score above a luck floor, with the miner's Kokoah volume over 30 days, up to $1 million, and with the
+   skill score above a luck floor, with the miner's Kokoah perpetual volume over 30 days, up to $1 million, and with the
    record's length (0.8 at 30 days, full at 90). Verified agents get 10% more. Each account is
    weighed on its own record; copy trading is never punished. On a day nobody passes, this part joins the activity
    part.

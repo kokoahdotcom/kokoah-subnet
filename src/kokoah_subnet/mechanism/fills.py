@@ -61,10 +61,16 @@ class Fill:
 
 
 def is_perp(coin: str) -> bool:
-    """Perpetual markets are plain tickers ("BTC", "kPEPE"); spot pairs are "PURR/USDC" or index names like "@107".
-    The subnet scores perpetuals only: the app's builder code also rides on spot orders, where the exchange
-    charges it on sells, and those fills are recorded but never counted."""
+    """Perpetual markets are plain tickers ("BTC", "kPEPE", a builder-deployed exchange's "xyz:NVDA"); spot pairs are
+    "PURR/USDC" or index names like "@107"."""
     return "/" not in coin and not coin.startswith("@")
+
+
+def counts(coin: str, spot: bool) -> bool:
+    """Whether a fill in `coin` counts for the volume pool: a perpetual always; a spot pair once spot counts
+    (`Params.spot_counts`: the app's builder code rides on spot sells, where the exchange charges it). The skill pool's
+    volume and activity gates read perpetual fills only."""
+    return spot or is_perp(coin)
 
 
 def _parse_time_ms(text: str) -> int:
@@ -229,27 +235,80 @@ def builder_orders(transactions: Iterable[Mapping[str, Any]], builder: str) -> t
     return cloids - modified - elsewhere, hashes
 
 
-def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: float) -> list[Fill]:
+def merge_sources(file_fills: Sequence[Fill], history: Sequence[Fill], rate: float, strict: bool = False) -> list[Fill]:
     """One address's builder fills for a day from both sources (specification section 3).
 
     The exchange's per-builder daily file may not cover the whole day, so the address's own fill history is the
-    primary source. A fill in both is taken from the history (exact time,
-    total fee, trade id) with the file's counterparty and builder fee; a fill only in the file is kept as it is
-    (beyond the history's 10,000-fill reach); a fill only in the history is kept as a candidate when it paid a
-    builder fee within the rate (`history_candidate`), to be confirmed by `confirm_builder`."""
-    pool: dict[tuple[str, str, int, float, float, str], list[Fill]] = {}
+    primary source. A fill in both is taken from the history (exact time, total fee, trade id) with the file's
+    counterparty and builder fee; a fill only in the file is kept as it is (beyond the history's 10,000-fill reach); a
+    fill only in the history is kept as a candidate when it paid a builder fee within the rate (`history_candidate`),
+    to be confirmed by `confirm_builder`.
+
+    `strict` (the days spot fills count, spec 6.9): where the history holds more fills of one match key than the file
+    names, which of them carried the builder cannot be told by the key (a twin placed without the builder, or with
+    another builder, would take the builder fill's row while the builder fill counts again as a candidate), so the
+    file's rows are kept as they are and the history's of that key are dropped: such a fill counts once. And a spot
+    pair the file writes otherwise than the history ("@107" or "PURR/USDC": a name the other source never uses) is
+    matched without its coin, under the same rule."""
+    hist = sorted(history, key=lambda x: (x.time_ms, x.tid or 0))
+    files: dict[tuple[str, str, int, float, float, str], list[Fill]] = {}
     for f in file_fills:
-        pool.setdefault(f.match_key(), []).append(f)
+        files.setdefault(f.match_key(), []).append(f)
     out: list[Fill] = []
-    for h in sorted(history, key=lambda x: (x.time_ms, x.tid or 0)):
-        matches = pool.get(h.match_key())
-        if matches:
-            fl = matches.pop(0)
-            out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
-        elif history_candidate(h, rate):
-            out.append(h)
-    out.extend(f for fs in pool.values() for f in fs)
+    if not strict:  # the days before: each history fill takes the next file row of its key
+        for h in hist:
+            matches = files.get(h.match_key())
+            if matches:
+                fl = matches.pop(0)
+                out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
+            elif history_candidate(h, rate):
+                out.append(h)
+        out.extend(f for fs in files.values() for f in fs)
+        return sorted(out, key=lambda x: (x.time_ms, x.coin, x.side, x.px, x.sz))
+    used: set[int] = set()  # the file rows taken (by identity)
+    left: list[Fill] = []  # history fills without a file row of their own key
+    keyed: dict[tuple[str, str, int, float, float, str], list[Fill]] = {}
+    for h in hist:
+        keyed.setdefault(h.match_key(), []).append(h)
+    for key, hs in keyed.items():
+        rows = files.get(key, [])
+        if not rows:
+            left.extend(hs)
+        elif len(hs) <= len(rows):
+            for h, fl in zip(hs, rows, strict=False):
+                used.add(id(fl))
+                out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
+        # more in the history than in the file: the file's rows stay, the history's are dropped
+    history_coins = {h.coin for h in hist}
+    file_coins = {f.coin for f in file_fills}
+    loose_rows: dict[tuple[str, int, float, float, str], list[Fill]] = {}
+    for f in file_fills:
+        if id(f) not in used and not is_perp(f.coin) and f.coin not in history_coins:
+            loose_rows.setdefault(_coinless(f), []).append(f)
+    loose: dict[tuple[str, int, float, float, str], list[Fill]] = {}
+    for h in left:
+        if not is_perp(h.coin) and h.coin not in file_coins:
+            loose.setdefault(_coinless(h), []).append(h)
+    taken: set[int] = set()  # history fills matched or dropped without their coin
+    for loose_key, hs in loose.items():
+        rows = loose_rows.get(loose_key, [])
+        if not rows:
+            continue
+        taken.update(id(h) for h in hs)
+        if len(hs) <= len(rows):
+            for h, fl in zip(hs, rows, strict=False):
+                used.add(id(fl))
+                out.append(replace(h, counterparty=fl.counterparty, builder_fee=fl.builder_fee, source="both"))
+    left = [h for h in left if id(h) not in taken]
+    out.extend(h for h in left if history_candidate(h, rate))
+    out.extend(f for f in file_fills if id(f) not in used)
     return sorted(out, key=lambda x: (x.time_ms, x.coin, x.side, x.px, x.sz))
+
+
+def _coinless(f: Fill) -> tuple[str, int, float, float, str]:
+    """A fill's match key without its coin (for spot pairs, whose names the two sources may write differently)."""
+    user, _, second, px, sz, side = f.match_key()
+    return user, second, px, sz, side
 
 
 def assign_counterparties(fills: Sequence[Fill], tid_owners: Mapping[int, set[str]]) -> list[Fill]:

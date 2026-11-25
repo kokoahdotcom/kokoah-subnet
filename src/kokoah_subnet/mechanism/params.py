@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-SPEC_VERSION = "6.8"
+SPEC_VERSION = "6.9"
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,11 @@ class Params:
     # account's, so a spot token's price never counts as a trading return. Every validator switches on that day,
     # whenever it updated
     whole_value_from: str = "2026-11-27"
+    # from `spot_from` on (spec 6.9): spot fills with the builder code count like perpetual fills for the volume pool
+    # (their builder fees earn credit, they qualify a new identity), never for the skill pool (a spot token's price is
+    # no trading return, and the skill pool's volume and activity gates stay perpetual). Every validator switches on
+    # that day, whenever it updated
+    spot_from: str = "2026-11-27"
     value_window: str = "week"
     value_origin_window: str = "allTime"
     profit_window: str = "perpWeek"
@@ -129,6 +134,10 @@ class Params:
     def min_equity_for(self, day: str) -> float:
         """The equity floor of `day`: its eligibility and the least capital its return is measured over."""
         return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
+
+    def spot_counts(self, day: str) -> bool:
+        """Whether `day`'s spot fills count for the volume pool (spec 6.9)."""
+        return day >= self.spot_from
 
     def day_of(self, day_index: int) -> str:
         """The UTC day (YYYY-MM-DD) `day_index` days after `day_zero`."""

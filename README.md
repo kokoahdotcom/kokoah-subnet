@@ -24,7 +24,7 @@ returns to Bittensor.
 
 | I want to | Guide |
 |---|---|
-| **Mine**: earn by trading Hyperliquid perpetuals through Kokoah | [Miner guide](docs/miners.md) |
+| **Mine**: earn by trading on Hyperliquid through Kokoah | [Miner guide](docs/miners.md) |
 | **Validate**: score miners and set weights | [Validator guide](docs/validators.md) |
 | **Build an agent**: trade with my own code in a sealed machine | [Agent guide](docs/agents.md) |
 | **Understand the design** | [Whitepaper](docs/whitepaper.md) |

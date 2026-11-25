@@ -2,7 +2,7 @@
 
 ## Trading intelligence, proven in the market
 
-Whitepaper, version 3.3, November 2026. Mechanism specification v6.8.
+Whitepaper, version 3.4, November 2026. Mechanism specification v6.9.
 
 ### Summary
 
@@ -151,7 +151,7 @@ creates the trading account's key inside itself, and the agent trades. Nobody, t
 account by hand, and private code is never readable outside the machine (section 7).
 
 **Traders.** Register a hotkey, sign one line with the Hyperliquid wallet (appendix D) and publish it as the hotkey's
-commitment, then trade perpetuals through Kokoah. No software to run, no keys to share, no reporting. To earn, a
+commitment, then trade through Kokoah (perpetuals, and spot from 27 November 2026). No software to run, no keys to share, no reporting. To earn, a
 trader keeps an account averaging at least $5,000 over the day and, once at the start, completes three trades worth
 $1,000 together. The skill record counts only the days after the day the link is accepted; history from before it
 never counts. A trader can move to a new account once per 60 days and keep their pay history and smoothed skill; the
@@ -170,7 +170,7 @@ participants from a community outside Bittensor.
 
 ## 5. The pay rule
 
-Every number below is a parameter of specification v6.8; the complete formulas are in appendix A.
+Every number below is a parameter of specification v6.9; the complete formulas are in appendix A.
 
 **Eligibility.** A miner earns on a day when two things hold. The account's average value over that day is at least
 $5,000 (from 24 November 2026; $10,000 before), measured from the exchange's own recorded history of the account through the whole day, not from a balance
@@ -184,8 +184,9 @@ maker and taker alike. The credit is smoothed: 30% of today's fees count today, 
 so on. The weights sum to one, so every dollar of fees is counted exactly once.
 
 **The volume reward.** Four fifths of the day's miner emission is shared among eligible miners in proportion to their
-smoothed fee credit. Because the share is linear in fees paid, splitting one account into many or merging many into
-one changes nothing.
+smoothed fee credit: the builder fees of perpetual fills and, from 27 November 2026, of spot sells (tokenized stocks
+among them). Because the share is linear in fees paid, splitting one account into many or merging many into one
+changes nothing.
 
 **The skill reward.** One fifth is shared among miners with a proven record. Four things decide who takes part and
 with what weight:
@@ -201,7 +202,7 @@ with what weight:
   gain-to-pain ratio of the last 30 days, halved if two or more days in the last 60 lost more than 10%)? The two are
   multiplied, smoothed like the credit, and scaled so that a strong trader scores 1. Only the part above a luck floor
   of 0.25 counts.
-- **Participation.** The skill weight grows with the account's eligible Kokoah volume over the last 30 days, up to
+- **Participation.** The skill weight grows with the account's eligible Kokoah perpetual volume over the last 30 days, up to
   $1 million; beyond that, more volume adds nothing to the skill reward.
 - **Record length.** A record of 30 days weighs 0.8, and the weight rises evenly to full at 90 days, so a proven
   record that keeps holding up earns more than a new one.
@@ -211,7 +212,8 @@ agent; each account is weighed on its own record. The skill reward also needs th
 active days and a mean account value of $500 over the last 30 days) and no active mirror report. On a day nobody
 qualifies for it, the skill reward joins the volume reward.
 
-**What never counts.** Spot fills: the subnet scores perpetuals only. Fills against the account's own cluster
+**What never counts.** Spot fills before 27 November 2026; from that day they earn in the volume reward, never in
+the skill reward. Fills against the account's own cluster
 (sub-accounts, addresses on the same coldkey) or against an address its cluster moved money with (a transfer links only the two
 sides that made it, never a third through them); fills against another linked account, since the subnet does not pay
 for volume between its own miners (both sides of every trade carry the same trade id, so this is exact; such trades
@@ -409,8 +411,9 @@ buybacks executed.
 
 ### Appendix A. The formulas
 
-Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` whose order carried the builder code,
-`n_f` its notional in USD, `b_f` the builder fee it paid (0.045% of notional, maker or taker). `A_d` is the day's miner
+Notation: `i` a miner, `d` a scoring day (00:00 UTC), `f` a fill of miner `i` whose order carried the builder code
+(a perpetual fill, or from 2026-11-27 a spot fill, which earns in the volume reward only), `n_f` its notional in USD,
+`b_f` the builder fee it paid (0.045% of notional, maker or taker; on spot, on sells only). `A_d` is the day's miner
 emission (41% of 7,200 alpha, 2,952 alpha).
 
 Eligibility, each day: `Ē_i,d = (1/24 h) × ∫ E_i(t) dt` over the day, from the exchange's recorded account values
@@ -451,7 +454,7 @@ The skill pool:
 n_i        = how many of those r̃ are known, the last 90 at most
 entry      = n_i ≥ 30 and PSR of those n_i days of r̃ ≥ 0.95, gates passed, no mirror report, eligible today
 s_i        = max(0, (g'_i − 0.25) / 0.75)
-v_i        = min(1, credited Kokoah notional over 30 days / $1,000,000)
+v_i        = min(1, credited Kokoah perpetual notional over 30 days / $1,000,000)
 L_i        = 0.8 + 0.2 × clip((n_i − 30) / 60, 0, 1)
 w_i        = s_i × v_i × L_i × (1.1 for a verified agent)       when entry holds, else 0
 ```

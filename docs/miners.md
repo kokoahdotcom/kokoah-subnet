@@ -1,7 +1,7 @@
 # Miner guide
 
 Mining on the Kokoah subnet means trading. A miner is a Hyperliquid trader whose account is linked to a registered
-Bittensor hotkey and who trades perpetuals through [Kokoah](https://kokoah.com). There is no miner software to run:
+Bittensor hotkey and who trades through [Kokoah](https://kokoah.com). There is no miner software to run:
 validators read your trades and your account from public data and pay you from the subnet's emission.
 
 This guide covers everything from registration to getting paid. The rules behind each step are in the
@@ -111,16 +111,20 @@ accepted never pay.
 
 ## 5. Trade
 
-Trade **perpetuals** on Hyperliquid through Kokoah. Kokoah attaches its builder code to every order, and Hyperliquid
-charges the builder fee of **0.045% of the notional** on every fill, maker or taker. That fee is what the volume
-reward measures.
+Trade on Hyperliquid through Kokoah: **perpetuals**, and from 27 November 2026 **spot** too (tokenized stocks among
+them). Kokoah attaches its builder code to every order, and Hyperliquid charges the builder fee of **0.045% of the
+notional** on every perpetual fill, maker or taker, and on every spot sell (a spot buy pays no builder fee). That fee
+is what the volume reward measures.
 
-**What counts:** every perpetual fill of your linked address that carries Kokoah's builder code.
+**What counts:** every perpetual fill of your linked address that carries Kokoah's builder code, and from
+27 November 2026 every spot fill that carries it. Spot fills earn in the volume reward and count toward your
+qualifying trades; the skill reward reads your perpetual trades and your returns only, and a spot token's price never
+counts as a return.
 
 **What never counts:**
 
 - fills without Kokoah's builder code (trades placed on other front ends);
-- spot trades (recorded, never scored);
+- spot trades before 27 November 2026 (recorded, never scored);
 - trades against yourself or against accounts linked to you (hotkeys on the same coldkey, sub-accounts), or against
   an account you, or another hotkey on your coldkey, moved money with (a transfer links only the two sides that made
   it, never a third through them);
@@ -168,7 +172,7 @@ earns nothing extra: the reward is proportional to fees.
   to the last 90; the day of the link and the days before it never count.
 - **Activity.** In the last 30 days: at least 10 completed round trips, at least 7 days with a Kokoah fill, and an
   average account value of at least $500.
-- **Weight.** Skill above a luck floor, multiplied by participation (full at $1 million of eligible Kokoah volume
+- **Weight.** Skill above a luck floor, multiplied by participation (full at $1 million of eligible Kokoah perpetual volume
   over 30 days, less in proportion below it) and by the length of your record: 0.8 at 30 days, rising evenly to full
   at 90 days.
 - **Your own record.** Each account is weighed on its own record; copy trading is never punished.
@@ -265,5 +269,5 @@ and keep the account and its record. See the [agent guide](agents.md), section 7
 | Refused: published before the hotkey's current registration | The hotkey registered again after leaving the subnet: publish the link again (section 9). |
 | Not eligible: account value | The day's *average* must be at least $5,000. A deposit late in the day raises the average only for the hours after it. |
 | Not eligible: account value unknown | The exchange recorded too few points of your account that day (fewer than 4). The validator never guesses; the next day is measured again. |
-| My trades do not count | Make sure they are perpetuals placed through Kokoah, from the linked address, not against your own or another miner's account. |
+| My trades do not count | Make sure they are perpetuals (or, from 27 November 2026, spot trades) placed through Kokoah, from the linked address, not against your own or another miner's account. |
 | No skill reward | The skill reward needs at least 30 days of record since your link, the activity conditions and the entry test; until then you earn the volume reward. |

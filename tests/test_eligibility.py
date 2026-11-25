@@ -2,6 +2,7 @@
 and identity changes that must never carry credit or qualification to a fresh identity."""
 
 import random
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -175,6 +176,35 @@ def test_the_floor_is_the_scored_day_s() -> None:
     for day, eligible in ((switch - 1, False), (switch, True)):
         r = run(day, day_fills(day, 4, 10_000.0), [miner(7_000.0)], state).records[0]
         assert r.eligible is eligible and (eligible or r.ineligible_reason == "average equity below the minimum")
+
+
+def test_spot_fills_count_for_the_volume_pool_from_their_day() -> None:
+    """Spec 6.9: from `spot_from` on, a spot sell with the builder code earns credit like a perpetual fill and
+    qualifies a new identity; the day before, it counts for nothing. Its notional never reaches the skill pool's
+    volume."""
+    switch = (date.fromisoformat(DEFAULT.spot_from) - date.fromisoformat(DEFAULT.day_zero)).days
+    assert DEFAULT.day_of(switch) == DEFAULT.spot_from and not DEFAULT.spot_counts(DEFAULT.day_of(switch - 1))
+    state = {"hk": MinerState(qualified=True, address=A, registered_block=100)}
+
+    def spot_sells(day: int) -> list[Fill]:
+        return [fill(DAY0 + day * D + i * 60_000, 2_000.0, coin="@1155", side="A") for i in range(3)]
+
+    before = run(switch - 1, spot_sells(switch - 1), [miner(20_000.0)], state).records[0]
+    assert before.fees.fills == 0 and before.credited.credit == 0.0 and before.phi_hat == 0.0
+    after = run(switch, spot_sells(switch), [miner(20_000.0)], state).records[0]
+    assert after.eligible and after.credited.fills == 3 and after.credited.credit == pytest.approx(3 * 2_000.0 * 2.5e-4)
+    assert after.phi_hat > 0 and after.volume_pay_alpha > 0
+    assert after.credited_perp_notional == 0.0 and after.volume_window_usd == 0.0  # the skill pool's: perpetual only
+    # spot and perpetual fills together: both earn; only the perpetual notional is the skill pool's volume
+    mixed = run(switch, spot_sells(switch) + day_fills(switch, 2, 1_000.0), [miner(20_000.0)], state).records[0]
+    assert mixed.credited.fills == 5 and mixed.credited_perp_notional == pytest.approx(2_000.0)
+    assert mixed.volume_window_usd == pytest.approx(2_000.0)
+    # a new identity qualifies with spot trades alone (its first two trades earn nothing, as always)
+    fresh = run(switch, spot_sells(switch), [miner(20_000.0)], {}).records[0]
+    assert fresh.qualified and fresh.qual_trades == 3 and fresh.credited.fills == 1
+    # the anti-wash rules hold for spot: a spot sell to the miner's own cluster earns nothing
+    own = [replace(f, counterparty=A) for f in spot_sells(switch)]
+    assert run(switch, own, [miner(20_000.0)], state).records[0].credited.fills == 0
 
 
 def test_recovery_resumes_automatically_without_back_pay() -> None:
