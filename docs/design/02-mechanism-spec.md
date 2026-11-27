@@ -283,7 +283,7 @@ A miner is **eligible** on day `d` once it has made its qualifying trades; other
 never checked for eligibility (an unknown average stops no one). Before that day a miner also needed the day's average
 account value at least `E_min`: $5,000 from 2026-11-24, $10,000 before (every validator applies each day's own rule,
 whenever it updated). The average is still measured and recorded every day, the same way, and the activity gates read
-it (§9); a day's return is still measured over at least the return floor (§7):
+the account's recorded end-of-day values (§9); a day's return is still measured over at least the return floor (§7):
 
 ```
 Ē_d = (1 / T) × ∫_{start of d}^{end of d} E(t) dt          T = 24 h
@@ -457,7 +457,8 @@ before the hotkey's current registration block never counts again.
   had started (for more than twice its retry pace) starts that day's window again once on its return; after that a
   failed read is final for that day on that validator. Past the deadline the day is scored and only what depends on
   the failed read is lost: without the recorded history the day is measured from points an earlier read stored if they
-  reach past the day's end, otherwise the account's average is unknown and it is not eligible that day; without the
+  reach past the day's end, otherwise the account's average is unknown (before 2026-11-27 it was then not eligible
+  that day; from then the balance is never checked); without the
   fill history its return is unknown; fills that needed a failed read go uncounted (§3); without a join block's time
   the join day is estimated at 12 seconds a block back from the current block, which is never earlier than the
   block's real time. The minute candles of a coin

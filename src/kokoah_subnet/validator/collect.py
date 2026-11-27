@@ -699,12 +699,12 @@ async def collect_and_score(
         fall back. Every failure is recorded."""
         own = fills_by_address.get(address, [])
         public: list[Fill] = []
-        # the account's recorded history: eligibility needs it every day. A failed read fails the day (retried
-        # hourly) until the deadline, and the average is never estimated from a snapshot; after it, the day is
-        # measured from points an earlier read stored only when they reach past the day's end (recorded points are
-        # the same for every validator); otherwise this address's average and return are unknown for the day (it is
-        # not eligible), no equity row is written (so a first-time address is still backfilled once a read
-        # succeeds), and every other address is scored as usual
+        # the account's recorded history: the day's average and return need it every day. A failed read fails the
+        # day (retried hourly) until the deadline, and the average is never estimated from a snapshot; after it, the
+        # day is measured from points an earlier read stored only when they reach past the day's end (recorded points
+        # are the same for every validator); otherwise this address's average and return are unknown for the day
+        # (before spec 7.0 it was then not eligible), no equity row is written (so a first-time address is still
+        # backfilled once a read succeeds), and every other address is scored as usual
         recorded = True
         try:
             windows = await hl.portfolio(address)
