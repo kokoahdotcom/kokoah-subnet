@@ -380,7 +380,7 @@ class Store:
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
         timed = self._day_twrs(address, moves)
-        # every return is over at least its day's eligibility floor (`min_equity_for`)
+        # every return is over at least its day's return floor (`return_floor_for`, unchanged by spec 7.0)
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
@@ -392,11 +392,11 @@ class Store:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)
                 out[d1] = min(
-                    daily_return(e0, e1, f1 + o1, DEFAULT.min_equity_for(d1)), max(-1.0, (e1 - e0 - f1 - o1) / e0)
+                    daily_return(e0, e1, f1 + o1, DEFAULT.return_floor_for(d1)), max(-1.0, (e1 - e0 - f1 - o1) / e0)
                 )
                 continue
             if t is None:  # a past day without recorded points: the whole day at once
-                out[d1] = daily_return(e0, e1, f1 + o1, DEFAULT.min_equity_for(d1))
+                out[d1] = daily_return(e0, e1, f1 + o1, DEFAULT.return_floor_for(d1))
                 continue
             # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
             # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
@@ -476,7 +476,7 @@ class Store:
                 d1,
                 origins.get(d),
                 fills,
-                DEFAULT.min_equity_for(d),  # every return is over at least the day's eligibility floor
+                DEFAULT.return_floor_for(d),  # every return is over at least the day's return floor
             )
             if t is not None:
                 out[d] = t

@@ -207,6 +207,32 @@ def test_spot_fills_count_for_the_volume_pool_from_their_day() -> None:
     assert run(switch, own, [miner(20_000.0)], state).records[0].credited.fills == 0
 
 
+def test_no_floor_from_its_day() -> None:
+    """Spec 7.0: from `no_floor_from` on, any balance is eligible, even an unknown one (the balance is never checked);
+    the day before, $50 or an unknown average is not. The activity gates' mean account value drops to $100, and a
+    return is still measured over at least the return floor."""
+    from kokoah_subnet.mechanism.gates import passes_gates
+
+    switch = (date.fromisoformat(DEFAULT.no_floor_from) - date.fromisoformat(DEFAULT.day_zero)).days
+    before_day = DEFAULT.day_of(switch - 1)
+    assert DEFAULT.min_equity_for(DEFAULT.no_floor_from) == 0.0 and DEFAULT.min_equity_for(before_day) == 5_000.0
+    assert DEFAULT.return_floor_for(DEFAULT.no_floor_from) == DEFAULT.return_floor_for(before_day) == 5_000.0
+    state = {"hk": MinerState(qualified=True, address=A, registered_block=100)}
+    for avg in (50.0, None):
+        before = run(switch - 1, day_fills(switch - 1, 4, 1_000.0), [miner(avg)], state).records[0]
+        assert not before.eligible and before.credited.fills == 0
+        after = run(switch, day_fills(switch, 4, 1_000.0), [miner(avg)], state).records[0]
+        assert after.eligible and after.ineligible_reason is None and after.credited.fills == 4
+        assert after.volume_pay_alpha > 0
+    assert (
+        DEFAULT.gate_mean_equity_for(before_day) == 500.0
+        and DEFAULT.gate_mean_equity_for(DEFAULT.no_floor_from) == 100.0
+    )
+    assert passes_gates(10, 7, 150.0, DEFAULT, DEFAULT.gate_mean_equity_for(DEFAULT.no_floor_from))
+    assert not passes_gates(10, 7, 150.0, DEFAULT, DEFAULT.gate_mean_equity_for(before_day))
+    assert not passes_gates(10, 7, 99.0, DEFAULT, DEFAULT.gate_mean_equity_for(DEFAULT.no_floor_from))
+
+
 def test_recovery_resumes_automatically_without_back_pay() -> None:
     state = {"hk": MinerState(phi_hat=100.0, fee_hat=280.0, qualified=True, address=A, registered_block=100)}
     states = state

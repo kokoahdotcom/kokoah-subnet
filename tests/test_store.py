@@ -49,6 +49,26 @@ def _record(s: Store, address: str, day: str, points: list[tuple[float, float, f
     s.put_equity_points(address, profit_key(day), [(_ms(day, h), p) for h, _, p in points], day)
 
 
+def test_returns_keep_the_return_floor_without_the_equity_floor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 7.0 drops only the eligibility floor: a $100 account making $10 the day the floor goes is still measured
+    over the $5,000 return floor (so money kept out of the account at the recorded points never carries the day)."""
+    from dataclasses import replace
+
+    import kokoah_subnet.validator.store as store_module
+    from kokoah_subnet.mechanism import DEFAULT
+
+    params = replace(DEFAULT, min_equity_from="2026-11-10", no_floor_from="2026-11-14")
+    monkeypatch.setattr(store_module, "DEFAULT", params)
+    assert params.min_equity_for("2026-11-14") == 0.0 and params.return_floor_for("2026-11-14") == 5_000.0
+    s = Store(tmp_path / "v.sqlite")
+    s.put_equity("0xA", "2026-11-13", 100.0, 0.0, offmarket_moves=())
+    _record(s, "0xA", "2026-11-14", [(0, 100.0, 0.0), (24, 110.0, 10.0)])
+    s.put_equity("0xA", "2026-11-14", 110.0, 0.0, offmarket_moves=())
+    assert s.dated_returns("0xA", 5) == {"2026-11-14": pytest.approx(10 / 5_000)}
+
+
 def test_the_return_floor_follows_the_day_s_eligibility_floor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """$1,000 that makes $100 the day before the floor drops: +1% over $10,000; losing $100 on the day it drops: −2%
     over $5,000."""

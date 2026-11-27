@@ -32,8 +32,8 @@ examples below use it.
   shows the current amount before you confirm.
 - **A Hyperliquid account controlled by an ordinary wallet** (one private key, such as MetaMask or a hardware
   wallet). Smart-contract wallets cannot sign the link message.
-- **An average account value of at least $5,000** on the days you want to be paid (from 24 November 2026;
-  $10,000 before; section 6).
+- **Any balance.** From 27 November 2026 there is no minimum account value (before, $5,000 on average over the day;
+  section 6).
 - **Your trades routed through Kokoah**, so that every order carries Kokoah's builder code.
 
 ## 2. Install the tools
@@ -148,13 +148,12 @@ eligible notional in total. A trade is one execution: all fills of one coin and 
 first two trades earn no credit; the trade that completes both conditions, and every trade after it, does. There
 is no waiting period, and qualification lasts for as long as your identity does (section 9).
 
-**Account value (every day).** The day's **average account value must be at least $5,000**. It is measured from
-Hyperliquid's own record of your account's whole value, spot included (in a unified account your USDC sits in spot),
-recorded about every two hours, averaged over the whole UTC day, never from a single snapshot; days before 27 November
-2026 were measured on the perpetuals account alone, and days before 24 November 2026 against a $10,000 floor. Spot
-tokens count at Hyperliquid's price, but their price changes never count as trading returns. Falling below costs that day only: there is no penalty, and pay resumes on
-the next day at or above the floor. On an ineligible day nothing is added to your credit and you take no share of
-the pool, so you dilute nobody.
+**Account value.** From 27 November 2026 there is **no minimum**: any balance earns. Before that day, the day's
+average account value had to be at least $5,000 ($10,000 before 24 November 2026). Your account's value is still
+measured every day from Hyperliquid's own record of its whole value, spot included (in a unified account your USDC
+sits in spot), recorded about every two hours: the skill reward reads it. Spot tokens count at Hyperliquid's price,
+but their price changes never count as trading returns. A day's return is measured over at least $5,000, so a small
+account's gains and losses count by the dollars it makes.
 
 ## 7. How you are paid
 
@@ -171,7 +170,7 @@ earns nothing extra: the reward is proportional to fees.
   performance passes a statistical test at 95% confidence that the edge is real. The test reads every such day, up
   to the last 90; the day of the link and the days before it never count.
 - **Activity.** In the last 30 days: at least 10 completed round trips, at least 7 days with a Kokoah fill, and an
-  average account value of at least $500.
+  average account value of at least $100 ($500 before 27 November 2026).
 - **Weight.** Skill above a luck floor, multiplied by participation (full at $1 million of eligible Kokoah perpetual volume
   over 30 days, less in proportion below it) and by the length of your record: 0.8 at 30 days, rising evenly to full
   at 90 days.
@@ -267,7 +266,5 @@ and keep the account and its record. See the [agent guide](agents.md), section 7
 | `miner bind` says the signature does not match | The signed text must be exactly the printed line, signed by the address in it (lowercase), as a personal message (EIP-191), not typed data. On a move to a new address, both addresses sign the line for the new address; the error names the address whose signature does not match. |
 | My binding does not show in `miner show` | The commitment needs the hotkey to be registered on the subnet and a few blocks to be included. |
 | Refused: published before the hotkey's current registration | The hotkey registered again after leaving the subnet: publish the link again (section 9). |
-| Not eligible: account value | The day's *average* must be at least $5,000. A deposit late in the day raises the average only for the hours after it. |
-| Not eligible: account value unknown | The exchange recorded too few points of your account that day (fewer than 4). The validator never guesses; the next day is measured again. |
 | My trades do not count | Make sure they are perpetuals (or, from 27 November 2026, spot trades) placed through Kokoah, from the linked address, not against your own or another miner's account. |
 | No skill reward | The skill reward needs at least 30 days of record since your link, the activity conditions and the entry test; until then you earn the volume reward. |
