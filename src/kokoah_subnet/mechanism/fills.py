@@ -73,6 +73,25 @@ def counts(coin: str, spot: bool) -> bool:
     return spot or is_perp(coin)
 
 
+def peak_position_usd(fills: Iterable[Fill]) -> float:
+    """The largest total value of the open perpetual positions over a day's own fills (the address's history): each
+    coin's position from the fill's start position (else its fills so far), valued at the coin's latest fill price,
+    just before and just after every fill. What the day's trades needed in the account (over the leverage), whatever
+    it held at the exchange's recorded points; spot holdings are paid in full, so they never count."""
+    position: dict[str, float] = {}
+    price: dict[str, float] = {}
+    peak = 0.0
+    for f in sorted(fills, key=lambda x: (x.time_ms, x.tid or 0, x.coin)):
+        if not is_perp(f.coin):
+            continue
+        before = f.start_position if f.start_position is not None else position.get(f.coin, 0.0)
+        price[f.coin] = f.px
+        for size in (before, before + f.signed_size):
+            position[f.coin] = size
+            peak = max(peak, sum(abs(p) * price[c] for c, p in position.items()))
+    return peak
+
+
 def _parse_time_ms(text: str) -> int:
     t = text.strip()
     if t.isdigit():

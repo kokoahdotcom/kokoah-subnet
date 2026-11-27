@@ -26,9 +26,18 @@ def active_days(fills: Iterable[Fill]) -> int:
     return len({f.day for f in fills})
 
 
-def passes_gates(round_trip_count: int, active_day_count: int, mean_equity_usd: float, params: Params) -> bool:
+def passes_gates(
+    round_trip_count: int,
+    active_day_count: int,
+    mean_equity_usd: float,
+    params: Params,
+    min_mean_equity_usd: float | None = None,
+) -> bool:
+    """`min_mean_equity_usd`: the day's own least mean account value (`Params.gate_mean_equity_for`); the earlier
+    one when not given."""
+    least = params.gate_mean_equity_usd if min_mean_equity_usd is None else min_mean_equity_usd
     return (
         round_trip_count >= params.gate_round_trips
         and active_day_count >= params.gate_active_days
-        and mean_equity_usd >= params.gate_mean_equity_usd
+        and mean_equity_usd >= least
     )

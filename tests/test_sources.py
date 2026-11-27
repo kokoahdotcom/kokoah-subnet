@@ -152,3 +152,24 @@ def test_history_fills_up_to_the_builder_fee_count() -> None:
     assert DEFAULT.builder_fee_rate == 0.00045
     assert history_candidate(fill(2.5), RATE) and history_candidate(fill(4.5), RATE)  # 0.025% and 0.045%
     assert not history_candidate(fill(4.6), RATE) and not history_candidate(fill(0.0), RATE)
+
+
+def test_the_peak_of_open_perpetual_positions() -> None:
+    """The money a day's trades needed reads the largest total value of open perpetual positions, before and after
+    every fill: the fill's own start position when the history gives it, else the coin's fills so far; spot never."""
+    from kokoah_subnet.mechanism.fills import peak_position_usd
+
+    def f(t: int, coin: str, side: str, px: float, sz: float, start: float | None = None) -> Fill:
+        return Fill(T0 + t, A, coin, side, px, sz, True, 0.0, start_position=start, source="history")
+
+    # 1 BTC opened and closed, then 2 ETH: the peak is the BTC position
+    assert peak_position_usd([f(0, "BTC", "B", 100_000.0, 1.0), f(1, "BTC", "A", 101_000.0, 1.0)]) == 101_000.0
+    day = [f(0, "BTC", "B", 100_000.0, 1.0), f(5, "BTC", "A", 100_000.0, 1.0), f(9, "ETH", "B", 4_000.0, 2.0)]
+    assert peak_position_usd(day) == 100_000.0
+    # two coins open together add up; a position held from before the day counts from its start position
+    both = [f(0, "BTC", "B", 100_000.0, 1.0, start=0.0), f(3, "ETH", "B", 4_000.0, 10.0, start=0.0)]
+    assert peak_position_usd(both) == 140_000.0
+    held = [f(0, "xyz:NVDA", "A", 200.0, 50.0, start=50.0)]  # closes 50 held since yesterday: 10,000 just before
+    assert peak_position_usd(held) == 10_000.0
+    # spot holdings are paid in full: never counted; no perpetual fills, nothing needed
+    assert peak_position_usd([f(0, "@107", "B", 40.0, 1_000.0)]) == 0.0 and peak_position_usd([]) == 0.0

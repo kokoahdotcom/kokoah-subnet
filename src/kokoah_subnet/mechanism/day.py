@@ -186,7 +186,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
     bound_fills = {a: drop_bound_counterparties(f, bound) for a, f in bound_fills.items()}
     position_share = mirror_position_share(inputs.positions, params, inputs.owner_group_of)
 
-    floor = params.min_equity_for(day)  # the scored day's own floor
+    floor = params.min_equity_for(day)  # the scored day's own floor: none from `no_floor_from` on (spec 7.0)
     work: list[_Work] = []
     for m in inputs.miners:
         state = inputs.states.get(m.hotkey, MinerState())
@@ -196,15 +196,14 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
         own = bound_fills.get(m.address, [])
         fees = day_fees(own, params, m.exchange_rates_bps)  # everything traded today, recorded
         qual = qualify(own, state.qualified, state.qual_trades, state.qual_notional, params)
-        equity_ok = m.avg_equity_usd is not None and m.avg_equity_usd >= floor
+        # without a floor the balance is never checked, so an unknown average stops no one
+        equity_ok = floor <= 0 or (m.avg_equity_usd is not None and m.avg_equity_usd >= floor)
         eligible = qual.qualified and equity_ok
         reason = None
         if not qual.qualified:
             reason = "not yet qualified"
-        elif m.avg_equity_usd is None:
-            reason = "average equity unknown"
         elif not equity_ok:
-            reason = "average equity below the minimum"
+            reason = "average equity unknown" if m.avg_equity_usd is None else "average equity below the minimum"
         # only trades made while eligible earn credit; an ineligible day adds nothing and the smoothing decays
         credited = day_fees(qual.credited, params, m.exchange_rates_bps) if eligible else DayFees.zero()
         # the skill pool's volume is perpetual volume: a spot fill earns in the volume pool only
@@ -226,7 +225,7 @@ def score_day(inputs: DayInputs, params: Params) -> DayResult:
             m.round_trips_window if m.round_trips_window is not None else round_trips(m.window_fills, m.start_positions)
         )
         ad = m.active_days_window if m.active_days_window is not None else active_days(m.window_fills)
-        gates = passes_gates(rt, ad, m.mean_equity_usd, params)
+        gates = passes_gates(rt, ad, m.mean_equity_usd, params, params.gate_mean_equity_for(day))
         phi_hat = (1 - params.smoothing) * state.phi_hat + params.smoothing * credited.credit * action.credit_factor
         fee_hat = (1 - params.smoothing) * state.fee_hat + params.smoothing * credited.total_fee
         # the skill pool

@@ -150,10 +150,12 @@ class Store:
         offmarket_pnl: float = 0.0,
         known: bool = True,
         offmarket_moves: Iterable[tuple[int, float]] | None = None,
+        return_base_usd: float | None = None,
     ) -> None:
         """One day's account value and money moved; `known` false records a day without a return. `offmarket_pnl` is
         the profit held back from the return: the money moved in through off-market fills (`offmarket_moves`, each
-        fill's time and amount), and on a day whose profit does not count, that profit too."""
+        fill's time and amount), and on a day whose profit does not count, that profit too. `return_base_usd`: the
+        money the day's own trades needed (spec 7.0), None when unknown."""
         a = address.lower()
         with self._engine.begin() as c:
             c.execute(delete(S.equity).where(S.equity.c.address == a, S.equity.c.day == day))
@@ -168,6 +170,7 @@ class Store:
                         None if offmarket_moves is None else [[int(t), float(v)] for t, v in sorted(offmarket_moves)]
                     ),
                     return_known=bool(known),
+                    return_base_usd=None if return_base_usd is None else float(return_base_usd),
                     fetched_at=_now(),
                     raw=raw,
                 )
@@ -368,7 +371,7 @@ class Store:
         series = self._equity_rows(address, 2 * days + 1, through)
         pairs = [
             (d1, e0, e1, f1, o1, m1)
-            for (d0, e0, _, _, k0, _), (d1, e1, f1, o1, k1, m1) in zip(series, series[1:], strict=False)
+            for (d0, e0, _, _, k0, _, _), (d1, e1, f1, o1, k1, m1, _) in zip(series, series[1:], strict=False)
             # the first day measured by the whole value (spec 6.7) needs no positive value the day before: the day
             # before was measured by the perps account's, which may be nothing, and its own points carry the day
             if k0
@@ -379,8 +382,10 @@ class Store:
         ]
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
-        timed = self._day_twrs(address, moves)
-        # every return is over at least its day's eligibility floor (`min_equity_for`)
+        # every return is over at least its day's return base (`return_base_for`: the eligibility floor before spec
+        # 7.0, then the money the day's own trades needed, at least `return_base_min_usd`)
+        bases = {d: DEFAULT.return_base_for(d, needed) for d, *_, needed in series}
+        timed = self._day_twrs(address, moves, bases)
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
             t = timed.get(d1)
@@ -391,12 +396,10 @@ class Store:
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)
-                out[d1] = min(
-                    daily_return(e0, e1, f1 + o1, DEFAULT.min_equity_for(d1)), max(-1.0, (e1 - e0 - f1 - o1) / e0)
-                )
+                out[d1] = min(daily_return(e0, e1, f1 + o1, bases[d1]), max(-1.0, (e1 - e0 - f1 - o1) / e0))
                 continue
             if t is None:  # a past day without recorded points: the whole day at once
-                out[d1] = daily_return(e0, e1, f1 + o1, DEFAULT.min_equity_for(d1))
+                out[d1] = daily_return(e0, e1, f1 + o1, bases[d1])
                 continue
             # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
             # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
@@ -414,10 +417,12 @@ class Store:
             out[d1] = max(-1.0, r)
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
-    def _day_twrs(self, address: str, days: Mapping[str, Sequence[tuple[int, float]]]) -> dict[str, DayReturn]:
+    def _day_twrs(
+        self, address: str, days: Mapping[str, Sequence[tuple[int, float]]], bases: Mapping[str, float]
+    ) -> dict[str, DayReturn]:
         """Each day's return over the exchange's recorded value and profit points this validator keeps (`day_twr`),
-        with its off-market fills (`days`: day -> its fills' times and amounts) and the history's start as scored
-        that day (`equity_daily.origin_ms`); days the points don't cover are left out."""
+        with its off-market fills (`days`: day -> its fills' times and amounts), the history's start as scored that day
+        (`equity_daily.origin_ms`) and its return base (`bases`); days the points don't cover are left out."""
         if not days:
             return {}
         a = address.lower()
@@ -476,7 +481,7 @@ class Store:
                 d1,
                 origins.get(d),
                 fills,
-                DEFAULT.min_equity_for(d),  # every return is over at least the day's eligibility floor
+                bases[d],  # every return is over at least the day's return base
             )
             if t is not None:
                 out[d] = t
@@ -484,9 +489,10 @@ class Store:
 
     def _equity_rows(
         self, address: str, days: int, through: str | None = None
-    ) -> list[tuple[str, float, float, float, bool, list[tuple[int, float]] | None]]:
+    ) -> list[tuple[str, float, float, float, bool, list[tuple[int, float]] | None, float | None]]:
         """Up to `days` stored days: (day, value, flows, profit held back, whether the day has a return, the
-        off-market fills' times and amounts; None in a row recorded before they were kept)."""
+        off-market fills' times and amounts (None in a row recorded before they were kept), the money the day's own
+        trades needed (None when unknown or not kept))."""
         query = select(
             S.equity.c.day,
             S.equity.c.value,
@@ -494,6 +500,7 @@ class Store:
             S.equity.c.offmarket_pnl,
             S.equity.c.return_known,
             S.equity.c.offmarket_moves,
+            S.equity.c.return_base_usd,
         ).where(S.equity.c.address == address.lower())
         if through is not None:
             query = query.where(S.equity.c.day <= through)
@@ -507,8 +514,9 @@ class Store:
                 float(o or 0.0),
                 k is not False,
                 None if m is None else [(int(t), float(x)) for t, x in m],
+                None if b is None else float(b),
             )
-            for d, v, f, o, k, m in reversed(rows)
+            for d, v, f, o, k, m, b in reversed(rows)
         ]
 
     def equity_value(self, address: str, day: str) -> float | None:

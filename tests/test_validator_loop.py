@@ -437,6 +437,29 @@ async def test_spot_candles_unread_leave_the_return_known(tmp_path: Path) -> Non
     await hl.close()
 
 
+async def test_no_floor_and_the_stored_return_base(tmp_path: Path) -> None:
+    """Spec 7.0: from `no_floor_from` on, an account averaging $50 is eligible, and every day stores the money its
+    own trades needed: the fake history's one BTC buy of 1 at $98,000 over the leverage of 20."""
+    from kokoah_subnet.validator import schema as S
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    EQUITY[addr_a] = 50.0
+    result = await collect_and_score(cfg, DAY, store, hl, chain, replace(DEFAULT, no_floor_from=DAY))
+    record = {r.hotkey: r for r in result.records}[HK_A]
+    assert record.eligible and record.credited.fills > 0
+    with store._engine.connect() as c:
+        row = c.execute(S.equity.select().where(S.equity.c.address == addr_a, S.equity.c.day == DAY)).one()
+    assert row.return_base_usd == pytest.approx(98_000.0 / 20)
+    await hl.close()
+    # the day before the rule, the same account is below the floor
+    (tmp_path / "before").mkdir()
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path / "before")
+    EQUITY[addr_a] = 50.0
+    result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
+    assert not {r.hotkey: r for r in result.records}[HK_A].eligible
+    await hl.close()
+
+
 async def test_whole_value_from_its_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """From spec 6.7's day on, an account's value is its whole value: a unified account keeps its collateral in spot,
     so its perps value says little. Eligible on $10,300 though its perps value is $4,000; a spot token's gain is money

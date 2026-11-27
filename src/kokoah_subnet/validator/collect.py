@@ -30,6 +30,7 @@ from kokoah_subnet.mechanism import (
     counts,
     is_perp,
     parse_builder_csv,
+    peak_position_usd,
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
@@ -908,6 +909,9 @@ async def collect_and_score(
         # without a perpetual's marks the money moved in through its off-market fills is unknown, so is the day's
         # return (a spot pair's never reaches the return: the profit is the perps account's)
         return_known = history_read and not any(f.coin in unmarked and is_perp(f.coin) for f in public)
+        # the money the day's own trades needed (spec 7.0): its largest open perpetual positions over the leverage,
+        # from the day's history (a page left unread can only lower it); unknown without the history
+        needed = peak_position_usd(public) / params.return_base_leverage if history_read else None
         if unmarked:
             store.put_note(
                 day,
@@ -997,6 +1001,7 @@ async def collect_and_score(
                     offmarket_pnl=held_back,
                     known=return_known,
                     offmarket_moves=moves.items(),
+                    return_base_usd=needed,
                 )
             else:
                 store.put_equity(
@@ -1008,6 +1013,7 @@ async def collect_and_score(
                     offmarket_pnl=offmarket,
                     known=False,
                     offmarket_moves=moves.items(),
+                    return_base_usd=needed,
                 )
                 store.put_error(day, hk, address, "daily return", change.note)
             store.put_ledger_updates(
