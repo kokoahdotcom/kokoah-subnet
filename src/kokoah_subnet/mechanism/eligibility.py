@@ -158,6 +158,7 @@ def day_twr(
     moved_in: Iterable[tuple[int, float]] = (),
     floor: float = 0.0,
     loss_floor: float | None = None,
+    needed: Sequence[float] = (),
 ) -> DayReturn | None:
     """The day over the exchange's recorded value and profit points, cut at every recorded point inside it. Each
     step's profit is the recorded profit's change less the money moved in through off-market fills during it
@@ -168,13 +169,15 @@ def day_twr(
     came after it, however much: one that held nothing at its start lost everything). A step never loses more than
     everything, and the steps' returns are chained: money moved in never counts for the part of the day before it.
     The base of a step that made money, and the day's capital when the day made money, are at least `floor`; those of
-    a step or day that lost, at least `loss_floor` (`floor` when not given). The validator's are the day's return
-    bases (`Params.return_bases_for`): money kept out of the account at the recorded points never makes a small
-    balance carry a gain, and money brought in for one large trade after a loss never shrinks it. A day without money
-    moved, its value at least `floor`, has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day,
-    and its capital is `E_{d−1}`. Values at the day's edges are read on the straight line between recorded points, as
-    `day_change` reads them (an edge before the account's history began holds nothing). None when `day_change` cannot
-    say what the day did. A step that made money on a base that is not positive (nothing held) adds no return."""
+    a step or day that lost, at least `loss_floor` (`floor` when not given). A step that made money is also over at
+    least what the positions open in its hours needed (`needed`: one amount per hour of the day). The validator's are
+    the day's return bases (`Params.return_bases_for`): money kept out of the account at the recorded points never
+    makes a small balance carry a gain, and money brought in for one large trade after a loss never shrinks it. A day
+    without money moved, its value at least `floor`, has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the
+    whole day, and its capital is `E_{d−1}`. Values at the day's edges are read on the straight line between recorded
+    points, as `day_change` reads them (an edge before the account's history began holds nothing). None when
+    `day_change` cannot say what the day did. A step that made money on a base that is not positive (nothing held) adds
+    no return."""
     vals, pnls = list(values), list(profits)
     change = day_change(vals, pnls, start_ms, end_ms, origin_ms)
     if not change.known:
@@ -199,7 +202,11 @@ def day_twr(
         v0, v1 = edge(vals, t0), edge(vals, t1)
         dp = edge(pnls, t1) - edge(pnls, t0) - moved
         flow = v1 - v0 - dp
-        base = max(v0 + max(flow, 0.0), floor) if dp >= 0 else max(v0, lost)
+        if dp >= 0:
+            hours = range(max(0, (t0 - start_ms) // 3_600_000), min(len(needed), (t1 - 1 - start_ms) // 3_600_000 + 1))
+            base = max(v0 + max(flow, 0.0), floor, max((needed[h] for h in hours), default=0.0))
+        else:
+            base = max(v0, lost)
         if dp < 0 and base <= 0:
             growth = 0.0  # lost money it did not hold at the step's start
         elif base > 0:

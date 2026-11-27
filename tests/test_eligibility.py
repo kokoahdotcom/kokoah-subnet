@@ -232,25 +232,41 @@ def test_no_floor_from_its_day() -> None:
 
 
 def test_a_late_large_trade_never_shrinks_a_loss() -> None:
-    """Spec 7.0: the money the day's trades needed raises the base of a gain only. $100 loses $20 by 23:00, then one
-    $200,000 round trip near midnight: the loss stays −20% over the $100 that was there (a base raised by the trade
-    would read it as −0.2%), and a gain made with that trade counts over the money it needed."""
-    from kokoah_subnet.mechanism.eligibility import day_twr
+    """Spec 7.0: what the positions open in an hour needed raises the base of a gain's step only. $100 loses $20 by
+    23:00, then one $400,000 round trip in the last hour: the loss stays −20% over the $100 that was there. A gain
+    made in that hour counts over the $10,000 the trade needed; one made in the hours before, over what was there."""
+    from kokoah_subnet.mechanism.eligibility import DayReturn, day_twr
 
     d0 = DAY0
-    values = [(d0 - H, 100.0), (d0, 100.0), (d0 + 23 * H, 80.0), (d0 + D + H, 80.0)]
-    profits = [(d0 - H, 0.0), (d0, 0.0), (d0 + 23 * H, -20.0), (d0 + D + H, -20.0)]
-    bases = DEFAULT.return_bases_for(DEFAULT.no_floor_from, 200_000.0 / 20)
-    assert bases == (10_000.0, 100.0)
-    lost = day_twr(values, profits, d0, d0 + D, None, (), *bases)
-    assert lost is not None and lost.twr == pytest.approx(-0.2) and lost.capital == pytest.approx(100.0)
-    won = day_twr([(v[0], 200.0 - v[1]) for v in values], [(t, -p) for t, p in profits], d0, d0 + D, None, (), *bases)
-    assert won is not None and won.twr == pytest.approx(20 / 10_000) and won.capital == pytest.approx(10_000.0)
-    # the days before the rule: one floor for both, as before; from it, no money needed kept means no base
-    assert DEFAULT.return_bases_for("2026-11-26", 1e9) == (5_000.0, 5_000.0)
-    assert DEFAULT.return_bases_for("2026-11-23", None) == (10_000.0, 10_000.0)
+    bases = DEFAULT.return_bases_for(DEFAULT.no_floor_from, [0.0] * 23 + [400_000.0])
+    assert bases is not None and bases[:2] == (100.0, 100.0) and bases[2][23] == 10_000.0 and bases[2][0] == 0.0
+
+    def day(values: list[float], profits: list[float]) -> DayReturn:
+        assert bases is not None
+        times = [d0 - H, d0, d0 + 23 * H, d0 + D, d0 + D + H]
+        t = day_twr(
+            list(zip(times, values, strict=True)), list(zip(times, profits, strict=True)), d0, d0 + D, None, (), *bases
+        )
+        assert t is not None
+        return t
+
+    lost = day([100.0, 100.0, 80.0, 80.0, 80.0], [0.0, 0.0, -20.0, -20.0, -20.0])
+    assert lost.twr == pytest.approx(-0.2) and lost.capital == pytest.approx(100.0)
+    late = day([100.0, 100.0, 100.0, 120.0, 120.0], [0.0, 0.0, 0.0, 20.0, 20.0])
+    assert late.twr == pytest.approx(20 / 10_000)
+    early = day([100.0, 100.0, 120.0, 120.0, 120.0], [0.0, 0.0, 20.0, 20.0, 20.0])
+    assert early.twr == pytest.approx(0.2)
+    # honest leverage: down to $500 holding $20,000 (40x), back to $1,010: +1% for the day, over what was there
+    bases = DEFAULT.return_bases_for(DEFAULT.no_floor_from, [20_000.0] * 24)
+    assert bases is not None
+    times = [d0 - H, d0, d0 + 12 * H, d0 + D, d0 + D + H]
+    vals, pnls = [1_000.0, 1_000.0, 500.0, 1_010.0, 1_010.0], [0.0, 0.0, -500.0, 10.0, 10.0]
+    t = day_twr(list(zip(times, vals, strict=True)), list(zip(times, pnls, strict=True)), d0, d0 + D, None, (), *bases)
+    assert t is not None and t.twr == pytest.approx(0.01)
+    # the days before the rule: one floor for both, nothing needed; from it, no positions kept means no base
+    assert DEFAULT.return_bases_for("2026-11-26", [1e9] * 24) == (5_000.0, 5_000.0, ())
+    assert DEFAULT.return_bases_for("2026-11-23", None) == (10_000.0, 10_000.0, ())
     assert DEFAULT.return_bases_for(DEFAULT.no_floor_from, None) is None
-    assert DEFAULT.return_bases_for(DEFAULT.no_floor_from, 30.0) == (100.0, 100.0)
 
 
 def test_recovery_resumes_automatically_without_back_pay() -> None:

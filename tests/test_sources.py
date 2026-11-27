@@ -173,3 +173,23 @@ def test_the_peak_of_open_perpetual_positions() -> None:
     assert peak_position_usd(held) == 10_000.0
     # spot holdings are paid in full: never counted; no perpetual fills, nothing needed
     assert peak_position_usd([f(0, "@107", "B", 40.0, 1_000.0)]) == 0.0 and peak_position_usd([]) == 0.0
+
+
+def test_the_hourly_peaks_of_open_perpetual_positions() -> None:
+    """Each hour's largest open perpetual positions: what a fill leaves open counts in the hours after it, until the
+    next fill changes it; spot never counts."""
+    from kokoah_subnet.mechanism.fills import position_peaks
+
+    start = 1792454400000  # the day's 00:00 UTC
+    hour = 3_600_000
+
+    def f(h: float, coin: str, side: str, px: float, sz: float) -> Fill:
+        return Fill(start + int(h * hour), A, coin, side, px, sz, True, 0.0, start_position=None, source="history")
+
+    peaks = position_peaks(
+        [f(2.5, "BTC", "B", 100_000.0, 1.0), f(5.5, "BTC", "A", 100_000.0, 1.0), f(7, "@107", "B", 40.0, 1e6)], start
+    )
+    assert len(peaks) == 24 and peaks[:2] == [0.0, 0.0]
+    assert peaks[2:6] == [100_000.0] * 4  # opened in hour 2, held through hours 3 and 4, closed in hour 5
+    assert peaks[6:] == [0.0] * 18  # closed; the spot buy never counts
+    assert position_peaks([], start) == [0.0] * 24

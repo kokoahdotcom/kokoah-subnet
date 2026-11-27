@@ -30,7 +30,7 @@ from kokoah_subnet.mechanism import (
     counts,
     is_perp,
     parse_builder_csv,
-    peak_position_usd,
+    position_peaks,
     round_trips,
 )
 from kokoah_subnet.mechanism.day import DayInputs, DayResult, MinerInputs, score_day
@@ -801,6 +801,26 @@ async def collect_and_score(
                 if (row := by_windows.get(params.month_windows_for(h_day), {}).get(h_day)) is not None
             ]
             earlier = [(h_day, value, flows) for h_day, value, flows in history if h_day < day]
+            # from spec 7.0 a day's return needs its positions: the trades of those days are read once. A day the
+            # history may no longer reach whole (it keeps the latest fills only), or a failed read, keeps none: that
+            # day has no return, never a guessed one
+            peaks_of: dict[str, list[float]] = {}
+            since_rule = [h_day for h_day, _, _ in earlier if h_day >= params.no_floor_from]
+            if since_rule:
+                past: list[Fill] | None
+                try:
+                    past = await hl.fills_by_time(address, day_bounds_ms(since_rule[0])[0], start_ms)
+                except Exception as exc:  # noqa: BLE001 - those days have no return
+                    store.put_error(day, hk, address, "fill history", f"the earlier days' trades: {exc}")
+                    past = None
+                if past is not None:
+                    # near the history's reach the oldest day read may be cut: it and the days before it keep none
+                    near_reach = len(past) >= FILLS_KEPT - 1_000
+                    oldest = min((f.day for f in past), default=None) if near_reach else None
+                    for h_day in since_rule:
+                        if oldest is None or h_day > oldest:
+                            day_fills = [f for f in past if f.day == h_day]
+                            peaks_of[h_day] = position_peaks(day_fills, day_bounds_ms(h_day)[0])
             for h_day, value, flows in earlier:
                 # a day whose money moved is unknown (no perps profit recorded for it) has no return
                 store.put_equity(
@@ -811,6 +831,7 @@ async def collect_and_score(
                     raw={"source": "portfolio"},
                     offmarket_moves=(),
                     known=flows is not None,
+                    position_peaks=peaks_of.get(h_day),
                 )
             log.info("backfilled %d days of account value for %s", len(earlier), address)
         # the address's own fill history is the primary source of its builder fills (the daily file holds only part
@@ -909,9 +930,9 @@ async def collect_and_score(
         # without a perpetual's marks the money moved in through its off-market fills is unknown, so is the day's
         # return (a spot pair's never reaches the return: the profit is the perps account's)
         return_known = history_read and not any(f.coin in unmarked and is_perp(f.coin) for f in public)
-        # the money the day's own trades needed (spec 7.0): its largest open perpetual positions over the leverage,
-        # from the day's history (a page left unread can only lower it); unknown without the history
-        needed = peak_position_usd(public) / params.return_base_leverage if history_read else None
+        # the day's largest open perpetual positions in each hour (spec 7.0: the money a gain's step needed), from
+        # the day's history (a page left unread can only lower them); unknown without the history
+        peaks = position_peaks(public, start_ms) if history_read else None
         if unmarked:
             store.put_note(
                 day,
@@ -1001,7 +1022,7 @@ async def collect_and_score(
                     offmarket_pnl=held_back,
                     known=return_known,
                     offmarket_moves=moves.items(),
-                    return_base_usd=needed,
+                    position_peaks=peaks,
                 )
             else:
                 store.put_equity(
@@ -1013,7 +1034,7 @@ async def collect_and_score(
                     offmarket_pnl=offmarket,
                     known=False,
                     offmarket_moves=moves.items(),
-                    return_base_usd=needed,
+                    position_peaks=peaks,
                 )
                 store.put_error(day, hk, address, "daily return", change.note)
             store.put_ledger_updates(

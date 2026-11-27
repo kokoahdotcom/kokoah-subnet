@@ -50,9 +50,9 @@ def _record(s: Store, address: str, day: str, points: list[tuple[float, float, f
 
 
 def test_the_return_base_from_no_floor_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Spec 7.0: from `no_floor_from` on, a day's return is over the larger of $100 and the money its own trades
-    needed (the stored `return_base_usd`), else over what the account held; before it, over the eligibility floor.
-    $10 made each day by an account holding about $100 at every recorded point."""
+    """Spec 7.0: from `no_floor_from` on, every step is over at least $100, and a step that made money over at least
+    what the positions open in its hours needed (the stored hourly `position_peaks` over 40); before it, over the
+    eligibility floor. $10 made each day by an account holding about $100 at every recorded point."""
     from dataclasses import replace
 
     import kokoah_subnet.validator.store as store_module
@@ -61,29 +61,32 @@ def test_the_return_base_from_no_floor_on(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(store_module, "DEFAULT", replace(DEFAULT, no_floor_from="2026-11-14"))
     s = Store(tmp_path / "v.sqlite")
     s.put_equity("0xA", "2026-11-12", 100.0, 0.0, offmarket_moves=())
-    for day, start, needed in (
-        ("2026-11-13", 100.0, 5.0),  # before: the $10,000 floor
-        ("2026-11-14", 110.0, 50.0),  # small trades: over what it held ($110; the $100 least is below it)
-        ("2026-11-15", 120.0, 4_000.0 / 20),  # $4,000 of positions: over $200, the money they needed
-        ("2026-11-16", 130.0, None),  # not kept (backfilled, or scored by an earlier release): no return
+    for day, start, peaks in (
+        ("2026-11-13", 100.0, [5.0] * 24),  # before: the $10,000 floor
+        ("2026-11-14", 110.0, [2_000.0] * 24),  # small positions ($50 needed): over what it held, $110
+        ("2026-11-15", 120.0, [8_000.0] * 24),  # $8,000 open all day: over the $200 it needed
+        ("2026-11-16", 130.0, None),  # not kept (backfilled beyond reach, or scored by an earlier release): no return
     ):
         _record(s, "0xA", day, [(0, start, 0.0), (24, start + 10.0, 10.0)])
-        s.put_equity("0xA", day, start + 10.0, 0.0, offmarket_moves=(), return_base_usd=needed)
-    # a losing day with one large trade late in it ($200,000 of positions): the loss stays over what was there
+        s.put_equity("0xA", day, start + 10.0, 0.0, offmarket_moves=(), position_peaks=peaks)
+    # a losing day with one $400,000 trade in its last hour: the loss stays over what was there
     _record(s, "0xA", "2026-11-17", [(0, 140.0, 0.0), (23, 120.0, -20.0), (24, 120.0, -20.0)])
-    s.put_equity("0xA", "2026-11-17", 120.0, 0.0, offmarket_moves=(), return_base_usd=200_000.0 / 20)
-    assert s.dated_returns("0xA", 6) == {
+    s.put_equity("0xA", "2026-11-17", 120.0, 0.0, offmarket_moves=(), position_peaks=[0.0] * 23 + [400_000.0])
+    # a day whose gain came in its last hour with that trade: that step is over the $10,000 it needed
+    _record(s, "0xA", "2026-11-18", [(0, 120.0, 0.0), (23, 120.0, 0.0), (24, 130.0, 10.0)])
+    s.put_equity("0xA", "2026-11-18", 130.0, 0.0, offmarket_moves=(), position_peaks=[0.0] * 23 + [400_000.0])
+    assert s.dated_returns("0xA", 7) == {
         "2026-11-13": pytest.approx(10 / 10_000),
         "2026-11-14": pytest.approx(10 / 110),
         "2026-11-15": pytest.approx(10 / 200),
         "2026-11-17": pytest.approx(-20 / 140),
+        "2026-11-18": pytest.approx(10 / 10_000),
     }
-    # a day without recorded points is read whole, over the same bases: a gain over the money needed, a loss over what
-    # was there (at least $100)
+    # a day without recorded points is read whole: a gain over the most its hours needed, a loss over what was there
     s2 = Store(tmp_path / "v2.sqlite")
     s2.put_equity("0xB", "2026-11-14", 100.0, 0.0, offmarket_moves=())
-    s2.put_equity("0xB", "2026-11-15", 110.0, 0.0, offmarket_moves=(), return_base_usd=500.0)
-    s2.put_equity("0xB", "2026-11-16", 88.0, 0.0, offmarket_moves=(), return_base_usd=500.0)
+    s2.put_equity("0xB", "2026-11-15", 110.0, 0.0, offmarket_moves=(), position_peaks=[0.0] * 12 + [20_000.0] * 12)
+    s2.put_equity("0xB", "2026-11-16", 88.0, 0.0, offmarket_moves=(), position_peaks=[20_000.0] * 24)
     s2.put_equity("0xB", "2026-11-17", 98.0, 0.0, offmarket_moves=())  # not kept: no return
     assert s2.dated_returns("0xB", 5) == {"2026-11-15": pytest.approx(10 / 500), "2026-11-16": pytest.approx(-22 / 110)}
 
@@ -472,7 +475,7 @@ def test_penalties_from_before_step_12_become_one_row_per_report(tmp_path: Path)
         "13: miner_days.joined_day",
         "14: earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs",
         "15: equity.offmarket_moves",
-        "16: equity.return_base_usd",
+        "16: equity.position_peaks",
     ]
     s.put_penalty("0xaa", 35, "2026-10-21", "hk", "mirrored 60%")
     assert s.penalties(5, before_day="2026-10-21") == {"0xaa": 30} and s.penalties(5) == {"0xaa": 35}
@@ -493,7 +496,7 @@ def test_step_13_adds_the_join_day_to_an_existing_record(tmp_path: Path) -> None
         "13: miner_days.joined_day",
         "14: earned_days: what the chain paid per hotkey and UTC day, from the recorded epochs",
         "15: equity.offmarket_moves",
-        "16: equity.return_base_usd",
+        "16: equity.position_peaks",
     ]
     s.put_miner_days("2026-10-21", [{"hotkey": "hk", "address": "0xa", "joined_day": "2026-09-30"}])
     assert s.miner_days("hk")[0]["joined_day"] == "2026-09-30"

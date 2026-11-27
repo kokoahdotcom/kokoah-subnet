@@ -438,8 +438,8 @@ async def test_spot_candles_unread_leave_the_return_known(tmp_path: Path) -> Non
 
 
 async def test_no_floor_and_the_stored_return_base(tmp_path: Path) -> None:
-    """Spec 7.0: from `no_floor_from` on, an account averaging $50 is eligible, and every day stores the money its
-    own trades needed: the fake history's one BTC buy of 1 at $98,000 over the leverage of 20."""
+    """Spec 7.0: from `no_floor_from` on, an account averaging $50 is eligible, and every day stores its hourly open
+    perpetual positions: the fake history's one BTC buy of 1 at $98,000, open from its hour to the day's end."""
     from kokoah_subnet.validator import schema as S
 
     cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
@@ -449,7 +449,8 @@ async def test_no_floor_and_the_stored_return_base(tmp_path: Path) -> None:
     assert record.eligible and record.credited.fills > 0
     with store._engine.connect() as c:
         row = c.execute(S.equity.select().where(S.equity.c.address == addr_a, S.equity.c.day == DAY)).one()
-    assert row.return_base_usd == pytest.approx(98_000.0 / 20)
+    assert len(row.position_peaks) == 24 and max(row.position_peaks) == pytest.approx(98_000.0)
+    assert row.position_peaks[-1] == pytest.approx(98_000.0)  # the buy left open to the day's end
     await hl.close()
     # the day before the rule, the same account is below the floor
     (tmp_path / "before").mkdir()
@@ -457,6 +458,21 @@ async def test_no_floor_and_the_stored_return_base(tmp_path: Path) -> None:
     EQUITY[addr_a] = 50.0
     result = await collect_and_score(cfg, DAY, store, hl, chain, DEFAULT)
     assert not {r.hotkey: r for r in result.records}[HK_A].eligible
+    await hl.close()
+
+
+async def test_a_new_address_s_earlier_days_keep_their_positions(tmp_path: Path) -> None:
+    """Spec 7.0: a validator scoring an address for the first time fills in its earlier days from the exchange's
+    history; from `no_floor_from` on it reads those days' trades too, so each keeps its hourly positions (and so has
+    a return, the same as on a validator that scored it then)."""
+    from kokoah_subnet.validator import schema as S
+
+    cfg, store, hl, chain, addr_a, _ = _setup(tmp_path)
+    await collect_and_score(cfg, DAY, store, hl, chain, replace(DEFAULT, no_floor_from="2026-10-20"))
+    with store._engine.connect() as c:
+        rows = {r.day: r for r in c.execute(S.equity.select().where(S.equity.c.address == addr_a)).all()}
+    assert rows["2026-10-20"].position_peaks == [0.0] * 24  # filled in: read, nothing open that day
+    assert max(rows[DAY].position_peaks) == pytest.approx(98_000.0)
     await hl.close()
 
 

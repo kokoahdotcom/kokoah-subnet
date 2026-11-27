@@ -19,6 +19,7 @@ from .fills import (
     parse_builder_csv,
     parse_user_fills,
     peak_position_usd,
+    position_peaks,
 )
 from .gates import active_days, passes_gates, round_trips
 from .params import DEFAULT, SPEC_VERSION, Params
@@ -55,6 +56,7 @@ __all__ = [
     "parse_builder_csv",
     "parse_user_fills",
     "peak_position_usd",
+    "position_peaks",
     "passes_gates",
     "round_trips",
     "skill_factor",

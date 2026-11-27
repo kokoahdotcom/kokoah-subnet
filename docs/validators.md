@@ -287,8 +287,9 @@ days, and on a day scored later this validator's record counts none of the build
 2026-11-27) and knows no
 day's return (no skill credit that day). The same holds after an outage, so keep the validator running and let it
 catch up within three days. From the start day on, the validator scores every day in order and builds its record
-day by day; each account's earlier daily values are backfilled from the exchange when the account is first scored
-(they show on the account's record; the skill test reads only the days after its link).
+day by day; each account's earlier daily values are backfilled from the exchange when the account is first scored,
+from 2026-11-27 with those days' trades for their positions (they show on the account's record; the skill test reads
+only the days after its link; a day beyond the history's reach of the latest fills has no return).
 
 ## 11. Upgrades
 

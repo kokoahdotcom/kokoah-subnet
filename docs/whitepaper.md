@@ -226,8 +226,7 @@ are removed from its credit; above 50%, both accounts are reported and leave the
 **Parameters.** Builder fee 0.045% (credit is the fee each fill paid); smoothing 0.3 a day; pools 80% volume and 20% skill; entry test 95% over 30 to 90
 days since joining; record weight 0.8 at 30 days to 1 at 90; luck floor 0.25; participation full at $1M over 30 days;
 agent bonus 10% of the skill weight; gates 10 round trips, 7 days, $100; eligibility three qualifying trades worth $1,000, no minimum account value;
-returns over at least $100, a gain over at least the money the day's own trades needed (largest open positions
-over 20); mirror thresholds 25% and 50%; migration once per 60 days; emission
+returns over at least $100, a gain's step over at least its open positions over 40; mirror thresholds 25% and 50%; migration once per 60 days; emission
 split miners 41%, validators 41%, owner 18% (locked). Changes follow section 10.
 
 ## 6. Two rewards, two kinds of contribution
@@ -433,10 +432,10 @@ of the block that accepted the link and the hotkey's registration block),
 `r_d = max(−1, min(TWR_d, P_d / C_d))`: the day's time-weighted return over the exchange's recorded points (each
 step's profit over the money there for it: a gain's step counts money moved in during it, a loss's step only what
 was there at its start; off-market fills count as money moved in at their time), and at most the day's profit `P_d`
-over its time-weighted capital `C_d`; a gain's base and `C_d` at least the day's return base `R_d` (from 2026-11-27
-the larger of $100 and the day's largest open perpetual positions over 20), a loss's at least $100 (before 2026-11-27
-both the eligibility floor `E_min`); a past day the points don't cover is read whole,
-`(E_d − E_d−1 − F_d) / max(E_d−1 + max(F_d, 0), R_d or $100)`. Capped to
+over its time-weighted capital `C_d`; every base and `C_d` at least $100 from 2026-11-27 (before, the eligibility
+floor `E_min`), and a gain's step also at least the largest open perpetual positions of its hours over 40; a past day
+the points don't cover is read whole, `(E_d − E_d−1 − F_d) / max(E_d−1 + max(F_d, 0), $100, the day's largest
+positions over 40 if a gain)`. Capped to
 `r̃_d = clip(r_d, −0.10, +0.10)`:
 
 ```
