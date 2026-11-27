@@ -228,8 +228,8 @@ candles, the unlinks or the time of a link's join block fails that day's scoring
 hour, until 12 hours after the day ends, and never sooner than 3 hours after its first attempt at the day; the days of
 a backlog share the first one's window, so a validator back from an outage retries for 3 hours in all (a day it had
 already started gets a new window once on its return). After that the day is scored and only what needed the failed
-read is lost: without the recorded account values the account is not eligible that day (unless points an earlier read
-stored cover the whole day), and fills that needed a failed read go uncounted (without a coin's candles or the fill
+read is lost: without the recorded account values the account's average and return are unknown that day (unless
+points an earlier read stored cover the whole day; before 2026-11-27 it was then not eligible), and fills that needed a failed read go uncounted (without a coin's candles or the fill
 history, also the day's return); without a join block's time, the join day is estimated at 12 seconds a block, which
 is never earlier than the real one. The candles of a coin the exchange does not list, or of a day older than the
 exchange keeps (about three and a half days), are settled at once the same way. Other reads (positions, fee rates,
