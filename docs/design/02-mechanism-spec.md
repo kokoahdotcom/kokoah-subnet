@@ -1,4 +1,4 @@
-# Kokoah subnet incentive mechanism: complete specification (v6.9)
+# Kokoah subnet incentive mechanism: complete specification (v7.0)
 
 Self-contained. Every symbol is defined here. The whole miner emission goes to miners every day: 80% shared by the
 eligible smoothed builder fees each miner paid (§5), 20% shared by skill weight among miners who prove a trading
@@ -193,9 +193,9 @@ between points, as in §3):
 
 ```
 Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i
-B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  E_min)
+B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  R_d)
 TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1
-C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  E_min)
+C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  R_d)
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
@@ -205,13 +205,20 @@ deposit. `offmarket_i` is the money moved in through off-market fills (§3, item
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
 the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
 start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
-loss, and a step never loses more than everything. Every base and the day's capital are at least the day's
-eligibility floor `E_min` (§9a), so money kept out of the account at the recorded points never makes a small balance carry
-the day (an account under the floor has its returns measured over the floor). A gain is at most the day's profit over its time-weighted capital
-`C_d`, so one made on a few dollars before a deposit is not counted as made on all of it. A day without money moved,
-the account at `E_min` or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
+loss, and a step never loses more than everything. Every base and the day's capital are at least the day's **return
+base** `R_d`, so money kept out of the account at the recorded points never makes a small balance carry the day. From
+the UTC day 2026-11-27, `R_d` is the larger of $100 and the money the day's own trades needed: the largest total value
+of the account's open perpetual positions through the day (each coin's position from the history's fills, valued at its
+latest fill price, just before and after every fill) over 20, its leverage. An account trading what it holds is
+measured over what it holds; one that keeps little in the account at the recorded points and trades large in between
+is measured over what its positions needed. Spot holdings are paid in full, so they never count. Before that day,
+`R_d` was the day's eligibility floor (§9a: $5,000 from 2026-11-24, $10,000 before). Every validator applies each day's
+own base, whenever it updated; the money needed is kept with the day's value (`equity.return_base_usd`). A gain is at
+most the day's profit over its time-weighted capital `C_d`, so one made on a few dollars before a deposit is not
+counted as made on all of it. A day without money moved, the account at `R_d` or more, has exactly
+`(E_d − E_{d−1}) / E_{d−1}`. A past day without
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
-`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), E_min))` with `F_d = flows_d + offmarket_d`; one whose
+`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), R_d))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
 never loses more than everything (−100%). The first day measured by the whole value (§9a) is never read whole: the day
 before holds the perps account's value, so without its own points it has no return.
@@ -272,15 +279,17 @@ Stakes are sampled and recorded for information; they do not affect pay.
 ## 9. Activity gates (for the skill pool and the leaderboard)
 
 Over the last 30 calendar days, today included: at least 10 completed round trips, at least 7 days with a
-builder-code fill (perpetual fills, §3), mean account value at least $500 (over the days whose end-of-day value is the exchange's
+builder-code fill (perpetual fills, §3), mean account value at least $100 ($500 before 2026-11-27; over the days whose end-of-day value is the exchange's
 recorded one). A miner failing a gate is not in the skill pool that day (the volume pool still pays its fees).
 
-## 9a. Eligibility: the equity floor and the qualifying trades
+## 9a. Eligibility: the qualifying trades, and the account value
 
-A miner is **eligible** on day `d` when both hold; otherwise it is paid nothing that day.
-
-**Equity floor.** The day's average account value of the bound address is at least `E_min`: $5,000 from the UTC day 2026-11-24,
-$10,000 on the days before (every validator applies each day's own floor, whenever it updated):
+A miner is **eligible** on day `d` once it has made its qualifying trades; otherwise it is paid nothing that day.
+**There is no equity floor from the UTC day 2026-11-27:** any balance joins and earns in both pools, and the balance
+is never checked for eligibility (an unknown average stops no one). Before that day a miner also needed the day's
+average account value at least `E_min`: $5,000 from 2026-11-24, $10,000 before (every validator applies each day's own
+rule, whenever it updated). The average is still measured and recorded every day, the same way, and the activity
+gates read it (§9):
 
 ```
 Ē_d = (1 / T) × ∫_{start of d}^{end of d} E(t) dt          T = 24 h
@@ -313,15 +322,15 @@ and makes up evenly spaced zero points timed by the request), so none of its poi
 zero too and the window covers the day, the account held nothing all week: `Ē_d = 0` and the day has no change, known
 at once. When the live point shows money, the account was just funded and the exchange has not recorded it yet: the
 record is waited for until the deadline. A failed read of the history does not make a trader ineligible: the day is
-not scored and is retried within the hour. A drop below the floor costs that day only; there is no permanent
-disqualification, and rewards resume on the next day at or above it.
+not scored and is retried within the hour. Before 2026-11-27, a drop below the floor cost that day only; there was no
+permanent disqualification.
 
 **Qualifying trades.** A new identity must first make `n_q = 3` qualifying trades with at least `N_q = $1,000` of
 eligible notional together. A trade is one execution: the eligible fills (§3, after the exclusions and the mark
 clip; perpetual, and spot from 2026-11-27) of one coin and side at one millisecond, so an order that crosses several resting orders is one trade. Trades
 are walked in time order; the counts carry from day to day; there is no waiting period. The first two trades earn
 no credit; the trade that completes both counts, and every later one, earn credit. Trades on a day below the
-equity floor still count toward qualification (they earn nothing that day). Qualification is kept for as long as
+equity floor (before 2026-11-27) still count toward qualification (they earn nothing that day). Qualification is kept for as long as
 the identity lasts.
 
 **An ineligible day.**
@@ -343,8 +352,8 @@ not escape is kept: the pay history and any mirror penalty (which follows the ad
 controls, §3). The entry test's record starts again with a new link or a new registration (§7a): a fresh identity
 waits 30 days again.
 
-An ineligible miner takes no part in either pool that day. Every account needs its own $5,000 of account value, its own
-registration and its own qualification.
+An ineligible miner takes no part in either pool that day. Every account needs its own registration and its own
+qualification.
 
 ## 10. Revenue and buyback
 
@@ -372,8 +381,9 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | pools | 80% volume (eligible smoothed builder fees), 20% skill (skill weight); an empty skill pool joins the volume pool; no caps; nothing burned unless no miner has weight |
 | skill score | confidence 60 days (PSR, benchmark Sharpe 0.03, ≥ 10 days), quality 30 days (gain-to-pain, half-life 10 days), blow-ups 60 days; `g'` full at g = 0.65; returns capped ±10% a day |
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah perpetual notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
-| activity gates | ≥ 10 round trips, ≥ 7 active days (perpetual fills), mean equity ≥ $500 (30 days), for the skill pool |
-| eligibility | the day's average account value ≥ $5,000 ($10,000 before 2026-11-24; the whole value, spot included; recorded history, ≥ 4 points in the day); 3 qualifying trades with ≥ $1,000 of eligible notional (spot too from 2026-11-27), the first two uncredited |
+| activity gates | ≥ 10 round trips, ≥ 7 active days (perpetual fills), mean equity ≥ $100 ($500 before 2026-11-27; 30 days), for the skill pool |
+| eligibility | 3 qualifying trades with ≥ $1,000 of eligible notional (spot too from 2026-11-27), the first two uncredited; no equity floor from 2026-11-27 (before: the day's average account value ≥ $5,000, $10,000 before 2026-11-24) |
+| return base | from 2026-11-27 the larger of $100 and the day's largest open perpetual positions over 20; before, the eligibility floor |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |

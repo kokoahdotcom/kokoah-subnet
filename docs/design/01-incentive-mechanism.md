@@ -1,4 +1,4 @@
-# Incentive mechanism in plain words (v6.9)
+# Incentive mechanism in plain words (v7.0)
 
 The formulas are in the [specification](02-mechanism-spec.md); this page says what they do. The full picture is in
 the [whitepaper](../whitepaper.md).
@@ -16,15 +16,14 @@ among them. Kokoah uses the fees to buy back and burn the subnet's token.
 
 ## Who can earn on a day
 
-Two simple conditions, checked every day:
+Simple rules, checked every day:
 
-- **Real capital.** The account must hold at least $5,000 on average over the day (from 24 November 2026;
-  $10,000 before), measured from the exchange's own record of the account through the whole day.
+- **Any balance.** From 27 November 2026 there is no minimum account value: any account can join and earn (before,
+  it needed $5,000 on average over the day, $10,000 before 24 November 2026).
 - **A real start.** A new miner first makes three trades worth $1,000 together. The first two only count toward
   this; the trade that completes it, and every trade after, earn. You can qualify the day you register.
 
-On a day that falls short, everything is still recorded, but that day's trades earn nothing and nothing is owed
-later. The next day at or above $5,000 you earn again.
+Before a miner has qualified, everything is still recorded, but its trades earn nothing and nothing is owed later.
 
 ## How the day's pay is shared
 
@@ -73,7 +72,9 @@ alarm.
 
 It asks two things of the daily returns, with deposits removed and each day capped at ±10%. A day's return is
 measured over the money that was in the account at each moment, so a deposit never shrinks a loss made before it
-and a gain made on a few dollars is never counted as made on a deposit that came after. Is the edge
+and a gain made on a few dollars is never counted as made on a deposit that came after. It is also measured over at
+least the money the day's own trades needed (the largest open positions over 20) and at least $100, so an account
+that keeps little in it when the exchange records it and trades large in between gains nothing by it. Is the edge
 statistically real (probabilistic Sharpe ratio over 60 days), and is the recent month's profit much larger than its
 losses (gain-to-pain over 30 days)? Only a record that holds up passes the test: at least 30 days since joining,
 and a record that keeps holding up to 90 days weighs the most.
