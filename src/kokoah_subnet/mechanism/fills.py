@@ -73,55 +73,6 @@ def counts(coin: str, spot: bool) -> bool:
     return spot or is_perp(coin)
 
 
-def peak_position_usd(fills: Iterable[Fill]) -> float:
-    """The largest total value of the open perpetual positions over a day's own fills (the address's history): each
-    coin's position from the fill's start position (else its fills so far), valued at the coin's latest fill price,
-    just before and just after every fill. What the day's trades needed in the account (over the leverage), whatever
-    it held at the exchange's recorded points; spot holdings are paid in full, so they never count."""
-    position: dict[str, float] = {}
-    price: dict[str, float] = {}
-    peak = 0.0
-    for f in sorted(fills, key=lambda x: (x.time_ms, x.tid or 0, x.coin)):
-        if not is_perp(f.coin):
-            continue
-        before = f.start_position if f.start_position is not None else position.get(f.coin, 0.0)
-        price[f.coin] = f.px
-        for size in (before, before + f.signed_size):
-            position[f.coin] = size
-            peak = max(peak, sum(abs(p) * price[c] for c, p in position.items()))
-    return peak
-
-
-def position_peaks(fills: Iterable[Fill], start_ms: int, hours: int = 24) -> list[float]:
-    """The largest total value of the open perpetual positions in each hour of the day that starts at `start_ms`, over
-    the day's own fills (the address's history), as `peak_position_usd` walks them: a position carried into an hour
-    counts in it at its coin's latest fill price. A position held from before the day without a fill that day is not
-    seen (its margin is in the account at the exchange's recorded points anyway)."""
-    peaks = [0.0] * hours
-    position: dict[str, float] = {}
-    price: dict[str, float] = {}
-
-    def gross() -> float:
-        return sum(abs(p) * price[c] for c, p in position.items())
-
-    carried, last = 0.0, 0
-    for f in sorted(fills, key=lambda x: (x.time_ms, x.tid or 0, x.coin)):
-        if not is_perp(f.coin):
-            continue
-        h = min(hours - 1, max(0, (f.time_ms - start_ms) // 3_600_000))
-        for k in range(last, h + 1):  # the hours since the last fill hold what it left open
-            peaks[k] = max(peaks[k], carried)
-        before = f.start_position if f.start_position is not None else position.get(f.coin, 0.0)
-        price[f.coin] = f.px
-        for size in (before, before + f.signed_size):
-            position[f.coin] = size
-            peaks[h] = max(peaks[h], gross())
-        carried, last = gross(), h
-    for k in range(last, hours):
-        peaks[k] = max(peaks[k], carried)
-    return peaks
-
-
 def _parse_time_ms(text: str) -> int:
     t = text.strip()
     if t.isdigit():

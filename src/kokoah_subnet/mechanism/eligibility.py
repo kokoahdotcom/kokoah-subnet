@@ -2,12 +2,12 @@
 
 Two conditions, both checked on every scored day:
 
-1. **Equity.** Before `no_floor_from` (spec 7.0), the day's time-weighted average account value of the bound address
-   is at least the day's floor (`min_equity_for`); from it there is no floor. The average is computed (and recorded
-   every day) from the exchange's own recorded history of the account (the day's value window), never from a single
-   snapshot: the recorded points inside the day are joined by straight lines, the day's two edges are interpolated
-   from the points around them, and the area is divided by the day's length. When too few points are recorded the
-   average is unknown, and an unknown average is never estimated.
+1. **Equity.** Before `no_floor_from` (spec 7.0), the day's time-weighted average account value of the bound
+   address is at least the day's floor (`min_equity_for`); from it there is no floor. The average is still computed
+   and recorded every day, from the exchange's own recorded history of the account (the day's value window), never
+   from a single snapshot: the recorded points inside the day are joined by straight lines, the day's two edges are
+   interpolated from the points around them, and the area is divided by the day's length.
+   When too few points are recorded the average is unknown, and an unknown average is never estimated.
 2. **Qualification.** A new identity (a hotkey with a bound address, from its registration) earns nothing until it
    has made `qualify_trades` qualifying trades worth `qualify_notional_usd` together. A trade is one execution:
    the eligible fills of one coin and side at one instant (an order that crosses several resting orders fills
@@ -157,8 +157,6 @@ def day_twr(
     origin_ms: int | None = None,
     moved_in: Iterable[tuple[int, float]] = (),
     floor: float = 0.0,
-    loss_floor: float | None = None,
-    needed: Sequence[float] = (),
 ) -> DayReturn | None:
     """The day over the exchange's recorded value and profit points, cut at every recorded point inside it. Each
     step's profit is the recorded profit's change less the money moved in through off-market fills during it
@@ -168,16 +166,12 @@ def day_twr(
     alone (money moved in during it counts from the next recorded point, so a loss is never spread over money that
     came after it, however much: one that held nothing at its start lost everything). A step never loses more than
     everything, and the steps' returns are chained: money moved in never counts for the part of the day before it.
-    The base of a step that made money, and the day's capital when the day made money, are at least `floor`; those of
-    a step or day that lost, at least `loss_floor` (`floor` when not given). A step that made money is also over at
-    least what the positions open in its hours needed (`needed`: one amount per hour of the day). The validator's are
-    the day's return bases (`Params.return_bases_for`): money kept out of the account at the recorded points never
-    makes a small balance carry a gain, and money brought in for one large trade after a loss never shrinks it. A day
-    without money moved, its value at least `floor`, has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the
-    whole day, and its capital is `E_{d−1}`. Values at the day's edges are read on the straight line between recorded
-    points, as `day_change` reads them (an edge before the account's history began holds nothing). None when
-    `day_change` cannot say what the day did. A step that made money on a base that is not positive (nothing held) adds
-    no return."""
+    Every base and the day's capital are at least `floor` (the validator's: the return floor, so money kept out
+    of the account at the recorded points never makes a small balance carry the day). A day without money moved, its
+    value at least `floor`, has exactly the return `(E_d − E_{d−1} − flows) / E_{d−1}` of the whole day, and its
+    capital is `E_{d−1}`. Values at the day's edges are read on the straight line between recorded points, as
+    `day_change` reads them (an edge before the account's history began holds nothing). None when `day_change` cannot
+    say what the day did. A step that made money on a base that is not positive (nothing held) adds no return."""
     vals, pnls = list(values), list(profits)
     change = day_change(vals, pnls, start_ms, end_ms, origin_ms)
     if not change.known:
@@ -187,7 +181,6 @@ def day_twr(
         v = value_at(points, t)
         return 0.0 if v is None else v  # before the history began (day_change accepted it only then)
 
-    lost = floor if loss_floor is None else loss_floor
     inner = sorted({int(t) for t, _ in vals + pnls if start_ms < int(t) < end_ms})
     times = [start_ms, *inner, end_ms]
     moves = sorted((min(max(int(t), start_ms), end_ms), float(a)) for t, a in moved_in)
@@ -202,18 +195,14 @@ def day_twr(
         v0, v1 = edge(vals, t0), edge(vals, t1)
         dp = edge(pnls, t1) - edge(pnls, t0) - moved
         flow = v1 - v0 - dp
-        if dp >= 0:
-            hours = range(max(0, (t0 - start_ms) // 3_600_000), min(len(needed), (t1 - 1 - start_ms) // 3_600_000 + 1))
-            base = max(v0 + max(flow, 0.0), floor, max((needed[h] for h in hours), default=0.0))
-        else:
-            base = max(v0, lost)
+        base = max(v0 + max(flow, 0.0) if dp >= 0 else v0, floor)
         if dp < 0 and base <= 0:
             growth = 0.0  # lost money it did not hold at the step's start
         elif base > 0:
             growth *= max(0.0, 1 + dp / base)
         profit += dp
         capital += flow * ((end_ms - t0) if flow > 0 else (end_ms - t1)) / span
-    return DayReturn(growth - 1, profit, max(capital, floor if profit >= 0 else lost))
+    return DayReturn(growth - 1, profit, max(capital, floor))
 
 
 def daily_average_equity(

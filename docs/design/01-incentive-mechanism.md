@@ -72,10 +72,7 @@ alarm.
 
 It asks two things of the daily returns, with deposits removed and each day capped at ±10%. A day's return is
 measured over the money that was in the account at each moment, so a deposit never shrinks a loss made before it
-and a gain made on a few dollars is never counted as made on a deposit that came after. A gain is also measured
-over at least the money the positions open at the time needed (the largest open positions over 40, the exchange's
-highest leverage), and every day over at least $100, so an account that keeps little in it when the exchange records it and trades large in between gains
-nothing by it. Is the edge
+and a gain made on a few dollars is never counted as made on a deposit that came after. Is the edge
 statistically real (probabilistic Sharpe ratio over 60 days), and is the recent month's profit much larger than its
 losses (gain-to-pain over 30 days)? Only a record that holds up passes the test: at least 30 days since joining,
 and a record that keeps holding up to 90 days weighs the most.

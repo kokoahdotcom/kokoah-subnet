@@ -152,10 +152,8 @@ is no waiting period, and qualification lasts for as long as your identity does 
 average account value had to be at least $5,000 ($10,000 before 24 November 2026). Your account's value is still
 measured every day from Hyperliquid's own record of its whole value, spot included (in a unified account your USDC
 sits in spot), recorded about every two hours: the skill reward reads it. Spot tokens count at Hyperliquid's price,
-but their price changes never count as trading returns. A day's return is measured over the money in your account
-(at least $100); a gain also over at least the money your open positions needed at the time (your largest open
-positions over 40, Hyperliquid's highest leverage), so keeping little in the account when Hyperliquid records it, and trading large in between, gains
-nothing.
+but their price changes never count as trading returns. A day's return is measured over at least $5,000, so a small
+account's gains and losses count by the dollars it makes.
 
 ## 7. How you are paid
 

@@ -5,7 +5,6 @@ Frozen and validated, so a scoring run cannot drift from the published values by
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -55,15 +54,11 @@ class Params:
     min_equity_usd: float = 5_000.0  # the day's time-weighted average account value, from `min_equity_from` on
     min_equity_before_usd: float = 10_000.0  # the floor of the days before `min_equity_from`
     min_equity_from: str = "2026-11-24"  # every validator switches on that day, whenever it updated (spec 6.8)
-    # from `no_floor_from` on (spec 7.0): no equity floor, any balance joins and earns in both pools. Every step of a
-    # day's return is over at least `return_base_min_usd`, and a step that made money over at least the money the
-    # positions open during it needed: their largest total value in its hours over `return_base_leverage`, the
-    # exchange's highest leverage (an account's open positions never exceed it times what the account holds), so money
-    # kept out of the account at the exchange's recorded points never makes a small balance carry a gain. Every
-    # validator switches on that day, whenever it updated
+    # from `no_floor_from` on (spec 7.0): no equity floor, any balance is eligible for both pools. A day's return is
+    # still measured over at least the return floor (`return_floor_for`), so money kept out of the account at the
+    # exchange's recorded points never makes a small balance carry the day. Every validator switches on that day,
+    # whenever it updated
     no_floor_from: str = "2026-11-27"
-    return_base_min_usd: float = 100.0
-    return_base_leverage: float = 40.0
     equity_window: str = "perpWeek"  # before `whole_value_from`: the history read for the value (perps account value)
     equity_origin_window: str = "perpAllTime"  # its first point marks when the account's history begins
     # from `whole_value_from` on (spec 6.7): the account's whole value as the exchange records it, spot included (in a
@@ -113,8 +108,8 @@ class Params:
             raise ValueError("volume_share + skill_share must be 1, both non-negative")
         if self.builder_fee_rate <= 0:
             raise ValueError("builder_fee_rate must be positive")
-        if self.return_base_min_usd <= 0 or self.return_base_leverage <= 0 or self.gate_mean_equity_from_usd < 0:
-            raise ValueError("return_base_min_usd and return_base_leverage must be positive, the gate non-negative")
+        if self.gate_mean_equity_from_usd < 0:
+            raise ValueError("gate_mean_equity_from_usd must be non-negative")
         if not 0 < self.maker_credit <= 1:
             raise ValueError("maker_credit must be in (0, 1]")
         if not 0 <= self.skill_floor < 1:
@@ -148,25 +143,12 @@ class Params:
         """The equity floor of `day`'s eligibility: none from `no_floor_from` on (spec 7.0)."""
         if day >= self.no_floor_from:
             return 0.0
-        return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
+        return self.return_floor_for(day)
 
-    def return_bases_for(
-        self, day: str, peaks: Sequence[float] | None
-    ) -> tuple[float, float, tuple[float, ...]] | None:
-        """The least capital `day`'s return is measured over: (a step or day that made money, one that lost, the money
-        the positions open in each hour needed). Before `no_floor_from` the first two are the day's eligibility floor
-        (spec 6.6, 6.8) and nothing is needed. From it (spec 7.0) both are `return_base_min_usd`, and the money needed
-        is `peaks` (`position_peaks`, the hourly largest open perpetual positions) over `return_base_leverage`: a step
-        that made money is over at least what its hours needed, so money brought in for one large trade never inflates
-        a gain, and a loss stays over what was there. None from it on when `peaks` is unknown: that day has no return
-        (a validator that did not read the day's trades never guesses)."""
-        if day < self.no_floor_from:
-            floor = self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
-            return floor, floor, ()
-        if peaks is None:
-            return None
-        least = self.return_base_min_usd
-        return least, least, tuple(p / self.return_base_leverage for p in peaks)
+    def return_floor_for(self, day: str) -> float:
+        """The least capital `day`'s return is measured over (spec 6.6, 6.8): $5,000 from `min_equity_from`, $10,000
+        before; unchanged by `no_floor_from`, which drops only the eligibility floor."""
+        return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
 
     def gate_mean_equity_for(self, day: str) -> float:
         """The activity gates' least mean account value on `day` (spec 7.0: lower from `no_floor_from` on)."""

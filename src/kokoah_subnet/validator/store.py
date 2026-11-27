@@ -150,12 +150,10 @@ class Store:
         offmarket_pnl: float = 0.0,
         known: bool = True,
         offmarket_moves: Iterable[tuple[int, float]] | None = None,
-        position_peaks: Sequence[float] | None = None,
     ) -> None:
         """One day's account value and money moved; `known` false records a day without a return. `offmarket_pnl` is
         the profit held back from the return: the money moved in through off-market fills (`offmarket_moves`, each
-        fill's time and amount), and on a day whose profit does not count, that profit too. `position_peaks`: the day's
-        largest open perpetual positions in each hour (spec 7.0), None when unknown."""
+        fill's time and amount), and on a day whose profit does not count, that profit too."""
         a = address.lower()
         with self._engine.begin() as c:
             c.execute(delete(S.equity).where(S.equity.c.address == a, S.equity.c.day == day))
@@ -170,7 +168,6 @@ class Store:
                         None if offmarket_moves is None else [[int(t), float(v)] for t, v in sorted(offmarket_moves)]
                     ),
                     return_known=bool(known),
-                    position_peaks=None if position_peaks is None else [float(p) for p in position_peaks],
                     fetched_at=_now(),
                     raw=raw,
                 )
@@ -371,7 +368,7 @@ class Store:
         series = self._equity_rows(address, 2 * days + 1, through)
         pairs = [
             (d1, e0, e1, f1, o1, m1)
-            for (d0, e0, _, _, k0, _, _), (d1, e1, f1, o1, k1, m1, _) in zip(series, series[1:], strict=False)
+            for (d0, e0, _, _, k0, _), (d1, e1, f1, o1, k1, m1) in zip(series, series[1:], strict=False)
             # the first day measured by the whole value (spec 6.7) needs no positive value the day before: the day
             # before was measured by the perps account's, which may be nothing, and its own points carry the day
             if k0
@@ -382,18 +379,10 @@ class Store:
         ]
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
-        # every return is over at least its day's return bases (`return_bases_for`: the eligibility floor before spec
-        # 7.0; then at least `return_base_min_usd`, a gain's step over the money its hours' positions needed); a day
-        # from spec 7.0 without its positions kept has no return
-        bases = {d: DEFAULT.return_bases_for(d, peaks) for d, *_, peaks in series}
-        timed = self._day_twrs(address, moves, bases)
+        timed = self._day_twrs(address, moves)
+        # every return is over at least its day's return floor (`return_floor_for`, unchanged by spec 7.0)
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
-            b = bases.get(d1)
-            if b is None:
-                continue
-            # the whole day's base: a gain's (over the most its hours needed), or a loss's
-            whole = max(b[0], max(b[2], default=0.0)) if e1 - e0 - f1 - o1 >= 0 else b[1]
             t = timed.get(d1)
             # the switch day is read over its own points only: the day before holds the perps value, the day itself
             # the whole value, so the whole day at once would count the spot balance as made that day
@@ -402,10 +391,12 @@ class Store:
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)
-                out[d1] = min(daily_return(e0, e1, f1 + o1, whole), max(-1.0, (e1 - e0 - f1 - o1) / e0))
+                out[d1] = min(
+                    daily_return(e0, e1, f1 + o1, DEFAULT.return_floor_for(d1)), max(-1.0, (e1 - e0 - f1 - o1) / e0)
+                )
                 continue
             if t is None:  # a past day without recorded points: the whole day at once
-                out[d1] = daily_return(e0, e1, f1 + o1, whole)
+                out[d1] = daily_return(e0, e1, f1 + o1, DEFAULT.return_floor_for(d1))
                 continue
             # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
             # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
@@ -423,15 +414,10 @@ class Store:
             out[d1] = max(-1.0, r)
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
-    def _day_twrs(
-        self,
-        address: str,
-        days: Mapping[str, Sequence[tuple[int, float]]],
-        bases: Mapping[str, tuple[float, float, tuple[float, ...]] | None],
-    ) -> dict[str, DayReturn]:
+    def _day_twrs(self, address: str, days: Mapping[str, Sequence[tuple[int, float]]]) -> dict[str, DayReturn]:
         """Each day's return over the exchange's recorded value and profit points this validator keeps (`day_twr`),
-        with its off-market fills (`days`: day -> its fills' times and amounts), the history's start as scored that day
-        (`equity_daily.origin_ms`) and its return base (`bases`); days the points don't cover are left out."""
+        with its off-market fills (`days`: day -> its fills' times and amounts) and the history's start as scored
+        that day (`equity_daily.origin_ms`); days the points don't cover are left out."""
         if not days:
             return {}
         a = address.lower()
@@ -475,9 +461,6 @@ class Store:
 
         out: dict[str, DayReturn] = {}
         for d, fills in days.items():
-            b = bases.get(d)
-            if b is None:  # no return base kept: no return
-                continue
             d0 = _day_ms(d)
             d1 = d0 + 86_400_000
             w = DEFAULT.windows_for(d)[0]
@@ -493,9 +476,7 @@ class Store:
                 d1,
                 origins.get(d),
                 fills,
-                b[0],  # a gain over at least the day's return base, a loss over at least its loss base
-                b[1],
-                b[2],  # and a gain's step over the money its hours' positions needed
+                DEFAULT.return_floor_for(d),  # every return is over at least the day's return floor
             )
             if t is not None:
                 out[d] = t
@@ -503,10 +484,9 @@ class Store:
 
     def _equity_rows(
         self, address: str, days: int, through: str | None = None
-    ) -> list[tuple[str, float, float, float, bool, list[tuple[int, float]] | None, list[float] | None]]:
+    ) -> list[tuple[str, float, float, float, bool, list[tuple[int, float]] | None]]:
         """Up to `days` stored days: (day, value, flows, profit held back, whether the day has a return, the
-        off-market fills' times and amounts (None in a row recorded before they were kept), the day's hourly largest
-        open perpetual positions (None when unknown or not kept))."""
+        off-market fills' times and amounts; None in a row recorded before they were kept)."""
         query = select(
             S.equity.c.day,
             S.equity.c.value,
@@ -514,7 +494,6 @@ class Store:
             S.equity.c.offmarket_pnl,
             S.equity.c.return_known,
             S.equity.c.offmarket_moves,
-            S.equity.c.position_peaks,
         ).where(S.equity.c.address == address.lower())
         if through is not None:
             query = query.where(S.equity.c.day <= through)
@@ -528,9 +507,8 @@ class Store:
                 float(o or 0.0),
                 k is not False,
                 None if m is None else [(int(t), float(x)) for t, x in m],
-                None if b is None else [float(x) for x in b],
             )
-            for d, v, f, o, k, m, b in reversed(rows)
+            for d, v, f, o, k, m in reversed(rows)
         ]
 
     def equity_value(self, address: str, day: str) -> float | None:

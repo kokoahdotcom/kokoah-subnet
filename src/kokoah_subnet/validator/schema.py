@@ -244,9 +244,6 @@ equity = Table(
     Column("offmarket_pnl", Float),  # profit held back: money moved in through off-market fills that day (removed
     # from the return), and on a day whose profit does not count (a thin market, a cut history), that profit too
     Column("offmarket_moves", JSON),  # the off-market fills' [time ms, amount]; NULL: recorded before they were kept
-    # the day's largest open perpetual positions in each of its 24 hours, USD (`position_peaks`, spec 7.0; NULL:
-    # unknown, or recorded before they were kept): from `no_floor_from` on, the money a gain's step needed
-    Column("position_peaks", JSON),
     Column("return_known", Boolean),  # false: the exchange's record did not cover the day, so it has no return
     Column("fetched_at", DateTime(timezone=True)),
     Column("raw", JSON),  # the clearinghouse margin summary

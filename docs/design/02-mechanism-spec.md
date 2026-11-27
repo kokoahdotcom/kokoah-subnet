@@ -193,9 +193,9 @@ between points, as in §3):
 
 ```
 Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i
-B_i  = max(E_{i−1} + max(F_i, 0), B_min, N_i) if Δp_i ≥ 0, else max(E_{i−1}, B_min)
+B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  R_min)
 TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1
-C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  B_min)
+C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  R_min)
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
@@ -205,26 +205,14 @@ deposit. `offmarket_i` is the money moved in through off-market fills (§3, item
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
 the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
 start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
-loss, and a step never loses more than everything. Every base and the day's capital are at least `B_min`: from the
-UTC day 2026-11-27 $100, before it the day's eligibility floor (§9a: $5,000 from 2026-11-24, $10,000 before). From
-2026-11-27, a step that made money is also over at least `N_i`, the money the positions open during it needed: the
-largest total value of the account's open perpetual positions in the step's hours (each coin's position from the
-history's fills, valued at its latest fill price, just before and after every fill, and carried into the hours after
-it; a position held all day without a fill has its margin in the account at the recorded points anyway) over 40, the
-exchange's highest leverage: an account's open positions never exceed 40 times what it holds, so an account trading
-what it holds is measured over what it holds, at any leverage, through deposits, withdrawals and drawdowns. One that
-keeps little in the account at the recorded points and trades large in between has its gains measured over what its
-positions needed, so the trick gains nothing; a losing step stays over what was there, so money brought in for one
-large trade after a loss never shrinks that loss. Spot holdings are paid in full, so they never count. The hourly
-positions are kept with the day's value (`equity.position_peaks`), so every validator that scored the day with them
-reads the same return whenever it updated; a validator scoring an address for the first time reads the earlier
-days' trades too (a day beyond the history's reach of its latest fills keeps none). A day from 2026-11-27 without
-them (beyond that reach, or scored by an earlier release) has no return: it is never guessed. A gain is at most the
-day's profit over its time-weighted capital `C_d`, so one made on a few dollars before a deposit is not counted as
-made on all of it. A day without money moved, the account at `B_min` or more and its positions within 40 times its
-value, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
+loss, and a step never loses more than everything. Every base and the day's capital are at least the day's
+**return floor** `R_min`: $5,000 from 2026-11-24, $10,000 before (the eligibility floor of those days; it stays when the
+eligibility floor goes, §9a), so money kept out of the account at the recorded points never makes a small balance
+carry the day (an account under it has its returns measured over it). A gain is at most the day's profit over its time-weighted capital
+`C_d`, so one made on a few dollars before a deposit is not counted as made on all of it. A day without money moved,
+the account at `R_min` or more, has exactly `(E_d − E_{d−1}) / E_{d−1}`. A past day without
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
-`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), B_min, the day's largest N_i if a gain))` with `F_d = flows_d + offmarket_d`; one whose
+`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), R_min))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
 never loses more than everything (−100%). The first day measured by the whole value (§9a) is never read whole: the day
 before holds the perps account's value, so without its own points it has no return.
@@ -291,11 +279,11 @@ recorded one). A miner failing a gate is not in the skill pool that day (the vol
 ## 9a. Eligibility: the qualifying trades, and the account value
 
 A miner is **eligible** on day `d` once it has made its qualifying trades; otherwise it is paid nothing that day.
-**There is no equity floor from the UTC day 2026-11-27:** any balance joins and earns in both pools, and the balance
-is never checked for eligibility (an unknown average stops no one). Before that day a miner also needed the day's
-average account value at least `E_min`: $5,000 from 2026-11-24, $10,000 before (every validator applies each day's own
-rule, whenever it updated). The average is still measured and recorded every day, the same way, and the activity
-gates read it (§9):
+**There is no equity floor from the UTC day 2026-11-27:** any balance is eligible for both pools, and the balance is
+never checked for eligibility (an unknown average stops no one). Before that day a miner also needed the day's average
+account value at least `E_min`: $5,000 from 2026-11-24, $10,000 before (every validator applies each day's own rule,
+whenever it updated). The average is still measured and recorded every day, the same way, and the activity gates read
+it (§9); a day's return is still measured over at least the return floor (§7):
 
 ```
 Ē_d = (1 / T) × ∫_{start of d}^{end of d} E(t) dt          T = 24 h
@@ -389,7 +377,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah perpetual notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days (perpetual fills), mean equity ≥ $100 ($500 before 2026-11-27; 30 days), for the skill pool |
 | eligibility | 3 qualifying trades with ≥ $1,000 of eligible notional (spot too from 2026-11-27), the first two uncredited; no equity floor from 2026-11-27 (before: the day's average account value ≥ $5,000, $10,000 before 2026-11-24) |
-| return base | from 2026-11-27 every base at least $100, a gain's step also at least its hours' largest open perpetual positions over 40; before, the eligibility floor |
+| return floor | every return over at least $5,000 ($10,000 before 2026-11-24) |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |
