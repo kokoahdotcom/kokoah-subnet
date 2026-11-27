@@ -55,7 +55,8 @@ class MinerInputs:
     round_trips_window: int | None = None  # precomputed gate counts (the live loop); else from window_fills
     active_days_window: int | None = None
     # eligibility (section 9a)
-    avg_equity_usd: float | None = None  # the day's time-weighted average account value; None = unknown (ineligible)
+    # the day's time-weighted average account value; None = unknown (ineligible before `no_floor_from`, spec 7.0)
+    avg_equity_usd: float | None = None
     registered_block: int | None = None  # the hotkey's registration block (a new registration is a fresh identity)
     # skill pool
     credited_notional_prior_usd: float = 0.0  # credited Kokoah notional over the window's earlier days

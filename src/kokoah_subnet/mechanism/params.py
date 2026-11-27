@@ -148,13 +148,19 @@ class Params:
             return 0.0
         return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
 
-    def return_base_for(self, day: str, needed_usd: float | None) -> float:
-        """The least capital `day`'s return is measured over: before `no_floor_from` the day's eligibility floor
-        (spec 6.6, 6.8); from it the larger of `return_base_min_usd` and `needed_usd`, the money the day's own trades
-        needed (`peak_position_usd` over `return_base_leverage`; None when unknown)."""
+    def return_bases_for(self, day: str, needed_usd: float | None) -> tuple[float, float] | None:
+        """The least capital `day`'s return is measured over: (for a step or a day that made money, for one that
+        lost). Before `no_floor_from` both are the day's eligibility floor (spec 6.6, 6.8). From it (spec 7.0) a gain
+        is over at least the larger of `return_base_min_usd` and `needed_usd`, the money the day's own trades needed
+        (`peak_position_usd` over `return_base_leverage`), and a loss over at least `return_base_min_usd` alone: money
+        brought in for one large trade after a loss never shrinks that loss. None from it on when `needed_usd` is
+        unknown: that day has no return (a validator that did not read the day's trades never guesses)."""
         if day < self.no_floor_from:
-            return self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
-        return max(self.return_base_min_usd, needed_usd or 0.0)
+            floor = self.min_equity_usd if day >= self.min_equity_from else self.min_equity_before_usd
+            return floor, floor
+        if needed_usd is None:
+            return None
+        return max(self.return_base_min_usd, needed_usd), self.return_base_min_usd
 
     def gate_mean_equity_for(self, day: str) -> float:
         """The activity gates' least mean account value on `day` (spec 7.0: lower from `no_floor_from` on)."""

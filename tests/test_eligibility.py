@@ -231,6 +231,28 @@ def test_no_floor_from_its_day() -> None:
     assert not passes_gates(10, 7, 99.0, DEFAULT, DEFAULT.gate_mean_equity_for(DEFAULT.no_floor_from))
 
 
+def test_a_late_large_trade_never_shrinks_a_loss() -> None:
+    """Spec 7.0: the money the day's trades needed raises the base of a gain only. $100 loses $20 by 23:00, then one
+    $200,000 round trip near midnight: the loss stays −20% over the $100 that was there (a base raised by the trade
+    would read it as −0.2%), and a gain made with that trade counts over the money it needed."""
+    from kokoah_subnet.mechanism.eligibility import day_twr
+
+    d0 = DAY0
+    values = [(d0 - H, 100.0), (d0, 100.0), (d0 + 23 * H, 80.0), (d0 + D + H, 80.0)]
+    profits = [(d0 - H, 0.0), (d0, 0.0), (d0 + 23 * H, -20.0), (d0 + D + H, -20.0)]
+    bases = DEFAULT.return_bases_for(DEFAULT.no_floor_from, 200_000.0 / 20)
+    assert bases == (10_000.0, 100.0)
+    lost = day_twr(values, profits, d0, d0 + D, None, (), *bases)
+    assert lost is not None and lost.twr == pytest.approx(-0.2) and lost.capital == pytest.approx(100.0)
+    won = day_twr([(v[0], 200.0 - v[1]) for v in values], [(t, -p) for t, p in profits], d0, d0 + D, None, (), *bases)
+    assert won is not None and won.twr == pytest.approx(20 / 10_000) and won.capital == pytest.approx(10_000.0)
+    # the days before the rule: one floor for both, as before; from it, no money needed kept means no base
+    assert DEFAULT.return_bases_for("2026-11-26", 1e9) == (5_000.0, 5_000.0)
+    assert DEFAULT.return_bases_for("2026-11-23", None) == (10_000.0, 10_000.0)
+    assert DEFAULT.return_bases_for(DEFAULT.no_floor_from, None) is None
+    assert DEFAULT.return_bases_for(DEFAULT.no_floor_from, 30.0) == (100.0, 100.0)
+
+
 def test_recovery_resumes_automatically_without_back_pay() -> None:
     state = {"hk": MinerState(phi_hat=100.0, fee_hat=280.0, qualified=True, address=A, registered_block=100)}
     states = state

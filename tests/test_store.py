@@ -65,21 +65,27 @@ def test_the_return_base_from_no_floor_on(tmp_path: Path, monkeypatch: pytest.Mo
         ("2026-11-13", 100.0, 5.0),  # before: the $10,000 floor
         ("2026-11-14", 110.0, 50.0),  # small trades: over what it held ($110; the $100 least is below it)
         ("2026-11-15", 120.0, 4_000.0 / 20),  # $4,000 of positions: over $200, the money they needed
-        ("2026-11-16", 130.0, None),  # unknown: over what it held
+        ("2026-11-16", 130.0, None),  # not kept (backfilled, or scored by an earlier release): no return
     ):
         _record(s, "0xA", day, [(0, start, 0.0), (24, start + 10.0, 10.0)])
         s.put_equity("0xA", day, start + 10.0, 0.0, offmarket_moves=(), return_base_usd=needed)
-    assert s.dated_returns("0xA", 5) == {
+    # a losing day with one large trade late in it ($200,000 of positions): the loss stays over what was there
+    _record(s, "0xA", "2026-11-17", [(0, 140.0, 0.0), (23, 120.0, -20.0), (24, 120.0, -20.0)])
+    s.put_equity("0xA", "2026-11-17", 120.0, 0.0, offmarket_moves=(), return_base_usd=200_000.0 / 20)
+    assert s.dated_returns("0xA", 6) == {
         "2026-11-13": pytest.approx(10 / 10_000),
         "2026-11-14": pytest.approx(10 / 110),
         "2026-11-15": pytest.approx(10 / 200),
-        "2026-11-16": pytest.approx(10 / 130),
+        "2026-11-17": pytest.approx(-20 / 140),
     }
-    # a day without recorded points is read whole, over the same base
+    # a day without recorded points is read whole, over the same bases: a gain over the money needed, a loss over what
+    # was there (at least $100)
     s2 = Store(tmp_path / "v2.sqlite")
     s2.put_equity("0xB", "2026-11-14", 100.0, 0.0, offmarket_moves=())
     s2.put_equity("0xB", "2026-11-15", 110.0, 0.0, offmarket_moves=(), return_base_usd=500.0)
-    assert s2.dated_returns("0xB", 5) == {"2026-11-15": pytest.approx(10 / 500)}
+    s2.put_equity("0xB", "2026-11-16", 88.0, 0.0, offmarket_moves=(), return_base_usd=500.0)
+    s2.put_equity("0xB", "2026-11-17", 98.0, 0.0, offmarket_moves=())  # not kept: no return
+    assert s2.dated_returns("0xB", 5) == {"2026-11-15": pytest.approx(10 / 500), "2026-11-16": pytest.approx(-22 / 110)}
 
 
 def test_the_return_floor_follows_the_day_s_eligibility_floor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

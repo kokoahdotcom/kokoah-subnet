@@ -193,9 +193,9 @@ between points, as in §3):
 
 ```
 Δp_i = recorded profit change − offmarket_i        F_i = ΔE_i − Δp_i
-B_i  = max(E_{i−1} + max(F_i, 0) if Δp_i ≥ 0, else E_{i−1};  R_d)
+B_i  = max(E_{i−1} + max(F_i, 0), R_d) if Δp_i ≥ 0, else max(E_{i−1}, L_d)
 TWR_d = Π_i max(0, 1 + Δp_i / B_i) − 1
-C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  R_d)
+C_d   = max(E_{d−1} + Σ_i F_i × (part of the day after the step's start if F_i > 0, after its end if F_i < 0);  R_d if Σ_i Δp_i ≥ 0, else L_d)
 r_d   = max(−1, min(TWR_d, (Σ_i Δp_i − held_d) / C_d))       r̃_d = max(−0.10, min(0.10, r_d))
 ```
 
@@ -205,20 +205,25 @@ deposit. `offmarket_i` is the money moved in through off-market fills (§3, item
 `F_i` is the money moved in or out (deposits, withdrawals, account and vault transfers, and those fills); `held_d` is
 the profit of a day whose profit counts as nothing (§3). A loss is measured over the money that was there at the
 start of its step: money moved in during a losing step counts from the next recorded point, so it never shrinks the
-loss, and a step never loses more than everything. Every base and the day's capital are at least the day's **return
-base** `R_d`, so money kept out of the account at the recorded points never makes a small balance carry the day. From
-the UTC day 2026-11-27, `R_d` is the larger of $100 and the money the day's own trades needed: the largest total value
-of the account's open perpetual positions through the day (each coin's position from the history's fills, valued at its
-latest fill price, just before and after every fill) over 20, its leverage. An account trading what it holds is
-measured over what it holds; one that keeps little in the account at the recorded points and trades large in between
-is measured over what its positions needed. Spot holdings are paid in full, so they never count. Before that day,
-`R_d` was the day's eligibility floor (§9a: $5,000 from 2026-11-24, $10,000 before). Every validator applies each day's
-own base, whenever it updated; the money needed is kept with the day's value (`equity.return_base_usd`). A gain is at
+loss, and a step never loses more than everything. The base of a step that made money, and the day's capital when
+the day made money, are at least the day's **return base** `R_d`; those of a step or day that lost, at least its loss
+base `L_d`. From the UTC day 2026-11-27, `R_d` is the larger of $100 and the money the day's own trades needed: the
+largest total value of the account's open perpetual positions over its fills that day (each coin's position from the
+history's fills, valued at its latest fill price, just before and after every fill; a position held all day without
+a fill has its margin in the account at the recorded points anyway) over 20, its leverage; and `L_d` is $100. An
+account trading what it holds is measured over what it holds; one that keeps little in the account at the recorded
+points and trades large in between has its gains measured over what its positions needed, and its losses over what
+was there, so the trick gains nothing; and money brought in for one large trade after a loss never shrinks that
+loss. Spot holdings are paid in full, so they never count. Before that day, `R_d` and `L_d` were the day's eligibility
+floor (§9a: $5,000 from 2026-11-24, $10,000 before). The money needed is kept with the day's value
+(`equity.return_base_usd`), so every validator that scored the day reads the same return whenever it updated; a day
+from 2026-11-27 without it (a validator that did not read that day's trades, such as one filling in a new address's
+earlier days) has no return: it is never guessed. A gain is at
 most the day's profit over its time-weighted capital `C_d`, so one made on a few dollars before a deposit is not
 counted as made on all of it. A day without money moved, the account at `R_d` or more, has exactly
 `(E_d − E_{d−1}) / E_{d−1}`. A past day without
 recorded points around it (stored before the validator kept them, or before it began) is read whole,
-`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), R_d))` with `F_d = flows_d + offmarket_d`; one whose
+`r_d = max(−1, (E_d − E_{d−1} − F_d) / max(E_{d−1} + max(F_d, 0), R_d if a gain, else L_d))` with `F_d = flows_d + offmarket_d`; one whose
 off-market fills' times are not known is read the same way, but never above `(E_d − E_{d−1} − F_d) / E_{d−1}`. A day
 never loses more than everything (−100%). The first day measured by the whole value (§9a) is never read whole: the day
 before holds the perps account's value, so without its own points it has no return.
@@ -383,7 +388,7 @@ two bound accounts and self-matches inside a cluster never count (§3); the skil
 | skill pool | luck floor 0.25; volume factor full at $1M of credited Kokoah perpetual notional over 30 days; entry test PSR ≥ 0.95 over the returns since joining, at least 30, the last 90 at most; record weight 0.8 at 30 days rising evenly to 1 at 90; each account on its own record; verified agents ×1.1 |
 | activity gates | ≥ 10 round trips, ≥ 7 active days (perpetual fills), mean equity ≥ $100 ($500 before 2026-11-27; 30 days), for the skill pool |
 | eligibility | 3 qualifying trades with ≥ $1,000 of eligible notional (spot too from 2026-11-27), the first two uncredited; no equity floor from 2026-11-27 (before: the day's average account value ≥ $5,000, $10,000 before 2026-11-24) |
-| return base | from 2026-11-27 the larger of $100 and the day's largest open perpetual positions over 20; before, the eligibility floor |
+| return base | from 2026-11-27 a gain over at least the larger of $100 and the day's largest open perpetual positions over 20, a loss over at least $100; before, the eligibility floor |
 | mirror rules | fills against bound counterparties never count (and report no one); a coin with > 25% of its day volume the address's own: the day's profit not counted, a loss counted; position correlation < −0.8 on ≥ 10 days at the day's end, owner-linked pairs only; exclude > 25%, out of the skill pool > 50% |
 | mark clip | 0.5% |
 | data plane | the address's own fill history, merged with the builder file on the second; history-only fills count when their order is confirmed as the address's own order with Kokoah's builder (explorer); no file 8 h after the day and no builder fee in the bound addresses' histories: scored at once; otherwise no file 12 h after the day: scored from the histories |

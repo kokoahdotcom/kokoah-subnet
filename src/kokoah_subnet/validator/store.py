@@ -382,12 +382,17 @@ class Store:
         ]
         # a day recorded before the off-market fills' times were kept has them only when it had none
         moves = {d: (m if m is not None else []) for d, _, _, _, o, m in pairs if m is not None or o == 0.0}
-        # every return is over at least its day's return base (`return_base_for`: the eligibility floor before spec
-        # 7.0, then the money the day's own trades needed, at least `return_base_min_usd`)
-        bases = {d: DEFAULT.return_base_for(d, needed) for d, *_, needed in series}
+        # every return is over at least its day's return bases (`return_bases_for`: the eligibility floor before spec
+        # 7.0; then a gain over the money the day's own trades needed, a loss over what was there, both at least
+        # `return_base_min_usd`); a day from spec 7.0 without the money needed kept has no return
+        bases = {d: DEFAULT.return_bases_for(d, needed) for d, *_, needed in series}
         timed = self._day_twrs(address, moves, bases)
         out: dict[str, float] = {}
         for d1, e0, e1, f1, o1, _ in pairs:
+            b = bases.get(d1)
+            if b is None:
+                continue
+            whole = b[0] if e1 - e0 - f1 - o1 >= 0 else b[1]  # the whole day's base: a gain's, or a loss's
             t = timed.get(d1)
             # the switch day is read over its own points only: the day before holds the perps value, the day itself
             # the whole value, so the whole day at once would count the spot balance as made that day
@@ -396,10 +401,10 @@ class Store:
             if t is None and d1 not in moves:
                 # stored before the off-market fills' times were kept, with money moved in through them: the whole
                 # day, never above what it was scored at then (over yesterday's value alone)
-                out[d1] = min(daily_return(e0, e1, f1 + o1, bases[d1]), max(-1.0, (e1 - e0 - f1 - o1) / e0))
+                out[d1] = min(daily_return(e0, e1, f1 + o1, whole), max(-1.0, (e1 - e0 - f1 - o1) / e0))
                 continue
             if t is None:  # a past day without recorded points: the whole day at once
-                out[d1] = daily_return(e0, e1, f1 + o1, bases[d1])
+                out[d1] = daily_return(e0, e1, f1 + o1, whole)
                 continue
             # time-weighted over the exchange's recorded points: money moved in counts only from when it came, so a
             # loss is never spread over money that was not there yet. A gain is at most the day's profit over the
@@ -418,7 +423,10 @@ class Store:
         return dict(list(out.items())[-days:]) if days > 0 else {}
 
     def _day_twrs(
-        self, address: str, days: Mapping[str, Sequence[tuple[int, float]]], bases: Mapping[str, float]
+        self,
+        address: str,
+        days: Mapping[str, Sequence[tuple[int, float]]],
+        bases: Mapping[str, tuple[float, float] | None],
     ) -> dict[str, DayReturn]:
         """Each day's return over the exchange's recorded value and profit points this validator keeps (`day_twr`),
         with its off-market fills (`days`: day -> its fills' times and amounts), the history's start as scored that day
@@ -466,6 +474,9 @@ class Store:
 
         out: dict[str, DayReturn] = {}
         for d, fills in days.items():
+            b = bases.get(d)
+            if b is None:  # no return base kept: no return
+                continue
             d0 = _day_ms(d)
             d1 = d0 + 86_400_000
             w = DEFAULT.windows_for(d)[0]
@@ -481,7 +492,8 @@ class Store:
                 d1,
                 origins.get(d),
                 fills,
-                bases[d],  # every return is over at least the day's return base
+                b[0],  # a gain over at least the day's return base, a loss over at least its loss base
+                b[1],
             )
             if t is not None:
                 out[d] = t
